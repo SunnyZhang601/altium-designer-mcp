@@ -30,7 +30,12 @@ use crate::error::ConfigError;
 /// - **Windows:** `%USERPROFILE%\.altium-designer-mcp\`
 #[must_use]
 pub fn default_config_dir() -> Option<PathBuf> {
-    dirs::home_dir().map(|p| p.join(".altium-designer-mcp"))
+    #[cfg(not(target_os = "wasi"))]
+    let home = dirs::home_dir();
+    #[cfg(target_os = "wasi")]
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+
+    home.map(|p| p.join(".altium-designer-mcp"))
 }
 
 /// Returns the platform-specific default configuration file path.

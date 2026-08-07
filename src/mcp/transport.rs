@@ -16,6 +16,10 @@
 
 use std::io;
 
+#[cfg(target_os = "wasi")]
+use std::io::{BufRead as _, Write as _};
+
+#[cfg(not(target_os = "wasi"))]
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWrite, AsyncWriteExt, BufReader};
 
 use crate::mcp::protocol::{JsonRpcError, JsonRpcResponse, OutgoingNotification};
@@ -37,6 +41,7 @@ fn strip_trailing_newline(line: &mut String) {
 /// base64-encoded payloads (e.g. embedded STEP models via `write_pcblib`, or
 /// `extract_step_model` output) inline on a single JSON-RPC line, so a message
 /// may be multiple megabytes.
+#[cfg(not(target_os = "wasi"))]
 async fn read_message_line<R>(reader: &mut R) -> io::Result<Option<String>>
 where
     R: AsyncBufRead + Unpin,
@@ -54,6 +59,7 @@ where
 /// Writes a single JSON message line to an async writer, terminated by a
 /// newline and flushed. Per the MCP spec a message must not contain embedded
 /// newlines.
+#[cfg(not(target_os = "wasi"))]
 async fn write_message_line<W>(writer: &mut W, json: &str) -> io::Result<()>
 where
     W: AsyncWrite + Unpin,
@@ -73,9 +79,17 @@ where
 /// Handles reading JSON-RPC messages from stdin and writing responses to stdout.
 pub struct StdioTransport {
     /// Buffered reader for stdin.
+    #[cfg(not(target_os = "wasi"))]
     reader: BufReader<tokio::io::Stdin>,
+    /// WASI stdio is synchronously exposed by the host runtime.
+    #[cfg(target_os = "wasi")]
+    reader: std::io::BufReader<std::io::Stdin>,
     /// Handle for stdout.
+    #[cfg(not(target_os = "wasi"))]
     writer: tokio::io::Stdout,
+    /// WASI stdout handle.
+    #[cfg(target_os = "wasi")]
+    writer: std::io::Stdout,
     /// Under `cfg(test)`, redirects writes to an in-memory buffer instead of
     /// the real stdout so the write path can be asserted without a live pipe
     /// (and without the intermittent stdout-teardown hangs seen on Windows CI).
@@ -89,8 +103,14 @@ impl StdioTransport {
     #[must_use]
     pub fn new() -> Self {
         Self {
+            #[cfg(not(target_os = "wasi"))]
             reader: BufReader::new(tokio::io::stdin()),
+            #[cfg(target_os = "wasi")]
+            reader: std::io::BufReader::new(std::io::stdin()),
+            #[cfg(not(target_os = "wasi"))]
             writer: tokio::io::stdout(),
+            #[cfg(target_os = "wasi")]
+            writer: std::io::stdout(),
             #[cfg(test)]
             test_sink: None,
         }
@@ -113,7 +133,20 @@ impl StdioTransport {
     ///
     /// Returns an error if reading from stdin fails.
     pub async fn read_line(&mut self) -> io::Result<Option<String>> {
-        read_message_line(&mut self.reader).await
+        #[cfg(not(target_os = "wasi"))]
+        {
+            read_message_line(&mut self.reader).await
+        }
+        #[cfg(target_os = "wasi")]
+        {
+            let mut line = String::new();
+            let bytes_read = self.reader.read_line(&mut line)?;
+            if bytes_read == 0 {
+                return Ok(None);
+            }
+            strip_trailing_newline(&mut line);
+            Ok(Some(line))
+        }
     }
 
     /// Writes a JSON-RPC response to stdout.
@@ -176,7 +209,20 @@ impl StdioTransport {
                 .extend_from_slice(&framed);
             return Ok(());
         }
-        write_message_line(&mut self.writer, json).await
+        #[cfg(not(target_os = "wasi"))]
+        {
+            write_message_line(&mut self.writer, json).await
+        }
+        #[cfg(target_os = "wasi")]
+        {
+            debug_assert!(
+                !json.contains('\n'),
+                "JSON message must not contain embedded newlines"
+            );
+            self.writer.write_all(json.as_bytes())?;
+            self.writer.write_all(b"\n")?;
+            self.writer.flush()
+        }
     }
 
     /// Writes an arbitrary JSON value to stdout.

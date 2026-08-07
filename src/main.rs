@@ -147,8 +147,10 @@ fn main() -> ExitCode {
     info!("MCP server ready, waiting for client connection...");
 
     // Run the server
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
+    let mut runtime_builder = tokio::runtime::Builder::new_current_thread();
+    #[cfg(not(target_os = "wasi"))]
+    runtime_builder.enable_all();
+    let runtime = runtime_builder
         .build()
         .expect("Failed to create Tokio runtime");
 

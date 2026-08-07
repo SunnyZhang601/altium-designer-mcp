@@ -610,6 +610,18 @@ impl McpServer {
         }
     }
 
+    /// Runs the main loop under WASI. Process termination is managed by the
+    /// host runtime, so EOF on stdin is the graceful shutdown signal.
+    #[cfg(target_os = "wasi")]
+    async fn run_with_shutdown(&mut self) -> std::io::Result<()> {
+        loop {
+            let line_result = self.transport.read_line().await;
+            if self.handle_transport_result(line_result).await? {
+                return Ok(());
+            }
+        }
+    }
+
     /// Handles the result from transport read.
     ///
     /// Returns `true` if the server should shut down.

@@ -221,7 +221,7 @@ impl McpServer {
                                                 "shape": {
                                                     "type": "string",
                                                     "enum": ["rectangle", "rounded_rectangle", "round", "circle", "oval", "octagonal"],
-                                                    "description": "Pad shape: rectangle (pin 1), rounded_rectangle (SMD default), round/circle (equivalent, for through-hole), oval, octagonal"
+                                                    "description": "Pad shape. Omitting this field yields rounded_rectangle, which suits chip/QFN lands but is WRONG for BGA/CSP: circular NSMD BGA lands must set \"round\" explicitly. rectangle is conventional for pin 1; round/circle are equivalent and used for both BGA lands and through-hole pads; also oval, octagonal. Matching is case-insensitive and ignores '_'/'-'."
                                                 },
                                                 "layer": { "type": "string", "description": "Layer name: Top Layer, Bottom Layer, Multi-Layer (default for SMD)" },
                                                 "hole_size": { "type": "number", "description": "Hole diameter for through-hole pads (mm)" },
@@ -2010,7 +2010,7 @@ impl McpServer {
                                 "y": { "type": "number", "description": "New Y position in mm" },
                                 "width": { "type": "number", "description": "New width in mm" },
                                 "height": { "type": "number", "description": "New height in mm" },
-                                "shape": { "type": "string", "description": "New shape (Rectangle, Round, Oval, Octagonal, RoundedRectangle)" },
+                                "shape": { "type": "string", "enum": ["rectangle", "rounded_rectangle", "round", "circle", "oval", "octagonal"], "description": "New pad shape. Same vocabulary as write_pcblib: rectangle, rounded_rectangle, round/circle, oval, octagonal. Matching is case-insensitive and ignores '_'/'-'." },
                                 "rotation": { "type": "number", "description": "New rotation in degrees" },
                                 "hole_size": { "type": "number", "description": "New hole diameter for through-hole pads" }
                             }

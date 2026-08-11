@@ -589,6 +589,9 @@ fn v7_layer_id(layer: u8) -> u32 {
     if (57..=72).contains(&layer) {
         return 0x0102_0000 + (l - 56); // mechanical 1-16
     }
+    if (186..=201).contains(&layer) {
+        return 0x0102_0000 + (l - 169); // mechanical 17-32 (Altium Designer 18+)
+    }
     match layer {
         33 => 0x0103_0006, // top overlay
         34 => 0x0103_0007, // bottom overlay
@@ -2350,6 +2353,91 @@ mod tests {
         assert_eq!(layer_to_id(Layer::TopPadMaster), 83);
         assert_eq!(layer_to_id(Layer::BottomPadMaster), 84);
         assert_eq!(layer_to_id(Layer::DRCDetailLayer), 85);
+    }
+
+    #[test]
+    fn v7_layer_id_handles_extended_mechanical_layers() {
+        // Regression for #282. Byte IDs 186-201 are Mechanical 17-32 (Altium
+        // Designer 18+). They previously fell through to the `_` arm and were
+        // written as the multi-layer fallback, so a pad/track/arc/text/fill on
+        // M17-M32 silently lost its layer.
+        for (layer, want) in [
+            (Layer::Mechanical17, 0x0102_0011_u32),
+            (Layer::Mechanical18, 0x0102_0012),
+            (Layer::Mechanical20, 0x0102_0014),
+            (Layer::Mechanical22, 0x0102_0016),
+            (Layer::Mechanical28, 0x0102_001C),
+            (Layer::Mechanical32, 0x0102_0020),
+        ] {
+            assert_eq!(
+                v7_layer_id(layer_to_id(layer)),
+                want,
+                "{layer:?} must serialize its own V7 id"
+            );
+        }
+
+        // The whole extended range is contiguous with M1-M16 and collision-free:
+        // mechanical N (1..=32) is always 0x0102_0000 + N.
+        let mut seen = std::collections::HashSet::new();
+        for (n, layer) in [
+            Layer::Mechanical1,
+            Layer::Mechanical2,
+            Layer::Mechanical3,
+            Layer::Mechanical4,
+            Layer::Mechanical5,
+            Layer::Mechanical6,
+            Layer::Mechanical7,
+            Layer::Mechanical8,
+            Layer::Mechanical9,
+            Layer::Mechanical10,
+            Layer::Mechanical11,
+            Layer::Mechanical12,
+            Layer::Mechanical13,
+            Layer::Mechanical14,
+            Layer::Mechanical15,
+            Layer::Mechanical16,
+            Layer::Mechanical17,
+            Layer::Mechanical18,
+            Layer::Mechanical19,
+            Layer::Mechanical20,
+            Layer::Mechanical21,
+            Layer::Mechanical22,
+            Layer::Mechanical23,
+            Layer::Mechanical24,
+            Layer::Mechanical25,
+            Layer::Mechanical26,
+            Layer::Mechanical27,
+            Layer::Mechanical28,
+            Layer::Mechanical29,
+            Layer::Mechanical30,
+            Layer::Mechanical31,
+            Layer::Mechanical32,
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(i, l)| (u32::from(u8::try_from(i).unwrap()) + 1, l))
+        {
+            let id = v7_layer_id(layer_to_id(layer));
+            assert_eq!(id, 0x0102_0000 + n, "mechanical {n} V7 id");
+            assert!(seen.insert(id), "duplicate V7 id for mechanical {n}");
+            // ...and never the multi-layer fallback that caused the bug.
+            assert_ne!(id, v7_layer_id(74), "mechanical {n} must not fall back");
+        }
+
+        // The numeric id and the string token must agree on the mechanical index,
+        // since regions/bodies use the token while pads/tracks use the id.
+        for layer in [
+            Layer::Mechanical17,
+            Layer::Mechanical32,
+            Layer::TopCourtyard,
+        ] {
+            let n = v7_layer_id(layer_to_id(layer)) - 0x0102_0000;
+            assert_eq!(
+                region_v7_layer_token(layer),
+                format!("MECHANICAL{n}"),
+                "{layer:?}: id and token must reference the same mechanical layer"
+            );
+        }
     }
 
     #[test]

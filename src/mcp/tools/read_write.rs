@@ -1169,6 +1169,12 @@ impl McpServer {
             }
         }
 
+        // Names of the symbols written by *this* call. Recorded as they are added
+        // (rather than reused from `new_names`) so a symbol that omitted "name" and
+        // fell back to the default is still represented. Used to scope the geometry
+        // echo below to what the caller actually wrote.
+        let mut written_names: std::collections::HashSet<String> = std::collections::HashSet::new();
+
         for sym_json in symbols_json {
             check_keys!(
                 sym_json,
@@ -1809,6 +1815,7 @@ impl McpServer {
                 return ToolCallResult::error(e);
             }
 
+            written_names.insert(symbol.name.clone());
             library.add(symbol);
         }
 
@@ -1830,7 +1837,20 @@ impl McpServer {
                 // Echo computed pin geometry (body-attach end, connection tip,
                 // orientation, bounding box) so the caller can verify pin placement
                 // and catch flipped/misaligned pins without opening Altium.
-                result["geometry"] = Value::Array(library.iter().map(symbol_geometry).collect());
+                //
+                // Scoped to the symbols written by this call. Echoing the whole
+                // library made an `append: true` sequence grow the response
+                // quadratically — a 27-symbol library built over 11 appends echoed
+                // 196 symbol-geometry blocks instead of 26, large enough to stop the
+                // response being usable — and pre-existing symbols tell the caller
+                // nothing about the write it just performed.
+                result["geometry"] = Value::Array(
+                    library
+                        .iter()
+                        .filter(|s| written_names.contains(&s.name))
+                        .map(symbol_geometry)
+                        .collect(),
+                );
 
                 // Run post-write validation
                 if let Some(validation) = Self::post_write_validation_schlib(filepath) {

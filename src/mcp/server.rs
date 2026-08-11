@@ -2226,6 +2226,49 @@ mod tests {
         assert!(lib.get("NEW_SYM").is_some());
     }
 
+    #[test]
+    fn write_schlib_geometry_echo_covers_only_written_symbols() {
+        // The geometry echo exists so the caller can verify the pins it just wrote.
+        // It previously walked the whole library, so an `append: true` sequence
+        // re-echoed every pre-existing symbol and the response grew quadratically
+        // with the number of appends. Assert it is scoped to this call's symbols.
+        let temp = test_temp_dir();
+        let lib_path = temp.path().join("geom_scope.SchLib");
+        create_test_schlib(&lib_path); // seeds RESISTOR + CAPACITOR
+
+        let server = create_test_server(temp.path());
+        let args = json!({
+            "filepath": lib_path.to_string_lossy(),
+            "symbols": [{
+                "name": "APPENDED",
+                "designator": "X?",
+                "pins": [{"designator": "1", "name": "A", "x": -30, "y": 0,
+                          "length": 10, "orientation": "left"}]
+            }],
+            "append": true
+        });
+
+        let result = server.call_write_schlib(&args);
+        assert!(
+            !result.is_error,
+            "append must succeed, got: {}",
+            get_result_text(&result)
+        );
+
+        let parsed: serde_json::Value =
+            serde_json::from_str(get_result_text(&result)).expect("response is JSON");
+        let geometry = parsed["geometry"].as_array().expect("geometry array");
+        let names: Vec<&str> = geometry.iter().filter_map(|g| g["name"].as_str()).collect();
+
+        assert_eq!(
+            names,
+            vec!["APPENDED"],
+            "geometry must cover only the symbols written by this call"
+        );
+        // The library itself still grew — only the echo is scoped.
+        assert_eq!(parsed["symbol_count"].as_u64(), Some(3));
+    }
+
     // =========================================================================
     // delete_component Tool Tests
     // =========================================================================

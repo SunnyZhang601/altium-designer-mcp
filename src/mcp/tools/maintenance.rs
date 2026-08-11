@@ -529,7 +529,6 @@ impl McpServer {
     /// Updates specific properties of a pad in a `PcbLib` footprint.
     #[allow(clippy::too_many_lines)]
     pub(crate) fn call_update_pad(&self, arguments: &Value) -> ToolCallResult {
-        use crate::altium::pcblib::primitives::PadShape;
         use crate::altium::PcbLib;
 
         let Some(filepath) = arguments.get("filepath").and_then(Value::as_str) else {
@@ -614,17 +613,11 @@ impl McpServer {
             pad.hole_size = Some(hole_size);
         }
         if let Some(shape_str) = updates.get("shape").and_then(Value::as_str) {
-            let new_shape = match shape_str.to_lowercase().as_str() {
-                "rectangle" | "rect" => PadShape::Rectangle,
-                "round" | "circular" => PadShape::Round,
-                "oval" | "oblong" => PadShape::Oval,
-                "octagonal" | "octagon" => PadShape::Octagonal,
-                "roundedrectangle" | "rounded" => PadShape::RoundedRectangle,
-                _ => {
-                    return ToolCallResult::error(format!(
-                    "Invalid shape '{shape_str}'. Valid: Rectangle, Round, Oval, Octagonal, RoundedRectangle"
-                ))
-                }
+            let Some(new_shape) = Self::parse_pad_shape(shape_str) else {
+                return ToolCallResult::error(format!(
+                    "Invalid shape '{shape_str}'. {}",
+                    crate::mcp::tools::parsing::PAD_SHAPE_HELP
+                ));
             };
             changes.push(
                 json!({"property": "shape", "old": format!("{:?}", pad.shape), "new": shape_str}),
@@ -1466,6 +1459,49 @@ mod tests {
         assert!((pad.x - -0.6).abs() < 1e-4);
         assert!((pad.width - 0.7).abs() < 1e-4);
         assert_eq!(format!("{:?}", pad.shape), "Round");
+    }
+
+    #[test]
+    fn update_pad_accepts_write_pcblib_shape_spellings() {
+        // Regression: update_pad had its own shape vocabulary, so the spellings
+        // write_pcblib documents and defaults to were rejected here — round-tripping
+        // a pad through the two tools failed on `rounded_rectangle` and `circle`.
+        for spelling in ["rounded_rectangle", "circle", "ROUND"] {
+            let dir = test_temp_dir();
+            let server = create_test_server(dir.path());
+            let path = dir.path().join("PadShape.PcbLib");
+            create_test_pcblib(&path);
+
+            let result = server.call_update_pad(&json!({
+                "filepath": path.to_string_lossy(),
+                "component_name": "CHIP_0402",
+                "designator": "1",
+                "updates": { "shape": spelling },
+            }));
+            assert!(
+                !result.is_error,
+                "shape {spelling:?} must be accepted: {}",
+                get_result_text(&result)
+            );
+        }
+
+        // Still rejects genuine nonsense, with the shared guidance text.
+        let dir = test_temp_dir();
+        let server = create_test_server(dir.path());
+        let path = dir.path().join("PadBad.PcbLib");
+        create_test_pcblib(&path);
+        let bad = server.call_update_pad(&json!({
+            "filepath": path.to_string_lossy(),
+            "component_name": "CHIP_0402",
+            "designator": "1",
+            "updates": { "shape": "hexagon" },
+        }));
+        assert!(bad.is_error);
+        assert!(
+            get_result_text(&bad).contains("rounded_rectangle"),
+            "error should list the accepted spellings: {}",
+            get_result_text(&bad)
+        );
     }
 
     #[test]

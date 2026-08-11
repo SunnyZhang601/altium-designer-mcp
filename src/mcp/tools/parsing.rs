@@ -123,7 +123,34 @@ fn json_unique_id(json: &Value) -> Option<String> {
         .map(str::to_string)
 }
 
+/// Accepted pad-shape spellings, quoted in every shape error so the two tools
+/// give identical guidance.
+pub const PAD_SHAPE_HELP: &str = "Valid shapes are: rectangle, round (or circle), \
+     oval, octagonal, rounded_rectangle. Matching is case-insensitive and ignores \
+     '_'/'-' separators.";
+
 impl McpServer {
+    /// Parses a pad shape name, shared by `write_pcblib` and `update_pad` so the
+    /// same spelling is accepted everywhere.
+    ///
+    /// The two tools previously carried separate `match` arms with different
+    /// vocabularies: `write_pcblib` took `rounded_rectangle`/`circle` but rejected
+    /// any capitalisation, while `update_pad` lower-cased its input yet only knew
+    /// `roundedrectangle`/`circular` — so the very spelling `write_pcblib`
+    /// documents and defaults to (`rounded_rectangle`) was rejected by
+    /// `update_pad`. This accepts the union, case-insensitively, ignoring `_`/`-`.
+    pub(crate) fn parse_pad_shape(s: &str) -> Option<crate::altium::pcblib::PadShape> {
+        use crate::altium::pcblib::PadShape;
+        match s.to_lowercase().replace(['_', '-'], "").as_str() {
+            "rectangle" | "rect" => Some(PadShape::Rectangle),
+            "round" | "circle" | "circular" => Some(PadShape::Round),
+            "oval" | "oblong" => Some(PadShape::Oval),
+            "octagonal" | "octagon" => Some(PadShape::Octagonal),
+            "roundedrectangle" | "rounded" => Some(PadShape::RoundedRectangle),
+            _ => None,
+        }
+    }
+
     // ==================== Primitive Parsing Helpers ====================
 
     pub(crate) fn check_unknown_fields(
@@ -146,7 +173,7 @@ impl McpServer {
     #[allow(clippy::too_many_lines)] // Pad has many fields requiring individual parsing
     pub(crate) fn parse_pad(json: &Value) -> Result<crate::altium::pcblib::Pad, String> {
         use crate::altium::pcblib::{
-            Layer, MaskExpansionMode, Pad, PadShape, PadStackMode, PowerPlaneConnectStyle,
+            Layer, MaskExpansionMode, Pad, PadStackMode, PowerPlaneConnectStyle,
         };
 
         let designator = json
@@ -188,23 +215,16 @@ impl McpServer {
             ));
         }
 
+        // Omitting `shape` yields RoundedRectangle. That suits chip/QFN lands but is
+        // wrong for BGA/CSP, whose circular NSMD lands need an explicit "round" —
+        // see the `shape` description in tool_definitions.rs.
         let shape_str = json
             .get("shape")
             .and_then(Value::as_str)
             .unwrap_or("rounded_rectangle");
-        let shape = match shape_str {
-            "rectangle" => PadShape::Rectangle,
-            "round" | "circle" => PadShape::Round,
-            "oval" => PadShape::Oval,
-            "octagonal" => PadShape::Octagonal,
-            "rounded_rectangle" => PadShape::RoundedRectangle,
-            _ => {
-                return Err(format!(
-                    "Pad '{designator}' has invalid shape '{shape_str}'. \
-                     Valid shapes are: rectangle, round, circle, oval, octagonal, rounded_rectangle"
-                ))
-            }
-        };
+        let shape = Self::parse_pad_shape(shape_str).ok_or_else(|| {
+            format!("Pad '{designator}' has invalid shape '{shape_str}'. {PAD_SHAPE_HELP}")
+        })?;
 
         // Parse hole_size first to determine default layer
         let hole_size = json.get("hole_size").and_then(Value::as_f64);
@@ -2683,5 +2703,59 @@ mod tests {
         }))
         .expect("rectangle should parse");
         assert_eq!(plain.unique_id, None);
+    }
+
+    #[test]
+    fn pad_shape_vocabulary_is_shared_and_lenient() {
+        use crate::altium::pcblib::PadShape;
+        // Both tools now resolve the same spellings. The pairs below span the two
+        // previously-divergent vocabularies: `rounded_rectangle`/`circle` came from
+        // write_pcblib, `roundedrectangle`/`circular`/`rect` from update_pad.
+        for (input, want) in [
+            ("rectangle", PadShape::Rectangle),
+            ("rect", PadShape::Rectangle),
+            ("round", PadShape::Round),
+            ("circle", PadShape::Round),
+            ("circular", PadShape::Round),
+            ("oval", PadShape::Oval),
+            ("oblong", PadShape::Oval),
+            ("octagonal", PadShape::Octagonal),
+            ("octagon", PadShape::Octagonal),
+            ("rounded_rectangle", PadShape::RoundedRectangle),
+            ("roundedrectangle", PadShape::RoundedRectangle),
+            ("rounded-rectangle", PadShape::RoundedRectangle),
+            ("rounded", PadShape::RoundedRectangle),
+            // case-insensitive: update_pad accepted these, write_pcblib did not
+            ("Round", PadShape::Round),
+            ("ROUNDED_RECTANGLE", PadShape::RoundedRectangle),
+        ] {
+            assert_eq!(
+                McpServer::parse_pad_shape(input),
+                Some(want),
+                "shape {input:?} must resolve"
+            );
+        }
+        assert_eq!(McpServer::parse_pad_shape("hexagon"), None);
+    }
+
+    #[test]
+    fn parse_pad_shape_defaults_to_rounded_rectangle() {
+        // Documents the default that BGA callers must override. A change here is a
+        // silent geometry change for every caller that omits `shape`, so it should
+        // be deliberate.
+        use crate::altium::pcblib::PadShape;
+        let pad = McpServer::parse_pad(&json!({
+            "designator": "A1", "x": 0.0, "y": 0.0, "width": 0.3, "height": 0.3
+        }))
+        .expect("pad without shape should parse");
+        assert_eq!(pad.shape, PadShape::RoundedRectangle);
+
+        // A BGA land opting in explicitly stays circular.
+        let bga = McpServer::parse_pad(&json!({
+            "designator": "A1", "x": 0.0, "y": 0.0, "width": 0.3, "height": 0.3,
+            "shape": "round"
+        }))
+        .expect("round pad should parse");
+        assert_eq!(bga.shape, PadShape::Round);
     }
 }

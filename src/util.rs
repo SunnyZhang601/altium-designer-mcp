@@ -90,7 +90,11 @@ pub fn sanitise_file_name(name: &str) -> Option<String> {
         })
         .collect();
     let cleaned = cleaned.trim_end_matches(['.', ' ']);
-    if cleaned.is_empty() || cleaned.chars().all(|c| c == '_') {
+    // The all-underscores check must run on the *trimmed* string: an input like
+    // "<>." maps to "__." and trims to "__", which is unusable even though the
+    // dot was not an underscore. Tracking "saw a non-underscore" during the map
+    // pass would wrongly accept it.
+    if cleaned.bytes().all(|b| b == b'_') {
         None
     } else {
         Some(cleaned.to_string())
@@ -108,6 +112,7 @@ pub fn generate_unique_id() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     static COUNTER: AtomicU64 = AtomicU64::new(0);
+    const ALPHABET: &[u8; 26] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ";
 
     let time_seed = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -117,13 +122,12 @@ pub fn generate_unique_id() -> String {
     let counter = COUNTER.fetch_add(1, Ordering::Relaxed);
     let seed = time_seed.wrapping_add(u128::from(counter).wrapping_mul(0x9E37_79B9_7F4A_7C15));
 
-    let chars: Vec<char> = "ABCDEFGHIJKLMNOPQRSTUVWXYZ".chars().collect();
     let mut id = String::with_capacity(8);
     let mut n = seed;
     for _ in 0..8 {
         #[allow(clippy::cast_possible_truncation)]
         let idx = (n % 26) as usize;
-        id.push(chars[idx]);
+        id.push(ALPHABET[idx] as char);
         n = n.wrapping_mul(1_103_515_245).wrapping_add(12345);
     }
     id
@@ -172,6 +176,11 @@ mod tests {
         assert_eq!(sanitise_file_name("..."), None);
         assert_eq!(sanitise_file_name("   "), None);
         assert_eq!(sanitise_file_name("::"), None, "nothing but replacements");
+        // The trailing dot/space must not rescue an all-underscores name: the
+        // usability check runs on the trimmed string, so "<>." (mapped to
+        // "__.", trimmed to "__") is unusable even though '.' != '_'.
+        assert_eq!(sanitise_file_name("<>."), None, "trimmed to underscores");
+        assert_eq!(sanitise_file_name("__ ."), None, "trimmed to underscores");
     }
 
     #[test]

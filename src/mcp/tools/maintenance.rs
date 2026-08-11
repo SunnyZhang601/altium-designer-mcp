@@ -736,106 +736,20 @@ impl McpServer {
                 "bottom3dbody" => Some(Layer::Bottom3DBody),
                 "keepout" | "keepoutlayer" => Some(Layer::KeepOut),
                 s if s.starts_with("mechanical") => {
-                    // Handle Mechanical1-32
-                    let num_str = s.strip_prefix("mechanical")?;
-                    let num: u8 = num_str.parse().ok()?;
-                    match num {
-                        1 => Some(Layer::Mechanical1),
-                        2 => Some(Layer::Mechanical2),
-                        3 => Some(Layer::Mechanical3),
-                        4 => Some(Layer::Mechanical4),
-                        5 => Some(Layer::Mechanical5),
-                        6 => Some(Layer::Mechanical6),
-                        7 => Some(Layer::Mechanical7),
-                        8 => Some(Layer::Mechanical8),
-                        9 => Some(Layer::Mechanical9),
-                        10 => Some(Layer::Mechanical10),
-                        11 => Some(Layer::Mechanical11),
-                        12 => Some(Layer::Mechanical12),
-                        13 => Some(Layer::Mechanical13),
-                        14 => Some(Layer::Mechanical14),
-                        15 => Some(Layer::Mechanical15),
-                        16 => Some(Layer::Mechanical16),
-                        17 => Some(Layer::Mechanical17),
-                        18 => Some(Layer::Mechanical18),
-                        19 => Some(Layer::Mechanical19),
-                        20 => Some(Layer::Mechanical20),
-                        21 => Some(Layer::Mechanical21),
-                        22 => Some(Layer::Mechanical22),
-                        23 => Some(Layer::Mechanical23),
-                        24 => Some(Layer::Mechanical24),
-                        25 => Some(Layer::Mechanical25),
-                        26 => Some(Layer::Mechanical26),
-                        27 => Some(Layer::Mechanical27),
-                        28 => Some(Layer::Mechanical28),
-                        29 => Some(Layer::Mechanical29),
-                        30 => Some(Layer::Mechanical30),
-                        31 => Some(Layer::Mechanical31),
-                        32 => Some(Layer::Mechanical32),
-                        _ => None,
-                    }
+                    // Numbered families delegate to Layer::parse via the
+                    // canonical Altium name, so the Layer enum stays the single
+                    // source of truth: a variant added there is picked up here
+                    // automatically, and out-of-range numbers fall out as None.
+                    let num: u8 = s.strip_prefix("mechanical")?.parse().ok()?;
+                    Layer::parse(&format!("Mechanical {num}"))
                 }
                 s if s.starts_with("midlayer") => {
-                    // Handle Mid-Layer 1-30
-                    let num_str = s.strip_prefix("midlayer")?;
-                    let num: u8 = num_str.parse().ok()?;
-                    match num {
-                        1 => Some(Layer::MidLayer1),
-                        2 => Some(Layer::MidLayer2),
-                        3 => Some(Layer::MidLayer3),
-                        4 => Some(Layer::MidLayer4),
-                        5 => Some(Layer::MidLayer5),
-                        6 => Some(Layer::MidLayer6),
-                        7 => Some(Layer::MidLayer7),
-                        8 => Some(Layer::MidLayer8),
-                        9 => Some(Layer::MidLayer9),
-                        10 => Some(Layer::MidLayer10),
-                        11 => Some(Layer::MidLayer11),
-                        12 => Some(Layer::MidLayer12),
-                        13 => Some(Layer::MidLayer13),
-                        14 => Some(Layer::MidLayer14),
-                        15 => Some(Layer::MidLayer15),
-                        16 => Some(Layer::MidLayer16),
-                        17 => Some(Layer::MidLayer17),
-                        18 => Some(Layer::MidLayer18),
-                        19 => Some(Layer::MidLayer19),
-                        20 => Some(Layer::MidLayer20),
-                        21 => Some(Layer::MidLayer21),
-                        22 => Some(Layer::MidLayer22),
-                        23 => Some(Layer::MidLayer23),
-                        24 => Some(Layer::MidLayer24),
-                        25 => Some(Layer::MidLayer25),
-                        26 => Some(Layer::MidLayer26),
-                        27 => Some(Layer::MidLayer27),
-                        28 => Some(Layer::MidLayer28),
-                        29 => Some(Layer::MidLayer29),
-                        30 => Some(Layer::MidLayer30),
-                        _ => None,
-                    }
+                    let num: u8 = s.strip_prefix("midlayer")?.parse().ok()?;
+                    Layer::parse(&format!("Mid-Layer {num}"))
                 }
                 s if s.starts_with("internalplane") => {
-                    // Handle Internal Plane 1-16
-                    let num_str = s.strip_prefix("internalplane")?;
-                    let num: u8 = num_str.parse().ok()?;
-                    match num {
-                        1 => Some(Layer::InternalPlane1),
-                        2 => Some(Layer::InternalPlane2),
-                        3 => Some(Layer::InternalPlane3),
-                        4 => Some(Layer::InternalPlane4),
-                        5 => Some(Layer::InternalPlane5),
-                        6 => Some(Layer::InternalPlane6),
-                        7 => Some(Layer::InternalPlane7),
-                        8 => Some(Layer::InternalPlane8),
-                        9 => Some(Layer::InternalPlane9),
-                        10 => Some(Layer::InternalPlane10),
-                        11 => Some(Layer::InternalPlane11),
-                        12 => Some(Layer::InternalPlane12),
-                        13 => Some(Layer::InternalPlane13),
-                        14 => Some(Layer::InternalPlane14),
-                        15 => Some(Layer::InternalPlane15),
-                        16 => Some(Layer::InternalPlane16),
-                        _ => None,
-                    }
+                    let num: u8 = s.strip_prefix("internalplane")?.parse().ok()?;
+                    Layer::parse(&format!("Internal Plane {num}"))
                 }
                 _ => None,
             }
@@ -1910,10 +1824,15 @@ mod tests {
             let filepath = path.to_string_lossy().to_string();
 
             // Space-less names bypass Layer::parse and exercise the alias arms.
+            // The last member of each numbered family pins the full range now
+            // that the aliases delegate to Layer::parse canonical names.
             for (input, expected) in [
                 ("MidLayer5", Layer::MidLayer5),
                 ("InternalPlane2", Layer::InternalPlane2),
                 ("Mechanical10", Layer::Mechanical10),
+                ("MidLayer30", Layer::MidLayer30),
+                ("InternalPlane16", Layer::InternalPlane16),
+                ("Mechanical32", Layer::Mechanical32),
             ] {
                 let result = server.call_update_primitive(&json!({
                     "filepath": filepath,
@@ -1929,6 +1848,18 @@ mod tests {
                     expected,
                     "{input}"
                 );
+            }
+
+            // Out-of-range family numbers must be rejected, not clamped.
+            for input in ["Mechanical33", "MidLayer31", "InternalPlane17"] {
+                let result = server.call_update_primitive(&json!({
+                    "filepath": filepath,
+                    "component_name": "RICH",
+                    "primitive_type": "track",
+                    "index": 0,
+                    "updates": { "layer": input },
+                }));
+                assert!(result.is_error, "{input} must be rejected");
             }
         }
     }

@@ -1096,5 +1096,5 @@ Update specific properties of a primitive (track, arc, region, or text) in a Pcb
 | `dry_run` | boolean | no | If true, show what would change without saving (default: false) |
 | `filepath` | string | yes | Path to the .PcbLib file |
 | `index` | integer | yes | Zero-based index of the primitive within its type array |
-| `primitive_type` | enum | yes | Type of primitive to update (one of: track, arc, region, text, fill) |
+| `primitive_type` | enum | yes | Type of primitive to update. Addressed by `index` into that primitive list. Pads are not here — they have a designator, so use update_pad. (one of: track, arc, region, text, fill, via) |
 | `updates` | object | yes | Properties to update (only specified properties are changed). Valid properties depend on primitive_type. |

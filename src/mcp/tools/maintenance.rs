@@ -963,9 +963,64 @@ impl McpServer {
                 }
                 // Note: Updating region vertices would require array-based updates, which is more complex
             }
+            "via" => {
+                if index >= footprint.vias.len() {
+                    return ToolCallResult::error(format!(
+                        "Via index {} out of range (0..{})",
+                        index,
+                        footprint.vias.len()
+                    ));
+                }
+                let via = &mut footprint.vias[index];
+
+                // Vias carry no designator, so they are addressed positionally
+                // like tracks and arcs rather than by name like pads.
+                if let Some(x) = updates.get("x").and_then(Value::as_f64) {
+                    changes.push(json!({"property": "x", "old": via.x, "new": x}));
+                    via.x = x;
+                }
+                if let Some(y) = updates.get("y").and_then(Value::as_f64) {
+                    changes.push(json!({"property": "y", "old": via.y, "new": y}));
+                    via.y = y;
+                }
+                if let Some(diameter) = updates.get("diameter").and_then(Value::as_f64) {
+                    changes.push(
+                        json!({"property": "diameter", "old": via.diameter, "new": diameter}),
+                    );
+                    via.diameter = diameter;
+                }
+                if let Some(hole_size) = updates.get("hole_size").and_then(Value::as_f64) {
+                    changes.push(
+                        json!({"property": "hole_size", "old": via.hole_size, "new": hole_size}),
+                    );
+                    via.hole_size = hole_size;
+                }
+                for (key, is_from) in [("from_layer", true), ("to_layer", false)] {
+                    if let Some(layer_str) = updates.get(key).and_then(Value::as_str) {
+                        let Some(layer) = parse_layer(layer_str) else {
+                            return ToolCallResult::error(format!("Invalid layer: {layer_str}"));
+                        };
+                        let old = if is_from {
+                            via.from_layer
+                        } else {
+                            via.to_layer
+                        };
+                        changes.push(json!({
+                            "property": key,
+                            "old": format!("{old:?}"),
+                            "new": layer_str
+                        }));
+                        if is_from {
+                            via.from_layer = layer;
+                        } else {
+                            via.to_layer = layer;
+                        }
+                    }
+                }
+            }
             _ => {
                 return ToolCallResult::error(format!(
-                    "Invalid primitive_type '{primitive_type}'. Valid: track, arc, region, text, fill"
+                    "Invalid primitive_type '{primitive_type}'. Valid: track, arc, region, text, fill, via"
                 ));
             }
         }
@@ -996,6 +1051,20 @@ impl McpServer {
             }
             "text" => {
                 (footprint.text[index].height <= 0.0).then_some("text height must be positive")
+            }
+            "via" => {
+                // Mirrors parse_via's create-path checks: the hole must fit inside
+                // the annular ring, both positive.
+                let v = &footprint.vias[index];
+                if v.diameter <= 0.0 {
+                    Some("via diameter must be positive")
+                } else if v.hole_size <= 0.0 {
+                    Some("via hole_size must be positive")
+                } else if v.hole_size >= v.diameter {
+                    Some("via hole_size must be smaller than diameter")
+                } else {
+                    None
+                }
             }
             _ => None,
         };
@@ -1641,7 +1710,7 @@ mod tests {
     mod primitive_arms {
         use super::*;
         use crate::altium::pcblib::{
-            Arc, Fill, PcbFlags, Region, Text, TextJustification, TextKind,
+            Arc, Fill, PcbFlags, Region, Text, TextJustification, TextKind, Via,
         };
 
         /// A footprint carrying one of every 2D primitive at index 0, so each
@@ -1654,6 +1723,7 @@ mod tests {
             fp.add_arc(Arc::circle(0.0, 0.0, 1.0, 0.15, Layer::TopOverlay));
             fp.add_fill(Fill::new(-0.5, -0.5, 0.5, 0.5, Layer::TopPaste));
             fp.add_region(Region::rectangle(-1.0, -1.0, 1.0, 1.0, Layer::TopLayer));
+            fp.add_via(Via::new(0.6, 0.6, 0.6, 0.3));
             fp.add_text(Text {
                 x: 0.0,
                 y: 1.0,
@@ -1725,6 +1795,102 @@ mod tests {
             let arc = &lib.get("RICH").unwrap().arcs[0];
             assert!((arc.radius - 1.5).abs() < 1e-4);
             assert_eq!(arc.layer, Layer::BottomOverlay);
+        }
+
+        #[test]
+        fn update_primitive_via_arm_persists() {
+            // Vias were the only footprint primitive with no update path: pads have
+            // update_pad (addressed by designator), everything else is reachable
+            // through update_primitive by index, but vias were reachable by neither,
+            // so moving one meant rewriting the whole footprint.
+            let dir = test_temp_dir();
+            let server = create_test_server(dir.path());
+            let path = dir.path().join("Via.PcbLib");
+            create_rich_pcblib(&path);
+
+            let result = server.call_update_primitive(&json!({
+                "filepath": path.to_string_lossy(),
+                "component_name": "RICH",
+                "primitive_type": "via",
+                "index": 0,
+                "updates": {
+                    "x": -0.55, "y": 0.55,
+                    "diameter": 0.8, "hole_size": 0.4,
+                    "from_layer": "Top Layer", "to_layer": "Bottom Layer",
+                },
+            }));
+            assert!(!result.is_error, "{}", get_result_text(&result));
+            let parsed = parse_result_json(&result);
+            assert_eq!(parsed["primitive_type"], "via");
+            let props = change_props(&parsed);
+            for want in ["x", "y", "diameter", "hole_size", "from_layer", "to_layer"] {
+                assert!(props.contains(&want.to_string()), "missing change {want}");
+            }
+
+            let lib = PcbLib::open(&path).unwrap();
+            let via = &lib.get("RICH").unwrap().vias[0];
+            assert!((via.x - -0.55).abs() < 1e-4, "x {}", via.x);
+            assert!((via.y - 0.55).abs() < 1e-4, "y {}", via.y);
+            assert!((via.diameter - 0.8).abs() < 1e-4, "dia {}", via.diameter);
+            assert!((via.hole_size - 0.4).abs() < 1e-4, "hole {}", via.hole_size);
+            assert_eq!(via.from_layer, Layer::TopLayer);
+            assert_eq!(via.to_layer, Layer::BottomLayer);
+        }
+
+        #[test]
+        fn update_primitive_via_rejects_degenerate_geometry() {
+            // Same invariants parse_via enforces on the create path: the hole must
+            // fit inside the annular ring, both positive. update_primitive bypasses
+            // parse_via, so the check has to be repeated here.
+            let dir = test_temp_dir();
+            let server = create_test_server(dir.path());
+            let path = dir.path().join("ViaBad.PcbLib");
+
+            for (updates, needle) in [
+                (json!({"hole_size": 0.9}), "smaller than diameter"),
+                (json!({"diameter": 0.0}), "diameter must be positive"),
+                (json!({"hole_size": 0.0}), "hole_size must be positive"),
+            ] {
+                create_rich_pcblib(&path);
+                let result = server.call_update_primitive(&json!({
+                    "filepath": path.to_string_lossy(),
+                    "component_name": "RICH",
+                    "primitive_type": "via",
+                    "index": 0,
+                    "updates": updates,
+                }));
+                assert!(result.is_error, "{updates:?} must be rejected");
+                let txt = get_result_text(&result);
+                assert!(txt.contains(needle), "expected {needle:?} in: {txt}");
+
+                // Rejected before save: the file keeps its original geometry.
+                let lib = PcbLib::open(&path).unwrap();
+                let via = &lib.get("RICH").unwrap().vias[0];
+                assert!((via.diameter - 0.6).abs() < 1e-4, "unchanged diameter");
+                assert!((via.hole_size - 0.3).abs() < 1e-4, "unchanged hole");
+            }
+        }
+
+        #[test]
+        fn update_primitive_via_index_out_of_range() {
+            let dir = test_temp_dir();
+            let server = create_test_server(dir.path());
+            let path = dir.path().join("ViaRange.PcbLib");
+            create_rich_pcblib(&path);
+
+            let result = server.call_update_primitive(&json!({
+                "filepath": path.to_string_lossy(),
+                "component_name": "RICH",
+                "primitive_type": "via",
+                "index": 7,
+                "updates": { "x": 0.0 },
+            }));
+            assert!(result.is_error);
+            assert!(
+                get_result_text(&result).contains("Via index 7 out of range"),
+                "{}",
+                get_result_text(&result)
+            );
         }
 
         #[test]

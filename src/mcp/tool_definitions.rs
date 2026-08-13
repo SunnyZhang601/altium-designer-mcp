@@ -2044,8 +2044,8 @@ impl McpServer {
                         },
                         "primitive_type": {
                             "type": "string",
-                            "enum": ["track", "arc", "region", "text", "fill"],
-                            "description": "Type of primitive to update"
+                            "enum": ["track", "arc", "region", "text", "fill", "via"],
+                            "description": "Type of primitive to update. Addressed by `index` into that primitive list. Pads are not here — they have a designator, so use update_pad."
                         },
                         "index": {
                             "type": "integer",

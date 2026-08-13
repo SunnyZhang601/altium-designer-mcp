@@ -200,6 +200,50 @@ fn silk_over_pad_warnings(fp: &crate::altium::pcblib::Footprint) -> Vec<Value> {
     warnings
 }
 
+/// Warns when two pads' copper overlaps on a shared layer. Overlapping copper
+/// merges into one net, so a footprint can be structurally valid while every pin
+/// is shorted together. Advisory only — same-designator pads are excluded because
+/// stacking them is a legitimate way to build a compound land.
+///
+/// Reporting is capped so a systematic error on a large BGA cannot bury the
+/// response; the cap message carries the true total.
+fn pad_copper_overlap_warnings(fp: &crate::altium::pcblib::Footprint) -> Vec<Value> {
+    /// Most pairs reported per footprint before collapsing to a summary.
+    const MAX_REPORTED: usize = 20;
+
+    let hits = fp.overlapping_pad_pairs();
+    let mut warnings: Vec<Value> = hits
+        .iter()
+        .take(MAX_REPORTED)
+        .map(|&(i, j, ox, oy)| {
+            let (a, b) = (&fp.pads[i], &fp.pads[j]);
+            json!({
+                "footprint": fp.name,
+                "type": "pad_copper_overlap",
+                "layer": a.layer.as_str(),
+                "pads": [a.designator, b.designator],
+                "overlap_mm": [ox, oy],
+                "message": format!(
+                    "pads '{}' and '{}' overlap by {:.3} x {:.3} mm on {} —                      overlapping copper merges into one net",
+                    a.designator, b.designator, ox, oy, a.layer.as_str()
+                ),
+            })
+        })
+        .collect();
+    if hits.len() > MAX_REPORTED {
+        warnings.push(json!({
+            "footprint": fp.name,
+            "type": "pad_copper_overlap",
+            "message": format!(
+                "{} overlapping pad pairs total; {} shown",
+                hits.len(),
+                MAX_REPORTED
+            ),
+        }));
+    }
+    warnings
+}
+
 /// Summarises a footprint's 3D body for the `write_pcblib` response so the caller
 /// knows the body height that was written and whether one was auto-created (with
 /// a default, `assumed` height it should confirm). All heights are in mm.
@@ -928,6 +972,7 @@ impl McpServer {
             }
 
             silk_warnings.extend(silk_over_pad_warnings(&footprint));
+            silk_warnings.extend(pad_copper_overlap_warnings(&footprint));
 
             library.add(footprint);
         }

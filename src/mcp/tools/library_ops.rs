@@ -447,6 +447,27 @@ impl McpServer {
                 }
             }
 
+            // Overlapping pad copper shorts nets together. This is the only
+            // electrical check here: everything else in this function is
+            // integrity, and a footprint whose exposed pad welds every pin
+            // together passes all of it. Warning rather than error - stacked
+            // same-designator pads are legal and are already excluded by
+            // overlapping_pad_pairs().
+            for (i, j, ox, oy) in fp.overlapping_pad_pairs() {
+                issues.push(json!({
+                    "severity": "warning",
+                    "component": name,
+                    "issue": format!(
+                        "Pads '{}' and '{}' overlap by {:.3} x {:.3} mm on {} - overlapping copper merges into one net",
+                        fp.pads[i].designator,
+                        fp.pads[j].designator,
+                        ox,
+                        oy,
+                        fp.pads[i].layer.as_str()
+                    )
+                }));
+            }
+
             // Check regions for minimum vertices
             for (i, region) in fp.regions.iter().enumerate() {
                 if region.vertices.len() < 3 {

@@ -137,6 +137,77 @@ pub struct Footprint {
 }
 
 impl Footprint {
+    /// Finds pairs of pads whose copper overlaps on a shared layer.
+    ///
+    /// Overlapping copper merges into a single net, so a footprint can pass every
+    /// integrity check while shorting pins together — the classic cause being an
+    /// exposed thermal pad sized against a mis-read land dimension, which welds
+    /// the EP to every perimeter pad.
+    ///
+    /// Returns `(index_a, index_b, overlap_x, overlap_y)` in mm with `a < b`, where
+    /// the overlaps are the intersection rectangle's width and height.
+    ///
+    /// Deliberate constructions are excluded:
+    /// - pads sharing a designator (same designator == same net in Altium, so
+    ///   stacking them is a normal way to build a compound land),
+    /// - pads with no layer in common (a Top-only and a Bottom-only pad may sit
+    ///   at identical coordinates; `MultiLayer` shares both).
+    ///
+    /// Non-rectangular and rotated pads are compared by their axis-aligned
+    /// bounding box, so the test errs toward reporting: a false positive costs a
+    /// glance, a missed short costs a board. Pads that merely touch (zero gap)
+    /// are reported, since Altium merges those too.
+    #[must_use]
+    pub fn overlapping_pad_pairs(&self) -> Vec<(usize, usize, f64, f64)> {
+        /// Zero-gap tolerance. Altium stores coordinates in 2.54 nm units, so
+        /// anything at or below this is contact rather than clearance.
+        const TOUCH_TOL: f64 = 1e-6;
+
+        fn spans(pad: &Pad) -> (f64, f64) {
+            // Rotated pads use the AABB of the rotated rectangle.
+            if pad.rotation.abs() < f64::EPSILON {
+                return (pad.width, pad.height);
+            }
+            let radians = pad.rotation.to_radians();
+            let (cos, sin) = (radians.cos().abs(), radians.sin().abs());
+            (
+                pad.width.mul_add(cos, pad.height * sin),
+                pad.width.mul_add(sin, pad.height * cos),
+            )
+        }
+        fn shares_layer(a: &Pad, b: &Pad) -> bool {
+            let sides = |p: &Pad| match p.layer {
+                Layer::TopLayer => (true, false),
+                Layer::BottomLayer => (false, true),
+                Layer::MultiLayer => (true, true),
+                _ => (false, false), // non-copper pads cannot short
+            };
+            let (at, ab) = sides(a);
+            let (bt, bb) = sides(b);
+            (at && bt) || (ab && bb)
+        }
+
+        let mut hits = Vec::new();
+        for (i, a) in self.pads.iter().enumerate() {
+            for (j, b) in self.pads.iter().enumerate().skip(i + 1) {
+                if a.designator == b.designator || !shares_layer(a, b) {
+                    continue;
+                }
+                let (aw, ah) = spans(a);
+                let (bw, bh) = spans(b);
+                // Intersection extent, not penetration depth: when one pad sits
+                // wholly inside the other's span on an axis, the overlap there is
+                // the smaller pad's size, which is what a reader expects to see.
+                let ox = ((aw + bw) / 2.0 - (a.x - b.x).abs()).min(aw).min(bw);
+                let oy = ((ah + bh) / 2.0 - (a.y - b.y).abs()).min(ah).min(bh);
+                if ox >= -TOUCH_TOL && oy >= -TOUCH_TOL {
+                    hits.push((i, j, ox.max(0.0), oy.max(0.0)));
+                }
+            }
+        }
+        hits
+    }
+
     /// Creates a new empty footprint with the given name.
     #[must_use]
     pub fn new(name: impl Into<String>) -> Self {
@@ -2564,6 +2635,120 @@ mod tests {
         assert!(
             err_str.contains("expected PcbLib"),
             "Expected 'expected PcbLib' in error, got: {err_str}"
+        );
+    }
+    /// The TPA6130A2 field failure, encoded. TI's RTJ0020D land drawing marks
+    /// (3.8) as pad row CENTRE-to-CENTRE; reading it as outer-edge-to-outer-edge
+    /// puts the 20 perimeter pads at 1.6 mm instead of 1.9 mm, whose inner edges
+    /// (1.30) then collide with the correctly-sized 2.7 mm exposed pad (1.35).
+    /// The library passed every integrity check while shorting all 21 pads.
+    #[test]
+    fn overlapping_pad_pairs_catches_undersized_qfn_land() {
+        fn wqfn20(centre: f64) -> Footprint {
+            let mut fp = Footprint::new("QFN50P400X400X80-21N");
+            let mut push = |des: &str, x: f64, y: f64, w: f64, h: f64| {
+                fp.pads.push(Pad::smd(des, x, y, w, h));
+            };
+            for k in 0..5 {
+                let o = f64::from(k).mul_add(-0.5, 1.0);
+                push(&format!("{}", k + 1), -centre, o, 0.6, 0.24);
+                push(&format!("{}", k + 6), -o, -centre, 0.24, 0.6);
+                push(&format!("{}", k + 11), centre, -o, 0.6, 0.24);
+                push(&format!("{}", k + 16), o, centre, 0.24, 0.6);
+            }
+            push("21", 0.0, 0.0, 2.7, 2.7); // exposed pad
+            fp
+        }
+
+        // As shipped: every perimeter pad welded to the EP by 0.05 mm.
+        let bad = wqfn20(1.6).overlapping_pad_pairs();
+        assert_eq!(bad.len(), 20, "all 20 pads must be reported against the EP");
+        for &(_, j, ox, oy) in &bad {
+            assert_eq!(j, 20, "the EP (last pad) is the other half of every pair");
+            // 0.05 mm along the pad's long axis, the pad's own 0.24 mm across it;
+            // which axis is which flips between the side rows and the top/bottom
+            // rows, so compare the unordered pair.
+            let (lo, hi) = if ox < oy { (ox, oy) } else { (oy, ox) };
+            assert!(
+                (lo - 0.05).abs() < 1e-9,
+                "short overlap {lo} (from {ox}x{oy})"
+            );
+            assert!(
+                (hi - 0.24).abs() < 1e-9,
+                "long overlap {hi} (from {ox}x{oy})"
+            );
+        }
+
+        // Corrected centres: 0.25 mm clearance, nothing reported.
+        assert!(
+            wqfn20(1.9).overlapping_pad_pairs().is_empty(),
+            "correct land pattern must be clean"
+        );
+    }
+
+    #[test]
+    fn overlapping_pad_pairs_excludes_legitimate_constructions() {
+        let base = |des: &str, x: f64, layer: Layer| {
+            let mut p = Pad::smd(des, x, 0.0, 1.0, 1.0);
+            p.layer = layer;
+            p
+        };
+
+        // Same designator == same net: stacking is a normal compound land.
+        let mut fp = Footprint::new("STACKED");
+        fp.pads.push(base("1", 0.0, Layer::TopLayer));
+        fp.pads.push(base("1", 0.4, Layer::TopLayer));
+        assert!(fp.overlapping_pad_pairs().is_empty(), "same designator");
+
+        // Opposite sides never short, even at identical coordinates.
+        let mut fp = Footprint::new("OPPOSITE");
+        fp.pads.push(base("1", 0.0, Layer::TopLayer));
+        fp.pads.push(base("2", 0.0, Layer::BottomLayer));
+        assert!(fp.overlapping_pad_pairs().is_empty(), "top vs bottom");
+
+        // A through-hole (MultiLayer) pad does short against a top-layer pad.
+        let mut fp = Footprint::new("THT");
+        fp.pads.push(base("1", 0.0, Layer::TopLayer));
+        fp.pads.push(base("2", 0.5, Layer::MultiLayer));
+        assert_eq!(fp.overlapping_pad_pairs().len(), 1, "multi-layer overlap");
+
+        // Merely touching still merges in Altium, so it is reported.
+        let mut fp = Footprint::new("TOUCHING");
+        fp.pads.push(base("1", 0.0, Layer::TopLayer));
+        fp.pads.push(base("2", 1.0, Layer::TopLayer));
+        assert_eq!(fp.overlapping_pad_pairs().len(), 1, "zero-gap contact");
+
+        // A clear gap is not reported.
+        let mut fp = Footprint::new("CLEAR");
+        fp.pads.push(base("1", 0.0, Layer::TopLayer));
+        fp.pads.push(base("2", 1.2, Layer::TopLayer));
+        assert!(fp.overlapping_pad_pairs().is_empty(), "0.2mm gap");
+    }
+
+    #[test]
+    fn overlapping_pad_pairs_uses_rotated_bounding_box() {
+        // A 90-degree rotated pad swaps its effective span, so a pair that clears
+        // unrotated can collide once rotated. The AABB comparison must see that.
+        let mk = |des: &str, y: f64, rot: f64| {
+            let mut p = Pad::smd(des, 0.0, y, 2.0, 0.2);
+            p.rotation = rot;
+            p
+        };
+        let mut fp = Footprint::new("FLAT");
+        fp.pads.push(mk("1", 0.0, 0.0));
+        fp.pads.push(mk("2", 0.5, 0.0));
+        assert!(
+            fp.overlapping_pad_pairs().is_empty(),
+            "flat pads clear in y"
+        );
+
+        let mut fp = Footprint::new("ROTATED");
+        fp.pads.push(mk("1", 0.0, 90.0));
+        fp.pads.push(mk("2", 0.5, 90.0));
+        assert_eq!(
+            fp.overlapping_pad_pairs().len(),
+            1,
+            "rotated pads span 2.0mm in y and must collide"
         );
     }
 }

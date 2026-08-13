@@ -316,6 +316,7 @@ impl McpServer {
     /// Validates a `PcbLib` file.
     #[allow(clippy::too_many_lines)]
     pub(crate) fn validate_pcblib(filepath: &str) -> ToolCallResult {
+        use crate::altium::pcblib::MAX_REPORTED_PAD_OVERLAPS;
         use crate::altium::PcbLib;
         use std::collections::HashSet;
 
@@ -453,7 +454,12 @@ impl McpServer {
             // together passes all of it. Warning rather than error - stacked
             // same-designator pads are legal and are already excluded by
             // overlapping_pad_pairs().
-            for (i, j, ox, oy) in fp.overlapping_pad_pairs() {
+            //
+            // Truncated like the write_pcblib warning: pairs are quadratic in
+            // pad count, so a library holding one systematically broken BGA
+            // would otherwise emit tens of thousands of issues here.
+            let overlaps = fp.overlapping_pad_pairs();
+            for &(i, j, ox, oy) in overlaps.iter().take(MAX_REPORTED_PAD_OVERLAPS) {
                 issues.push(json!({
                     "severity": "warning",
                     "component": name,
@@ -464,6 +470,16 @@ impl McpServer {
                         ox,
                         oy,
                         fp.pads[i].layer.as_str()
+                    )
+                }));
+            }
+            if overlaps.len() > MAX_REPORTED_PAD_OVERLAPS {
+                issues.push(json!({
+                    "severity": "warning",
+                    "component": name,
+                    "issue": format!(
+                        "{} overlapping pad pairs total; {MAX_REPORTED_PAD_OVERLAPS} shown",
+                        overlaps.len()
                     )
                 }));
             }
@@ -1837,6 +1853,50 @@ mod tests {
                 .unwrap_or("")
                 .contains("invalid dimensions")));
             assert!(parsed["error_count"].as_u64().unwrap() >= 3);
+        }
+
+        #[test]
+        fn validate_pcblib_caps_pad_overlap_issues() {
+            use crate::altium::pcblib::MAX_REPORTED_PAD_OVERLAPS;
+
+            // Overlapping pairs are quadratic in pad count, so a systematically
+            // broken part must not bury the response: 30 mutually overlapping
+            // pads are 435 pairs, which has to collapse to the cap plus one
+            // summary line carrying the true total.
+            let dir = test_temp_dir();
+            let server = create_test_server(dir.path());
+
+            let mut lib = PcbLib::new();
+            let mut fp = Footprint::new("SHORTED");
+            for n in 0..30 {
+                fp.add_pad(Pad::smd(format!("{n}"), f64::from(n) * 0.01, 0.0, 1.0, 1.0));
+            }
+            lib.add(fp);
+            let path = dir.path().join("Shorted.PcbLib");
+            lib.save(&path).unwrap();
+
+            let parsed = parse_result_json(
+                &server.call_validate_library(&json!({ "filepath": path.to_string_lossy() })),
+            );
+            let overlap_issues: Vec<&str> = parsed["issues"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter_map(|i| i["issue"].as_str())
+                .filter(|s| s.contains("overlap"))
+                .collect();
+            assert_eq!(
+                overlap_issues.len(),
+                MAX_REPORTED_PAD_OVERLAPS + 1,
+                "expected {MAX_REPORTED_PAD_OVERLAPS} pairs plus a summary, got: {overlap_issues:?}"
+            );
+            assert!(
+                overlap_issues
+                    .last()
+                    .unwrap()
+                    .starts_with("435 overlapping pad pairs total"),
+                "summary must carry the true total: {overlap_issues:?}"
+            );
         }
 
         #[test]

@@ -208,8 +208,7 @@ fn silk_over_pad_warnings(fp: &crate::altium::pcblib::Footprint) -> Vec<Value> {
 /// Reporting is capped so a systematic error on a large BGA cannot bury the
 /// response; the cap message carries the true total.
 fn pad_copper_overlap_warnings(fp: &crate::altium::pcblib::Footprint) -> Vec<Value> {
-    /// Most pairs reported per footprint before collapsing to a summary.
-    const MAX_REPORTED: usize = 20;
+    use crate::altium::pcblib::MAX_REPORTED_PAD_OVERLAPS as MAX_REPORTED;
 
     let hits = fp.overlapping_pad_pairs();
     let mut warnings: Vec<Value> = hits
@@ -224,7 +223,7 @@ fn pad_copper_overlap_warnings(fp: &crate::altium::pcblib::Footprint) -> Vec<Val
                 "pads": [a.designator, b.designator],
                 "overlap_mm": [ox, oy],
                 "message": format!(
-                    "pads '{}' and '{}' overlap by {:.3} x {:.3} mm on {} —                      overlapping copper merges into one net",
+                    "pads '{}' and '{}' overlap by {:.3} x {:.3} mm on {} — overlapping copper merges into one net",
                     a.designator, b.designator, ox, oy, a.layer.as_str()
                 ),
             })

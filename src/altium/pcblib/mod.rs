@@ -136,6 +136,13 @@ pub struct Footprint {
     pub model_3d: Option<Model3D>,
 }
 
+/// Most overlapping pad pairs a tool reports before collapsing to a summary.
+///
+/// Overlaps are quadratic in pad count, so a systematic error on a large BGA
+/// would otherwise bury the response in tens of thousands of entries. Shared by
+/// `write_pcblib` and `validate_library` so both truncate alike.
+pub const MAX_REPORTED_PAD_OVERLAPS: usize = 20;
+
 impl Footprint {
     /// Finds pairs of pads whose copper overlaps on a shared layer.
     ///

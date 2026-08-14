@@ -1678,3 +1678,1004 @@ pub(super) fn parse_v7_layer(s: &str) -> Option<Layer> {
 ///
 /// The value is a tuple of (`stream_index`, `model_name`).
 pub type ModelIndex = HashMap<String, (usize, String)>;
+
+// =============================================================================
+// Tests
+// =============================================================================
+//
+// These drive the per-primitive parsers from hand-built byte buffers rather
+// than through the writer: the writer only ever emits the canonical, fully
+// populated record, so a round-trip cannot reach the short-buffer guards, the
+// "trailing field absent" fallbacks, or the unknown-discriminant arms. Those
+// are exactly the branches that decide whether a malformed or older file is
+// rejected loudly or loaded as a silently wrong primitive.
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Millimetre comparison tolerance — coordinates are quantised to 1 nm.
+    const EPS: f64 = 1e-9;
+
+    /// Wraps `payload` in the `[u32 len][payload]` framing every `PcbLib` record
+    /// block uses, so a test can hand-build a record without the writer.
+    fn block(payload: &[u8]) -> Vec<u8> {
+        let mut out = Vec::with_capacity(payload.len() + 4);
+        out.extend_from_slice(
+            &u32::try_from(payload.len())
+                .expect("fixture fits")
+                .to_le_bytes(),
+        );
+        out.extend_from_slice(payload);
+        out
+    }
+
+    /// Assembles a Pad record: the four leading blocks `parse_pad` reads before
+    /// the geometry block, the geometry block itself, and the optional Block 5
+    /// (the per-layer / size-shape block).
+    fn pad_record(geometry: &[u8], per_layer: Option<&[u8]>) -> Vec<u8> {
+        let mut data = Vec::new();
+        data.extend_from_slice(&block(&[0x01, b'1'])); // Block 0: designator "1"
+        data.extend_from_slice(&block(&[])); // Block 1
+        data.extend_from_slice(&block(&[0x04, b'|', b'&', b'|', b'0'])); // Block 2
+        data.extend_from_slice(&block(&[])); // Block 3
+        data.extend_from_slice(&block(geometry)); // Block 4: geometry
+        if let Some(per_layer) = per_layer {
+            data.extend_from_slice(&block(per_layer)); // Block 5
+        }
+        data
+    }
+
+    /// Writes the 13-byte `CommonPrimitiveData` header shared by every
+    /// primitive: layer @0, the unlocked flag word @1-2, and the `0xFFFF`
+    /// "no net / no polygon / no component" sentinels @3-8.
+    fn write_common_header(buf: &mut [u8], layer_id: u8) {
+        buf[0] = layer_id;
+        buf[1..3].copy_from_slice(&0x0004_u16.to_le_bytes()); // FlagUnlocked
+        buf[3..5].copy_from_slice(&0xFFFF_u16.to_le_bytes());
+        buf[5..7].copy_from_slice(&0xFFFF_u16.to_le_bytes());
+        buf[7..9].copy_from_slice(&0xFFFF_u16.to_le_bytes());
+    }
+
+    /// A well-formed pad geometry block padded to exactly `len` bytes, so a test
+    /// can choose which trailing fields exist and drive their fallbacks.
+    fn pad_geometry(len: usize) -> Vec<u8> {
+        assert!(len >= 52, "a parseable pad geometry block is >= 52 bytes");
+        let mut g = vec![0_u8; len];
+        write_common_header(&mut g, 33); // TopOverlay
+        g[13..17].copy_from_slice(&100_000_i32.to_le_bytes()); // x = 10 mil
+        g[17..21].copy_from_slice(&200_000_i32.to_le_bytes()); // y = 20 mil
+        g[21..25].copy_from_slice(&400_000_i32.to_le_bytes()); // width = 40 mil
+        g[25..29].copy_from_slice(&300_000_i32.to_le_bytes()); // height = 30 mil
+        g[49] = 2; // Rectangle
+        g
+    }
+
+    /// A well-formed via block padded to exactly `len` bytes.
+    fn via_block(len: usize) -> Vec<u8> {
+        assert!(len >= 31, "a parseable via block is >= 31 bytes");
+        let mut b = vec![0_u8; len];
+        write_common_header(&mut b, 74); // MultiLayer
+        b[13..17].copy_from_slice(&100_000_i32.to_le_bytes());
+        b[17..21].copy_from_slice(&200_000_i32.to_le_bytes());
+        b[21..25].copy_from_slice(&240_000_i32.to_le_bytes()); // 24 mil diameter
+        b[25..29].copy_from_slice(&120_000_i32.to_le_bytes()); // 12 mil hole
+        b[29] = 1; // from TopLayer
+        b[30] = 32; // to BottomLayer
+        b
+    }
+
+    /// A well-formed text geometry block padded to exactly `len` bytes.
+    fn text_geometry(len: usize) -> Vec<u8> {
+        assert!(len >= 25, "a parseable text geometry block is >= 25 bytes");
+        let mut b = vec![0_u8; len];
+        write_common_header(&mut b, 33); // TopOverlay
+        b[13..17].copy_from_slice(&100_000_i32.to_le_bytes());
+        b[17..21].copy_from_slice(&200_000_i32.to_le_bytes());
+        b[21..25].copy_from_slice(&300_000_i32.to_le_bytes()); // height
+        b
+    }
+
+    /// A region properties block: the 22-byte header (hole count @14, parameter
+    /// length @18), the parameter string, then each count-prefixed contour.
+    fn region_block(params: &str, hole_count: u16, contours: &[&[(i32, i32)]]) -> Vec<u8> {
+        let mut b = vec![0_u8; 22];
+        write_common_header(&mut b, 33);
+        b[14..16].copy_from_slice(&hole_count.to_le_bytes());
+        let params = params.as_bytes();
+        b[18..22].copy_from_slice(
+            &u32::try_from(params.len())
+                .expect("fixture fits")
+                .to_le_bytes(),
+        );
+        b.extend_from_slice(params);
+        for contour in contours {
+            b.extend_from_slice(
+                &u32::try_from(contour.len())
+                    .expect("fixture fits")
+                    .to_le_bytes(),
+            );
+            for &(x, y) in *contour {
+                b.extend_from_slice(&f64::from(x).to_le_bytes());
+                b.extend_from_slice(&f64::from(y).to_le_bytes());
+            }
+        }
+        b
+    }
+
+    // -------------------------------------------------------------------------
+    // Pad
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn pad_geometry_block_shorter_than_52_bytes_is_rejected() {
+        // A truncated pad record must fail loudly. Accepted silently, its size
+        // and hole bytes would read as zeros and the footprint would load with a
+        // 0 x 0 mm land — a pad that solders to nothing, with no error anywhere
+        // to explain why the assembled board is open-circuit.
+        let data = pad_record(&[0_u8; 51], None);
+        let err = parse_pad(&data, 0).unwrap_err();
+        assert!(
+            err.to_string().contains("Pad geometry block too short"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn pad_with_only_the_mandatory_52_bytes_uses_template_defaults() {
+        // Hand-built and older pads stop after the mandatory 52 bytes. Every
+        // trailing field must fall back to Altium's pad-template constant, not
+        // to zero: a 0 mm thermal-relief conductor width or a 0 mm plane
+        // clearance would make the pad flood-connect straight into an internal
+        // plane, and the board would be unsolderable (infinite heat sink).
+        let data = pad_record(&pad_geometry(52), None);
+        let (pad, next) = parse_pad(&data, 0).unwrap();
+
+        assert_eq!(next, data.len(), "the parser must consume the whole record");
+        assert_eq!(pad.designator, "1");
+        assert_eq!(pad.layer, Layer::TopOverlay);
+        assert!(pad.rotation.abs() < EPS);
+        assert_eq!(pad.stack_mode, PadStackMode::Simple);
+        assert!(pad.paste_mask_expansion.is_none());
+        assert!(pad.solder_mask_expansion.is_none());
+        assert_eq!(pad.paste_mask_expansion_mode, MaskExpansionMode::FromRule);
+        assert_eq!(pad.solder_mask_expansion_mode, MaskExpansionMode::FromRule);
+        assert_eq!(
+            pad.power_plane_connect_style,
+            PowerPlaneConnectStyle::Relief
+        );
+        assert!((pad.relief_conductor_width - 0.254).abs() < EPS);
+        assert_eq!(pad.relief_entries, 4);
+        assert!((pad.relief_air_gap - 0.254).abs() < EPS);
+        assert!((pad.power_plane_relief_expansion - 0.508).abs() < EPS);
+        assert!((pad.power_plane_clearance - 0.508).abs() < EPS);
+        assert!(pad.is_plated, "an absent @60 byte means plated, not bare");
+        assert!(pad.identity_guid.is_none());
+        assert!(pad.identity_guid_b.is_none());
+        assert!(pad.hole_positive_tolerance.is_none());
+        assert!(pad.hole_negative_tolerance.is_none());
+        assert_eq!(pad.hole_shape, HoleShape::Round);
+        assert!(pad.hole_slot_length.abs() < EPS);
+        assert!(pad.hole_rotation.abs() < EPS);
+    }
+
+    #[test]
+    fn pad_unknown_layer_shape_and_stack_ids_degrade_to_documented_defaults() {
+        // Altium keeps adding layer/shape ids, and a corrupt byte can hold any
+        // value. Each lookup must degrade to its documented default; a table
+        // index would panic instead, aborting the read of an entire library
+        // because of one exotic pad.
+        let mut g = pad_geometry(63);
+        g[0] = 0xFE; // no such layer id
+        g[49] = 99; // no such pad shape id
+        g[62] = 0x7F; // no such pad stack mode id
+        let data = pad_record(&g, None);
+        let (pad, _) = parse_pad(&data, 0).unwrap();
+
+        assert_eq!(pad.layer, Layer::MultiLayer);
+        assert_eq!(pad.shape, PadShape::RoundedRectangle);
+        assert_eq!(pad.stack_mode, PadStackMode::Simple);
+    }
+
+    #[test]
+    fn pad_block5_too_short_to_hold_a_corner_radius_reports_none() {
+        // A simple pad whose Block 5 exists but is shorter than both the legacy
+        // (289-byte) and canonical (596-byte) layouts carries no corner radius.
+        // Reading a byte anyway would invent a rounding percentage and turn a
+        // plain rectangular land into a rounded one on the next save.
+        let data = pad_record(&pad_geometry(52), Some(&[0_u8; 100]));
+        let (pad, _) = parse_pad(&data, 0).unwrap();
+
+        assert!(pad.corner_radius_percent.is_none());
+        assert_eq!(pad.hole_shape, HoleShape::Round);
+        assert!(pad.hole_slot_length.abs() < EPS);
+    }
+
+    #[test]
+    fn pad_legacy_block5_reads_the_corner_radius_at_offset_288() {
+        // Pre-596-byte libraries keep the corner radius at Block 5 offset 288.
+        // Losing that path squares off every rounded-rectangle land in an older
+        // library — the land grows into its neighbour's clearance and the board
+        // fails DRC only after the change has been saved.
+        let mut per_layer = vec![0_u8; 289];
+        per_layer[288] = 25;
+        let mut g = pad_geometry(52);
+        g[49] = 1; // shape id 1 is Round AND RoundedRectangle on disk
+        let data = pad_record(&g, Some(&per_layer));
+        let (pad, _) = parse_pad(&data, 0).unwrap();
+
+        assert_eq!(pad.corner_radius_percent, Some(25));
+        assert_eq!(
+            pad.shape,
+            PadShape::RoundedRectangle,
+            "a 1-99% corner radius disambiguates shape id 1"
+        );
+    }
+
+    #[test]
+    fn pad_size_shape_block_supplies_hole_shape_slot_length_and_corner_radius() {
+        // The 596-byte size/shape block is where a slotted hole lives (@262
+        // shape, @263 length, @267 rotation) and where the modern corner radius
+        // sits (@564). Dropping these turns a milled slot back into a round
+        // drill: the fab drills a hole the connector's pin physically cannot
+        // enter, and the error is only discovered at assembly.
+        let mut per_layer = vec![0_u8; 596];
+        per_layer[262] = 2; // Slot
+        per_layer[263..267].copy_from_slice(&30_000_i32.to_le_bytes());
+        per_layer[267..275].copy_from_slice(&45.0_f64.to_le_bytes());
+        per_layer[564] = 40;
+        let mut g = pad_geometry(52);
+        g[49] = 1;
+        let data = pad_record(&g, Some(&per_layer));
+        let (pad, _) = parse_pad(&data, 0).unwrap();
+
+        assert_eq!(pad.hole_shape, HoleShape::Slot);
+        assert!((pad.hole_slot_length - to_mm(30_000)).abs() < EPS);
+        assert!((pad.hole_rotation - 45.0).abs() < EPS);
+        assert_eq!(pad.corner_radius_percent, Some(40));
+    }
+
+    #[test]
+    fn pad_unknown_hole_shape_id_falls_back_to_round() {
+        // @262 is a raw byte from the file. An unrecognised value must read as a
+        // round hole rather than panicking or being carried through as a slot of
+        // unknown length.
+        let mut per_layer = vec![0_u8; 596];
+        per_layer[262] = 0xAA;
+        let data = pad_record(&pad_geometry(52), Some(&per_layer));
+        let (pad, _) = parse_pad(&data, 0).unwrap();
+
+        assert_eq!(pad.hole_shape, HoleShape::Round);
+    }
+
+    #[test]
+    fn full_stack_pad_reinterprets_round_plus_corner_radius_as_rounded_rectangle() {
+        // Shape id 1 means BOTH Round and RoundedRectangle on disk; the
+        // per-layer corner radius is the only discriminator. Regressing this
+        // rewrites every rounded per-layer land as a full circle, shrinking the
+        // land area below the IPC pattern and starving the joint of solder.
+        let mut per_layer = vec![0_u8; 576];
+        for i in 0..32_usize {
+            per_layer[i * 8..i * 8 + 4].copy_from_slice(&500_000_i32.to_le_bytes());
+            per_layer[i * 8 + 4..i * 8 + 8].copy_from_slice(&300_000_i32.to_le_bytes());
+            per_layer[256 + i] = 1; // Round on disk
+            per_layer[320 + i * 8..320 + i * 8 + 4].copy_from_slice(&1_000_i32.to_le_bytes());
+            per_layer[320 + i * 8 + 4..320 + i * 8 + 8].copy_from_slice(&2_000_i32.to_le_bytes());
+        }
+        per_layer[288] = 50; // layer 0: rounded 50%
+        per_layer[289] = 0; // layer 1: a true circle
+        per_layer[290] = 200; // layer 2: out of range, must clamp
+
+        let mut g = pad_geometry(63);
+        g[62] = 2; // FullStack
+        let data = pad_record(&g, Some(&per_layer));
+        let (pad, _) = parse_pad(&data, 0).unwrap();
+
+        assert_eq!(pad.stack_mode, PadStackMode::FullStack);
+        let shapes = pad.per_layer_shapes.expect("full stack carries shapes");
+        assert_eq!(shapes[0], PadShape::RoundedRectangle);
+        assert_eq!(shapes[1], PadShape::Round);
+        assert_eq!(
+            shapes[2],
+            PadShape::Round,
+            "a radius clamped to 100% is a full round, not a rounded rectangle"
+        );
+        let radii = pad
+            .per_layer_corner_radii
+            .expect("full stack carries radii");
+        assert_eq!(
+            radii[2], 100,
+            "an out-of-range radius clamps to 100, not 200"
+        );
+        assert_eq!(pad.corner_radius_percent, Some(50));
+
+        let sizes = pad.per_layer_sizes.expect("full stack carries sizes");
+        assert_eq!(sizes.len(), 32);
+        assert!((sizes[0].0 - to_mm(500_000)).abs() < EPS);
+        assert!((sizes[31].1 - to_mm(300_000)).abs() < EPS);
+
+        let offsets = pad
+            .per_layer_offsets
+            .expect("a 576-byte block carries offsets");
+        assert_eq!(offsets.len(), 32);
+        assert!((offsets[3].1 - to_mm(2_000)).abs() < EPS);
+    }
+
+    #[test]
+    fn per_layer_data_absent_or_short_reports_no_layers_at_all() {
+        // A full-stack pad whose Block 5 is missing or truncated must report no
+        // per-layer geometry rather than a half-decoded stack. A partly-read
+        // table would silently resize the inner-layer lands, which nothing in
+        // the 2D footprint view would reveal.
+        let (radius, sizes, shapes, radii, offsets) = parse_per_layer_data(None);
+        assert!(radius.is_none() && sizes.is_none());
+        assert!(shapes.is_none() && radii.is_none() && offsets.is_none());
+
+        // One byte below the 320-byte minimum is still "no data", not a partial
+        // parse of the 39 size entries that happen to fit.
+        let short = vec![0_u8; 319];
+        let (radius, sizes, shapes, radii, offsets) = parse_per_layer_data(Some(&short));
+        assert!(radius.is_none() && sizes.is_none());
+        assert!(shapes.is_none() && radii.is_none() && offsets.is_none());
+    }
+
+    #[test]
+    fn per_layer_data_without_the_offset_table_still_decodes_sizes_and_shapes() {
+        // The 32 x/y offset entries at @320 are optional. A 320-byte block must
+        // yield sizes/shapes with `offsets = None` — inventing zero offsets
+        // would re-centre every per-layer land on the next write.
+        let mut data = vec![0_u8; 320];
+        data[0..4].copy_from_slice(&500_000_i32.to_le_bytes());
+        data[4..8].copy_from_slice(&300_000_i32.to_le_bytes());
+        data[256] = 2; // Rectangle
+        let (radius, sizes, shapes, radii, offsets) = parse_per_layer_data(Some(&data));
+
+        assert!(radius.is_none(), "a zero corner radius is not a rounding");
+        assert_eq!(sizes.expect("sizes").len(), 32);
+        assert_eq!(shapes.expect("shapes")[0], PadShape::Rectangle);
+        assert_eq!(radii.expect("radii").len(), 32);
+        assert!(offsets.is_none(), "no offset table below 576 bytes");
+    }
+
+    // -------------------------------------------------------------------------
+    // Via
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn via_block_shorter_than_31_bytes_is_rejected() {
+        // Below 31 bytes the from/to layer bytes are missing. Accepted silently,
+        // the via would span "layer 0 to layer 0" — a via that stitches nothing,
+        // leaving the net it was placed for open on the finished board.
+        let data = block(&[0_u8; 30]);
+        let err = parse_via(&data, 0).unwrap_err();
+        assert!(
+            err.to_string().contains("Via block too short"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn via_with_only_the_mandatory_31_bytes_uses_template_defaults() {
+        // A via record that stops after the layer span must fall back to the
+        // Altium template's thermal/plane constants. Zeros here mean a 0 mm
+        // relief gap and 0 mm plane clearance: the via would short to every
+        // internal plane it passes through.
+        let data = block(&via_block(31));
+        let (via, next) = parse_via(&data, 0).unwrap();
+
+        assert_eq!(next, data.len());
+        assert_eq!(via.from_layer, Layer::TopLayer);
+        assert_eq!(via.to_layer, Layer::BottomLayer);
+        assert!((via.diameter - to_mm(240_000)).abs() < EPS);
+        assert!((via.hole_size - to_mm(120_000)).abs() < EPS);
+        assert_eq!(
+            via.power_plane_connect_style,
+            PowerPlaneConnectStyle::Relief
+        );
+        assert!((via.thermal_relief_gap - 0.254).abs() < EPS);
+        assert_eq!(via.thermal_relief_conductors, 4);
+        assert!((via.thermal_relief_width - 0.254).abs() < EPS);
+        assert!((via.power_plane_relief_expansion - 0.508).abs() < EPS);
+        assert!((via.power_plane_clearance - 0.508).abs() < EPS);
+        assert!(via.paste_mask_expansion.abs() < EPS);
+        assert!(via.solder_mask_expansion.abs() < EPS);
+        assert_eq!(via.solder_mask_expansion_mode, MaskExpansionMode::FromRule);
+        assert!(via.solder_mask_expansion_back.is_none());
+        assert_eq!(via.diameter_stack_mode, ViaStackMode::Simple);
+        assert!(via.per_layer_diameters.is_none());
+        assert!(via.hole_positive_tolerance.is_none());
+        assert!(via.hole_negative_tolerance.is_none());
+    }
+
+    #[test]
+    fn via_stack_modes_decode_and_carry_their_per_layer_diameters() {
+        // A TopMiddleBottom / FullStack via takes its inner-layer pads from the
+        // 32-entry table at @75. Collapsing to Simple flattens every inner
+        // annular ring to the outer diameter, so drill/annular-ring DRC passes
+        // on a board that is actually out of spec at the fab.
+        for (id, mode) in [
+            (1_u8, ViaStackMode::TopMiddleBottom),
+            (2_u8, ViaStackMode::FullStack),
+        ] {
+            let mut b = via_block(203);
+            b[74] = id;
+            for i in 0..32_usize {
+                let value = 300_000 + i32::try_from(i).expect("index fits");
+                b[75 + i * 4..79 + i * 4].copy_from_slice(&value.to_le_bytes());
+            }
+            let (via, _) = parse_via(&block(&b), 0).unwrap();
+
+            assert_eq!(via.diameter_stack_mode, mode);
+            let diameters = via.per_layer_diameters.expect("non-simple stack");
+            assert_eq!(diameters.len(), 32);
+            assert!((diameters[0] - to_mm(300_000)).abs() < EPS);
+            assert!((diameters[31] - to_mm(300_031)).abs() < EPS);
+        }
+
+        // An unrecognised stack id degrades to Simple instead of indexing off
+        // the end of the mode table.
+        let mut b = via_block(203);
+        b[74] = 0x5A;
+        let (via, _) = parse_via(&block(&b), 0).unwrap();
+        assert_eq!(via.diameter_stack_mode, ViaStackMode::Simple);
+        assert!(via.per_layer_diameters.is_none());
+    }
+
+    #[test]
+    fn non_simple_via_without_the_per_layer_table_reports_no_diameters() {
+        // The stack-mode byte and the 128-byte diameter table can disagree in a
+        // truncated file. Without the table there is nothing to report — reading
+        // past the block would hand the caller neighbouring record bytes as
+        // annular diameters.
+        let mut b = via_block(80); // has @74 but not the full 75..203 table
+        b[74] = 2; // FullStack
+        let (via, _) = parse_via(&block(&b), 0).unwrap();
+
+        assert_eq!(via.diameter_stack_mode, ViaStackMode::FullStack);
+        assert!(via.per_layer_diameters.is_none());
+    }
+
+    // -------------------------------------------------------------------------
+    // Track / Arc / Fill
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn track_block_shorter_than_33_bytes_is_rejected() {
+        // Below 33 bytes the width field is missing. A silently-accepted track
+        // would be 0 mm wide: invisible in the library editor and absent from
+        // the Gerber output, even though the footprint "loaded fine".
+        let data = block(&[0_u8; 32]);
+        let err = parse_track(&data, 0).unwrap_err();
+        assert!(
+            err.to_string().contains("Track block too short"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn track_without_its_extended_tail_reports_no_mask_or_keepout_overrides() {
+        // A 33-byte track has no solder-mask expansion (@35) or keepout byte
+        // (@45). Surfacing zeros as real values would write an explicit 0 mm
+        // mask expansion back, overriding the design rule and tenting the
+        // track's neighbours on the next save.
+        let mut b = vec![0_u8; 33];
+        write_common_header(&mut b, 33);
+        b[13..17].copy_from_slice(&100_000_i32.to_le_bytes());
+        b[17..21].copy_from_slice(&200_000_i32.to_le_bytes());
+        b[21..25].copy_from_slice(&300_000_i32.to_le_bytes());
+        b[25..29].copy_from_slice(&400_000_i32.to_le_bytes());
+        b[29..33].copy_from_slice(&50_000_i32.to_le_bytes());
+        let (track, next) = parse_track(&block(&b), 0).unwrap();
+
+        assert_eq!(next, block(&b).len());
+        assert!((track.x1 - to_mm(100_000)).abs() < EPS);
+        assert!((track.width - to_mm(50_000)).abs() < EPS);
+        assert!(track.solder_mask_expansion.is_none());
+        assert!(track.keepout_restrictions.is_none());
+        assert_eq!(track.layer, Layer::TopOverlay);
+    }
+
+    #[test]
+    fn arc_block_shorter_than_45_bytes_is_rejected() {
+        // Below 45 bytes the width at @41 is missing, so a silently-accepted arc
+        // draws with zero width — a courtyard or polarity arc that disappears
+        // from the silkscreen without any load error.
+        let data = block(&[0_u8; 44]);
+        let err = parse_arc(&data, 0).unwrap_err();
+        assert!(
+            err.to_string().contains("Arc block too short"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn arc_without_its_extended_tail_reports_no_mask_or_keepout_overrides() {
+        // Same contract as Track: absent @47 / @56 must stay `None` so a
+        // from-scratch arc round-trips without gaining an explicit 0 mm mask
+        // expansion that overrides the board's design rule.
+        let mut b = vec![0_u8; 45];
+        write_common_header(&mut b, 33);
+        b[13..17].copy_from_slice(&100_000_i32.to_le_bytes());
+        b[17..21].copy_from_slice(&200_000_i32.to_le_bytes());
+        b[21..25].copy_from_slice(&250_000_i32.to_le_bytes());
+        b[25..33].copy_from_slice(&30.0_f64.to_le_bytes());
+        b[33..41].copy_from_slice(&300.0_f64.to_le_bytes());
+        b[41..45].copy_from_slice(&50_000_i32.to_le_bytes());
+        let (arc, _) = parse_arc(&block(&b), 0).unwrap();
+
+        assert!((arc.radius - to_mm(250_000)).abs() < EPS);
+        assert!((arc.start_angle - 30.0).abs() < EPS);
+        assert!((arc.end_angle - 300.0).abs() < EPS);
+        assert!(arc.solder_mask_expansion.is_none());
+        assert!(arc.keepout_restrictions.is_none());
+    }
+
+    #[test]
+    fn fill_block_shorter_than_37_bytes_is_rejected() {
+        // Below 37 bytes the rotation double at @29 is missing. A silently
+        // accepted fill would be un-rotated: a rotated copper or keepout
+        // rectangle would land axis-aligned, covering a different set of pads
+        // than the designer drew.
+        let data = block(&[0_u8; 36]);
+        let err = parse_fill(&data, 0).unwrap_err();
+        assert!(
+            err.to_string().contains("Fill block too short"),
+            "unexpected error: {err}"
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // Text
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn text_geometry_block_shorter_than_25_bytes_is_rejected() {
+        // Below 25 bytes the text height at @21 is missing. A zero-height
+        // silkscreen string is invisible in the editor and in the fab output,
+        // so the part would ship with no designator or polarity marking.
+        let data = block(&[0_u8; 24]);
+        let err = parse_text(&data, 0, None).unwrap_err();
+        assert!(
+            err.to_string().contains("Text geometry block too short"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn text_with_only_the_mandatory_25_bytes_uses_template_defaults() {
+        // A legacy/truncated text record must land on the template defaults:
+        // stroke font, 0 degrees, Arial, bottom-left anchor. Guessing TrueType
+        // or a non-zero rotation here would rotate and re-typeset every
+        // silkscreen designator in an old library the moment it is re-saved.
+        let data = block(&text_geometry(25));
+        let (text, next) = parse_text(&data, 0, None).unwrap();
+
+        assert_eq!(next, data.len());
+        assert_eq!(text.kind, TextKind::Stroke);
+        assert!(text.rotation.abs() < EPS);
+        assert!(text.stroke_font.is_none());
+        assert!(text.stroke_width.is_none());
+        assert_eq!(text.font_name, "Arial");
+        assert_eq!(text.justification, TextJustification::BottomLeft);
+        assert!(!text.mirror);
+        assert!(!text.bold);
+        assert!(!text.italic);
+        assert!(!text.is_comment);
+        assert!(!text.is_designator);
+        assert!(!text.is_inverted);
+        assert!(text.inverted_border.is_none());
+        assert!(!text.use_inverted_rectangle);
+        assert!(text.inverted_rect_width.is_none());
+        assert!(text.inverted_rect_height.is_none());
+        assert!(
+            text.text.is_empty(),
+            "no content block and no inline marker means empty text"
+        );
+    }
+
+    #[test]
+    fn text_kind_at_offset_160_governs_whether_a_stroke_font_is_surfaced() {
+        // @160 is the authoritative text kind and @25 the stroke-font index. A
+        // non-default stroke font must survive the read; losing it silently
+        // swaps the silkscreen typeface, and the different glyph widths push
+        // the string outside the courtyard it was fitted to.
+        let mut b = text_geometry(161);
+        b[25..27].copy_from_slice(&3_u16.to_le_bytes()); // Serif
+        let (text, _) = parse_text(&block(&b), 0, None).unwrap();
+        assert_eq!(text.kind, TextKind::Stroke);
+        assert_eq!(text.stroke_font, Some(StrokeFont::Serif));
+
+        // The default stroke index (1) stays implicit so the record round-trips.
+        let mut b = text_geometry(161);
+        b[25..27].copy_from_slice(&1_u16.to_le_bytes());
+        let (text, _) = parse_text(&block(&b), 0, None).unwrap();
+        assert!(text.stroke_font.is_none());
+
+        // A TrueType text has no stroke font at all, whatever @25 holds.
+        let mut b = text_geometry(161);
+        b[25..27].copy_from_slice(&3_u16.to_le_bytes());
+        b[160] = 1;
+        let (text, _) = parse_text(&block(&b), 0, None).unwrap();
+        assert_eq!(text.kind, TextKind::TrueType);
+        assert!(text.stroke_font.is_none());
+
+        // BarCode is the third documented kind.
+        let mut b = text_geometry(161);
+        b[160] = 2;
+        let (text, _) = parse_text(&block(&b), 0, None).unwrap();
+        assert_eq!(text.kind, TextKind::BarCode);
+
+        // An unrecognised kind byte degrades to Stroke rather than panicking.
+        let mut b = text_geometry(161);
+        b[160] = 0x5A;
+        let (text, _) = parse_text(&block(&b), 0, None).unwrap();
+        assert_eq!(text.kind, TextKind::Stroke);
+    }
+
+    #[test]
+    fn text_font_name_field_decodes_utf16_and_falls_back_to_arial() {
+        // The @46 font-name field is 64 bytes of little-endian UTF-16. An
+        // all-zero or absent field means "template default": decoding it as an
+        // empty name writes an empty font back, and Altium then renders the
+        // string in a substitute face at a different size.
+        let mut b = text_geometry(161);
+        for (i, unit) in "Times".encode_utf16().enumerate() {
+            b[46 + i * 2..48 + i * 2].copy_from_slice(&unit.to_le_bytes());
+        }
+        let (text, _) = parse_text(&block(&b), 0, None).unwrap();
+        assert_eq!(text.font_name, "Times");
+
+        let (text, _) = parse_text(&block(&text_geometry(161)), 0, None).unwrap();
+        assert_eq!(text.font_name, "Arial", "an all-zero field is the default");
+
+        assert_eq!(
+            read_text_font_name(&text_geometry(46)),
+            "Arial",
+            "a block that ends before @110 has no font field at all"
+        );
+    }
+
+    #[test]
+    fn justification_byte_maps_onto_the_shared_three_by_three_anchor_grid() {
+        // Altium's column-major anchor byte decides where the text box hangs off
+        // its (x, y). Mis-mapping one value shifts a designator by up to a full
+        // text box — silkscreen printed straight over a pad, which the fab will
+        // happily manufacture.
+        for (id, expected) in [
+            (1_u8, TextJustification::TopLeft),
+            (2, TextJustification::MiddleLeft),
+            (3, TextJustification::BottomLeft),
+            (4, TextJustification::TopCenter),
+            (5, TextJustification::MiddleCenter),
+            (6, TextJustification::BottomCenter),
+            (7, TextJustification::TopRight),
+            (8, TextJustification::MiddleRight),
+            (9, TextJustification::BottomRight),
+            (0, TextJustification::BottomLeft), // manual: no member in the grid
+            (0xFF, TextJustification::BottomLeft), // corrupt byte
+        ] {
+            assert_eq!(pcb_justification_from_id(id), expected, "anchor id {id}");
+        }
+    }
+
+    #[test]
+    fn empty_text_content_block_falls_back_to_the_inline_designator_marker() {
+        // Designator and comment texts carry their content as an inline
+        // ".Designator" / ".Comment" marker inside the geometry block, with an
+        // EMPTY content block. If the empty block won, every footprint would
+        // lose its designator text and the board would assemble unlabelled.
+        let mut b = text_geometry(200);
+        b[170..181].copy_from_slice(b".Designator");
+        let mut data = block(&b);
+        data.extend_from_slice(&block(&[0x00])); // zero-length Pascal string
+        let (text, next) = parse_text(&data, 0, None).unwrap();
+        assert_eq!(text.text, ".Designator");
+        assert_eq!(
+            next,
+            data.len(),
+            "the empty content block is still consumed"
+        );
+
+        let mut b = text_geometry(200);
+        b[170..178].copy_from_slice(b".Comment");
+        let (text, _) = parse_text(&block(&b), 0, None).unwrap();
+        assert_eq!(text.text, ".Comment");
+    }
+
+    #[test]
+    fn text_content_resolves_a_wide_strings_index_from_geometry_offset_115() {
+        // Altium stores long/unicode text out of line in /WideStrings, leaving
+        // only a u16 index at @115. Missing it leaves the primitive blank, so
+        // the part marking silently vanishes from the silkscreen.
+        let mut ws = WideStrings::new();
+        ws.insert(7, "PLACE COMPONENT HERE".to_string());
+
+        let mut b = text_geometry(200);
+        b[115..117].copy_from_slice(&7_u16.to_le_bytes());
+        let (text, _) = parse_text(&block(&b), 0, Some(&ws)).unwrap();
+        assert_eq!(text.text, "PLACE COMPONENT HERE");
+
+        // An index with no matching entry yields empty text, not a panic.
+        let mut b = text_geometry(200);
+        b[115..117].copy_from_slice(&99_u16.to_le_bytes());
+        let (text, _) = parse_text(&block(&b), 0, Some(&ws)).unwrap();
+        assert!(text.text.is_empty());
+
+        // A block too short to hold @115 is handled by the bounds-checked read.
+        assert!(extract_text_from_block(&text_geometry(116), Some(&ws)).is_empty());
+    }
+
+    #[test]
+    fn find_ascii_in_block_never_reads_past_a_block_shorter_than_the_pattern() {
+        // The inline-marker scan runs over every text record, including
+        // truncated ones. A missing length guard here is an out-of-bounds slice
+        // — an outright panic while opening a library.
+        assert_eq!(find_ascii_in_block(b"xx.Comment", ".Comment"), Some(2));
+        assert_eq!(find_ascii_in_block(b".Comment", ".Comment"), Some(0));
+        assert_eq!(find_ascii_in_block(b"short", ".Designator"), None);
+        assert_eq!(find_ascii_in_block(&[], ".Comment"), None);
+    }
+
+    #[test]
+    fn special_dot_prefixed_text_is_never_treated_as_a_wide_strings_index() {
+        // ".Designator" / ".Comment" are field references, not literal strings;
+        // resolving them through /WideStrings would replace the live designator
+        // binding with a frozen literal, so the silkscreen would stop tracking
+        // the component's real designator.
+        let mut ws = WideStrings::new();
+        ws.insert(0, "unrelated".to_string());
+        assert_eq!(resolve_text_content(".Designator", None), ".Designator");
+        assert_eq!(resolve_text_content(".Comment", Some(&ws)), ".Comment");
+        assert_eq!(resolve_text_content("R1", Some(&ws)), "R1");
+        assert_eq!(
+            resolve_text_content("42", Some(&ws)),
+            "42",
+            "a numeric index with no entry is returned verbatim"
+        );
+        assert_eq!(
+            resolve_text_content("1", None),
+            "1",
+            "without a WideStrings table the content is always literal"
+        );
+    }
+
+    #[test]
+    fn numeric_text_content_is_swallowed_by_the_wide_strings_lookup() {
+        // CHARACTERISATION OF A KNOWN DEFECT — reported, deliberately NOT fixed
+        // in this tests-only change. `resolve_text_content` treats ANY all-digit
+        // content block as a /WideStrings index. Numeric silkscreen text is
+        // routine (pin-1 markers "1"/"2", value legends), so reading a library
+        // that merely happens to carry a /WideStrings stream rewrites that text
+        // to an unrelated string — and the next save persists the corruption.
+        // This test pins the current behaviour so the fix shows up as a diff.
+        let mut ws = WideStrings::new();
+        ws.insert(1, "TOTALLY UNRELATED".to_string());
+        assert_eq!(resolve_text_content("1", Some(&ws)), "TOTALLY UNRELATED");
+    }
+
+    // -------------------------------------------------------------------------
+    // Region
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn region_with_an_unreadable_outer_block_is_rejected() {
+        // The block length prefix comes straight off disk. One that runs past
+        // the end of the stream must fail before any field is decoded, rather
+        // than yielding a region built from whatever bytes happen to follow.
+        let data = 1000_u32.to_le_bytes();
+        let err = parse_region(&data, 0).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("failed to read Region properties block"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn region_properties_block_shorter_than_22_bytes_is_rejected() {
+        // Below 22 bytes there is no parameter-length field, so the vertex
+        // outline cannot be located at all. Accepting it would produce a region
+        // with no vertices — a copper pour that silently disappears from the
+        // footprint, leaving the net it fed unconnected.
+        let data = block(&[0_u8; 21]);
+        let err = parse_region(&data, 0).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Region properties block too short"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn region_parameter_length_past_the_end_of_the_block_is_rejected() {
+        // The declared parameter length is file-controlled. Trusting one that
+        // overruns the block would read the vertex outline from unrelated
+        // bytes: a copper region drawn somewhere else entirely, shorting nets
+        // on the manufactured board.
+        let mut b = region_block("", 0, &[&[]]);
+        b[18..22].copy_from_slice(&5000_u32.to_le_bytes());
+        let err = parse_region(&block(&b), 0).unwrap_err();
+        assert!(
+            err.to_string().contains("Region parameter block truncated"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn region_without_a_vertex_count_is_rejected() {
+        // A block that ends exactly at the parameter string has no outline. The
+        // guard must fire here rather than letting the count read fall through
+        // to the next primitive's bytes.
+        let b = region_block("KIND=0", 0, &[]);
+        let err = parse_region(&block(&b), 0).unwrap_err();
+        assert!(
+            err.to_string().contains("too short for vertex count"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn region_whose_declared_vertex_count_overruns_the_block_is_rejected() {
+        // A vertex count larger than the data behind it is the classic
+        // corrupt-record shape. It must be a clean parse error — never a
+        // partially-read polygon (a mis-shaped pour) and never an oversized
+        // allocation driven by an attacker-chosen count.
+        let mut b = region_block("", 0, &[]);
+        b.extend_from_slice(&5_u32.to_le_bytes()); // claims 5, supplies none
+        let err = parse_region(&block(&b), 0).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Region block too short for Region vertex with 5 vertices"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn region_hole_contour_running_past_the_end_of_the_block_is_rejected() {
+        // @14 declares how many hole contours follow the outline. A count that
+        // outruns the data must error instead of reading the NEXT record's
+        // bytes as a cutout — a phantom hole punched through a copper pour,
+        // which manufactures as a real void in the plane.
+        let b = region_block("", 1, &[&[]]); // one hole promised, none present
+        let err = parse_region(&block(&b), 0).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("failed to read Region hole 0 count"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn region_decodes_its_outline_holes_and_typed_parameters() {
+        // The happy path for a region WITH a cutout, plus the typed parameter
+        // keys. A dropped hole contour fills in a deliberate void (shorting to
+        // whatever the void was clearing); a dropped KIND turns a board cutout
+        // into a copper pour.
+        let outline: &[(i32, i32)] = &[(0, 0), (100_000, 0), (100_000, 100_000)];
+        let hole: &[(i32, i32)] = &[(10_000, 10_000), (20_000, 10_000), (20_000, 20_000)];
+        let b = region_block(
+            "KIND=1|NAME=cutout|SUBPOLYINDEX=2|UNIONINDEX=3|ISSHAPEBASED=TRUE|NET=5|KEEPOUT=TRUE",
+            1,
+            &[outline, hole],
+        );
+        let (region, next) = parse_region(&block(&b), 0).unwrap();
+
+        assert_eq!(next, block(&b).len());
+        assert_eq!(region.kind, RegionKind::Cutout);
+        assert_eq!(region.name, "cutout");
+        assert_eq!(region.sub_poly_index, 2);
+        assert_eq!(region.union_index, 3);
+        assert!(region.is_shape_based);
+        assert_eq!(
+            region.net_index, 5,
+            "the NET parameter overrides the header word"
+        );
+        assert_eq!(region.vertices.len(), 3);
+        assert_eq!(region.holes.len(), 1);
+        assert_eq!(region.holes[0].len(), 3);
+        assert!((region.vertices[1].x - to_mm(100_000)).abs() < EPS);
+        assert!(
+            region
+                .additional_parameters
+                .iter()
+                .any(|(k, v)| k == "KEEPOUT" && v == "TRUE"),
+            "unmodelled keys must survive a read-modify-write"
+        );
+    }
+
+    #[test]
+    fn region_with_an_unknown_kind_preserves_the_raw_value() {
+        // Altium may write a KIND we do not model. Collapsing it to Copper would
+        // silently convert, say, a cavity definition into a plated pour on the
+        // next save.
+        let b = region_block("KIND=7", 0, &[&[]]);
+        let (region, _) = parse_region(&block(&b), 0).unwrap();
+        assert_eq!(region.kind, RegionKind::Other(7));
+    }
+
+    // -------------------------------------------------------------------------
+    // ComponentBody
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn component_body_with_an_unreadable_block_is_rejected() {
+        // Same contract as Region: a length prefix past the end of the stream
+        // must fail immediately, not produce a body whose 3D model reference is
+        // assembled from unrelated bytes.
+        let data = 1000_u32.to_le_bytes();
+        let err = parse_component_body(&data, 0).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("failed to read ComponentBody block"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn component_body_outline_stops_cleanly_on_a_truncated_block() {
+        // The 2D outline is `[u32 count][count x (f64, f64)]` behind the
+        // parameter block. A truncated tail must yield only the vertices
+        // actually present; reading past the record would draw this body's
+        // outline over a neighbouring primitive's bytes.
+        assert!(
+            parse_component_body_outline(&[0_u8; 21]).is_empty(),
+            "no parameter-length field at all"
+        );
+
+        let mut b = vec![0_u8; 22];
+        b[18..22].copy_from_slice(&0_u32.to_le_bytes());
+        assert!(
+            parse_component_body_outline(&b).is_empty(),
+            "parameter length present but no vertex count behind it"
+        );
+
+        let mut b = vec![0_u8; 22];
+        b[18..22].copy_from_slice(&0_u32.to_le_bytes());
+        b.extend_from_slice(&2_u32.to_le_bytes()); // claims two vertices
+        b.extend_from_slice(&100_000.0_f64.to_le_bytes());
+        b.extend_from_slice(&200_000.0_f64.to_le_bytes());
+        b.extend_from_slice(&300_000.0_f64.to_le_bytes()); // x only; y is missing
+        let outline = parse_component_body_outline(&b);
+        assert_eq!(outline.len(), 1, "the half-present vertex is dropped");
+        let expected_x = 100_000.0 * INTERNAL_UNITS_TO_MM;
+        let expected_y = 200_000.0 * INTERNAL_UNITS_TO_MM;
+        assert!((outline[0].0 - expected_x).abs() < EPS);
+        assert!((outline[0].1 - expected_y).abs() < EPS);
+    }
+
+    #[test]
+    fn v7_layer_token_covers_the_whole_mechanical_1_to_32_range() {
+        // This is the fallback layer source for a ComponentBody whose header
+        // byte is absent. It once handled only MECHANICAL2-7 and collapsed every
+        // other mechanical layer onto Top3DBody — a 3D body silently jumping
+        // layers, which breaks the enclosure clearance checks that layer feeds.
+        assert_eq!(parse_v7_layer("MECHANICAL1"), Some(Layer::Mechanical1));
+        assert_eq!(parse_v7_layer("MECHANICAL6"), Some(Layer::Top3DBody));
+        assert_eq!(parse_v7_layer("MECHANICAL13"), Some(Layer::Mechanical13));
+        assert_eq!(parse_v7_layer("MECHANICAL16"), Some(Layer::Mechanical16));
+        assert_eq!(parse_v7_layer("MECHANICAL17"), Some(Layer::Mechanical17));
+        assert_eq!(parse_v7_layer("MECHANICAL32"), Some(Layer::Mechanical32));
+
+        // Out-of-range or non-mechanical tokens yield None so the caller keeps
+        // its own default rather than landing on an arbitrary layer.
+        assert_eq!(parse_v7_layer("MECHANICAL0"), None);
+        assert_eq!(parse_v7_layer("MECHANICAL33"), None);
+        assert_eq!(parse_v7_layer("TOPOVERLAY"), None);
+        assert_eq!(parse_v7_layer("MECHANICALX"), None);
+        assert_eq!(parse_v7_layer("MECHANICAL999"), None, "999 exceeds a u8");
+    }
+
+    #[test]
+    fn mil_values_parse_with_and_without_their_suffix() {
+        // Body heights and arc resolutions are stored as mil strings. A failed
+        // parse must read as 0 mm rather than propagating a NaN into the
+        // component's 3D extrusion range.
+        let expected = 15.748 * MM_PER_MIL;
+        assert!((parse_mil_value(Some("15.748mil")) - expected).abs() < 1e-9);
+        assert!(parse_mil_value(Some("0mil")).abs() < EPS);
+        let expected = 100.0 * MM_PER_MIL;
+        assert!((parse_mil_value(Some(" 100 mil")) - expected).abs() < 1e-9);
+        assert!(parse_mil_value(None).abs() < EPS);
+        assert!(parse_mil_value(Some("not-a-number")).abs() < EPS);
+    }
+}

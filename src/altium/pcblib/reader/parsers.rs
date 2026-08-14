@@ -913,19 +913,21 @@ pub(super) fn parse_text(
         current = next;
         // Text block is a length-prefixed string
         let content = read_string_from_block(text_block);
-        if content.is_empty() {
-            // Only an empty block 1 means the text lives elsewhere: either a
-            // special `.Designator`/`.Comment` marker or the /WideStrings entry
-            // named by the index at geometry offset 115.
-            extract_text_from_block(geometry_block, wide_strings)
-        } else {
-            // A non-empty block 1 IS the text, verbatim. It used to be treated
-            // as a possible /WideStrings index whenever it parsed as a number,
-            // which silently replaced ordinary numeric silkscreen — pin-1
-            // markers, value legends — with an unrelated entry. The index is a
-            // real field at offset 115, not something inferred from content;
-            // see docs/PCBLIB_FORMAT.md § /{component}/WideStrings.
+
+        // /WideStrings takes precedence when this primitive has an entry: block 1
+        // is a Pascal SHORT string, so Altium truncates it at 255 bytes and the
+        // full text lives out of line.
+        //
+        // The entry is named by the index at geometry offset 115 — never
+        // inferred from the content, which would make numeric text ambiguous
+        // with an index. This call also resolves the special
+        // `.Designator`/`.Comment` markers held in the geometry block.
+        // See docs/PCBLIB_FORMAT.md § /{component}/WideStrings.
+        let out_of_line = extract_text_from_block(geometry_block, wide_strings);
+        if out_of_line.is_empty() {
             content
+        } else {
+            out_of_line
         }
     } else {
         // Fallback: check geometry block
@@ -2411,14 +2413,11 @@ mod tests {
 
     #[test]
     fn text_content_block_is_literal_never_a_wide_strings_index() {
-        // Regression for #309. A non-empty block 1 IS the text. It used to be
-        // run through a lookup that treated ANY all-digit content as a
-        // /WideStrings index, so a pin-1 marker "1" in a library that merely
-        // carried a /WideStrings stream read back as an unrelated string — and
-        // read-modify-write persisted the substitution with no signal.
-        //
-        // The index is a real field at geometry offset 115 (see
-        // docs/PCBLIB_FORMAT.md), not something inferred from the content.
+        // Regression for #309. Block 1 holds the text itself, so all-digit
+        // content — pin-1 markers, numeric value legends — must survive
+        // verbatim even when the component has a /WideStrings table. The entry
+        // to use is named by the index at geometry offset 115 (see
+        // docs/PCBLIB_FORMAT.md), never inferred from the content.
         let mut ws = WideStrings::new();
         ws.insert(1, "TOTALLY UNRELATED".to_string());
         ws.insert(2, "ALSO UNRELATED".to_string());

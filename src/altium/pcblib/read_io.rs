@@ -332,15 +332,17 @@ impl PcbLib {
     /// Reads a component's `WideStrings` stream if present.
     ///
     /// The stream is **per component** (`/{component}/WideStrings`), matching
-    /// Altium and our own writer. This used to read a library-wide
-    /// `/WideStrings`, which no `PcbLib` contains, so the table was always empty
-    /// and every out-of-line text resolved to nothing.
+    /// Altium and our own writer; no `PcbLib` carries a library-wide one.
     fn read_wide_strings<F: std::io::Read + std::io::Seek>(
         cfb: &mut cfb::CompoundFile<F>,
         path: &std::path::Path,
     ) -> reader::WideStrings {
         crate::altium::read_stream_opt(cfb, path)
-            .map(|data| reader::parse_wide_strings(&data))
+            .map(|data| {
+                // `[block_len:4][text + \x00]` — the parser takes the payload,
+                // so the binary prefix is stripped here.
+                reader::parse_wide_strings(data.get(4..).unwrap_or_default())
+            })
             .unwrap_or_default()
     }
 

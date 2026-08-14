@@ -40,12 +40,33 @@ pub fn redact_absolute_paths(message: &str) -> String {
     // is still redacted. The false-positive guard holds: in `https://` the drive
     // candidate `s:/` is preceded by `p` (a letter, not in the class), so it never
     // matches.
+    // The path body deliberately allows spaces: `C:\Program Files\…`,
+    // `C:\Users\First Last\…` and `OneDrive - Company\…` are ordinary Windows
+    // paths, and a body of `[^\s…]` stopped at the first space and left the rest
+    // of the directory tree in the message. It instead terminates on characters
+    // that cannot appear in a Windows path (`" < > | ? *`) or that end a path in
+    // prose: a *second* colon (the drive's is already consumed by the prefix, so
+    // a later one means `…\x.PcbLib: permission denied`), a comma, a semicolon,
+    // brackets, an apostrophe, or a newline.
+    //
+    // Over-matching a trailing word is harmless — `basename` keeps it inside the
+    // final segment, so "Failed to read x.PcbLib now" still reads correctly —
+    // whereas under-matching discloses directories, so the bias is deliberate.
     let windows = WINDOWS.get_or_init(|| {
-        Regex::new(r#"(^|[\s"'(=:])((?:[A-Za-z]:[\\/]|\\\\)[^\s"'<>|]*)"#).unwrap()
+        Regex::new(r#"(^|[\s"'(=:])((?:[A-Za-z]:[\\/]|\\\\)[^"'<>|?*:,;()\r\n]*)"#).unwrap()
     });
-    let unix = UNIX.get_or_init(|| Regex::new(r"(^|\s)(/[^\s/]+(?:/[^\s/]+)+)").unwrap());
+    // Unix paths take the same treatment, for `/home/me/My Libraries/x.PcbLib`.
+    // The leading segment must still be space-free so ordinary prose starting
+    // with a slash-word is not swallowed, and at least one separator is required.
+    let unix = UNIX.get_or_init(|| {
+        Regex::new(r#"(^|\s)(/[^\s/"'<>|:,;()\r\n]+(?:/[^/"'<>|:,;()\r\n]+)+)"#).unwrap()
+    });
 
-    let redact = |caps: &regex::Captures| format!("{}{}", &caps[1], basename(&caps[2]));
+    let redact = |caps: &regex::Captures| {
+        // Trim trailing whitespace the greedy body may have taken with it, so a
+        // path at the end of a sentence does not keep a dangling space.
+        format!("{}{}", &caps[1], basename(caps[2].trim_end()))
+    };
     let step1 = windows.replace_all(message, &redact);
     let step2 = unix.replace_all(&step1, &redact);
     step2.into_owned()
@@ -242,6 +263,50 @@ mod tests {
         assert_eq!(
             redact_absolute_paths("at /a/b and C:\\x\\y.PcbLib"),
             "at b and y.PcbLib"
+        );
+    }
+
+    #[test]
+    fn redact_paths_containing_spaces() {
+        // Regression for the leak found via #306: the path body used to stop at
+        // the first space, so everything after it stayed in the message. Spaces
+        // are ordinary in Windows paths, so this was the common case, not an
+        // edge one — every affected user saw part of their directory tree, and
+        // potentially their account name, in error text.
+        assert_eq!(
+            redact_absolute_paths(
+                "Failed to read C:\\Users\\me\\Documents\\embedded society\\proj\\Corrupt.PcbLib"
+            ),
+            "Failed to read Corrupt.PcbLib"
+        );
+        assert_eq!(
+            redact_absolute_paths("Failed to read C:\\Program Files\\Altium\\Lib.PcbLib"),
+            "Failed to read Lib.PcbLib"
+        );
+        // UNC share with spaces.
+        assert_eq!(
+            redact_absolute_paths("at \\\\file server\\Team Libs\\Parts.SchLib"),
+            "at Parts.SchLib"
+        );
+        // Unix paths with spaces leaked the same way.
+        assert_eq!(
+            redact_absolute_paths("at /home/me/My Libraries/Parts.PcbLib"),
+            "at Parts.PcbLib"
+        );
+    }
+
+    #[test]
+    fn redact_stops_at_trailing_prose_after_a_path() {
+        // A later colon ends the path: the drive's own colon is consumed by the
+        // prefix, so the next one is punctuation rather than part of the name.
+        assert_eq!(
+            redact_absolute_paths("Failed to read C:\\a b\\x.PcbLib: permission denied"),
+            "Failed to read x.PcbLib: permission denied"
+        );
+        // A comma likewise, so a path inside a list does not swallow the rest.
+        assert_eq!(
+            redact_absolute_paths("tried C:\\a b\\x.PcbLib, then gave up"),
+            "tried x.PcbLib, then gave up"
         );
     }
 

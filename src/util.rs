@@ -58,8 +58,16 @@ pub fn redact_absolute_paths(message: &str) -> String {
     // Unix paths take the same treatment, for `/home/me/My Libraries/x.PcbLib`.
     // The leading segment must still be space-free so ordinary prose starting
     // with a slash-word is not swallowed, and at least one separator is required.
+    //
+    // The boundary class matches the Windows one rather than plain `\s`. Every
+    // tool response is JSON, so a path is normally reached as `"filepath":
+    // "/home/…"` — preceded by a quote, never by whitespace — and a
+    // whitespace-only boundary left those completely unredacted. URLs stay safe:
+    // in `https://h/p` the first `/` is followed by another `/`, which the
+    // segment body rejects, and the second `/` is preceded by `/`, which is not
+    // a boundary character.
     let unix = UNIX.get_or_init(|| {
-        Regex::new(r#"(^|\s)(/[^\s/"'<>|:,;()\r\n]+(?:/[^/"'<>|:,;()\r\n]+)+)"#).unwrap()
+        Regex::new(r#"(^|[\s"'(=:])(/[^\s/"'<>|:,;()\r\n]+(?:/[^/"'<>|:,;()\r\n]+)+)"#).unwrap()
     });
 
     let redact = |caps: &regex::Captures| {
@@ -292,6 +300,26 @@ mod tests {
         assert_eq!(
             redact_absolute_paths("at /home/me/My Libraries/Parts.PcbLib"),
             "at Parts.PcbLib"
+        );
+    }
+
+    #[test]
+    fn redact_quoted_paths_as_they_appear_in_json_responses() {
+        // Every tool response is JSON, so this is how a path is actually reached
+        // in practice — preceded by a quote, never by whitespace. The Unix
+        // pattern used to require a whitespace boundary, so these leaked in full
+        // on Linux and macOS: not a truncated tail, the entire absolute path.
+        assert_eq!(
+            redact_absolute_paths(r#"{"filepath": "/home/me/work/proj/.tmp/Corrupt.PcbLib"}"#),
+            r#"{"filepath": "Corrupt.PcbLib"}"#
+        );
+        assert_eq!(
+            redact_absolute_paths("Failed to read '/home/me/libs/X.PcbLib'"),
+            "Failed to read 'X.PcbLib'"
+        );
+        assert_eq!(
+            redact_absolute_paths("(/home/me/libs/X.PcbLib)"),
+            "(X.PcbLib)"
         );
     }
 

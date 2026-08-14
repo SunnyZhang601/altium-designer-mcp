@@ -2031,4 +2031,1211 @@ mod tests {
             assert!(parsed["validation"]["error_count"].as_u64().unwrap() >= 1);
         }
     }
+
+    // ==================== rejection and failure paths ====================
+
+    mod error_paths {
+        use super::*;
+        use crate::altium::pcblib::primitives::{Arc, Layer, PadStackMode, Region, Track, Vertex};
+        use crate::altium::pcblib::Pad;
+        use crate::altium::schlib::Rectangle;
+        use std::path::{Path, PathBuf};
+
+        /// Writes bytes that are not an OLE compound document, standing in for
+        /// a truncated or transfer-mangled library file.
+        fn write_corrupt_file(path: &Path) {
+            std::fs::write(path, b"not an OLE compound document").expect("write corrupt file");
+        }
+
+        /// Occupies the timestamped backup names `create_backup` is about to
+        /// try, so the copy fails. Covers this second and the next two, which
+        /// the call under test cannot outrun.
+        fn block_backup_paths(path: &Path) {
+            let now = chrono::Local::now();
+            for offset in 0..3_i64 {
+                let stamp = (now + chrono::Duration::seconds(offset)).format("%Y%m%d_%H%M%S");
+                let _ = std::fs::create_dir(format!("{}.{stamp}.bak", path.display()));
+            }
+        }
+
+        /// Clears or sets the read-only attribute, ignoring failures on paths
+        /// that have already gone away.
+        #[allow(clippy::permissions_set_readonly_false)] // cleanup: the temp dir must stay deletable
+        fn set_readonly(path: &Path, readonly: bool) {
+            if let Ok(meta) = std::fs::metadata(path) {
+                let mut perms = meta.permissions();
+                perms.set_readonly(readonly);
+                let _ = std::fs::set_permissions(path, perms);
+            }
+        }
+
+        /// Makes a library file read-only for the guard's lifetime, so the next
+        /// write fails the way it does when Altium holds the file open or the
+        /// library lives on a read-only share. Write access is restored on
+        /// drop — including on the backup copies, which inherit the attribute
+        /// on Windows and would otherwise block temp-directory cleanup.
+        struct ReadOnlyFile(PathBuf);
+
+        impl ReadOnlyFile {
+            fn new(path: &Path) -> Self {
+                set_readonly(path, true);
+                assert!(
+                    std::fs::metadata(path)
+                        .expect("metadata")
+                        .permissions()
+                        .readonly(),
+                    "test setup: could not make the library read-only"
+                );
+                Self(path.to_path_buf())
+            }
+        }
+
+        impl Drop for ReadOnlyFile {
+            fn drop(&mut self) {
+                let prefix = self.0.to_string_lossy().into_owned();
+                let parent = self
+                    .0
+                    .parent()
+                    .unwrap_or_else(|| Path::new("."))
+                    .to_path_buf();
+                for entry in std::fs::read_dir(parent).into_iter().flatten().flatten() {
+                    if entry.path().to_string_lossy().starts_with(&prefix) {
+                        set_readonly(&entry.path(), false);
+                    }
+                }
+            }
+        }
+
+        // ---------- delete_component ----------
+
+        // The sandbox check has to run before the library is opened. Were it
+        // dropped, any MCP client could name a .PcbLib anywhere on the machine
+        // and have footprints deleted out of it.
+        #[test]
+        fn delete_component_rejects_path_outside_allowed_roots() {
+            let allowed = test_temp_dir();
+            let elsewhere = test_temp_dir();
+            let server = create_test_server(allowed.path());
+            let outside = elsewhere.path().join("Outside.PcbLib");
+            create_test_pcblib(&outside);
+
+            let result = server.call_delete_component(&json!({
+                "filepath": outside.to_string_lossy(),
+                "component_names": ["CHIP_0402"],
+            }));
+            assert!(result.is_error);
+            assert_eq!(
+                get_result_text(&result),
+                "Access denied: path is outside the configured allowed directories"
+            );
+            assert_eq!(
+                PcbLib::open(&outside).unwrap().len(),
+                2,
+                "a refused delete must leave the library untouched"
+            );
+        }
+
+        // component_names is the whole instruction. A request that omits it
+        // must be rejected by name, not silently treated as "delete nothing"
+        // (an operator would think the delete ran) or "delete everything".
+        #[test]
+        fn delete_component_requires_component_names() {
+            let dir = test_temp_dir();
+            let server = create_test_server(dir.path());
+            let path = dir.path().join("NoNames.PcbLib");
+            create_test_pcblib(&path);
+
+            let result = server.call_delete_component(&json!({
+                "filepath": path.to_string_lossy(),
+            }));
+            assert!(result.is_error);
+            assert_eq!(
+                get_result_text(&result),
+                "Missing required parameter: component_names"
+            );
+        }
+
+        // A .PcbLib the reader cannot parse must be reported as unreadable. If
+        // it were treated as an empty library, the delete would "succeed" and
+        // the save that follows would overwrite the file with nothing.
+        #[test]
+        fn delete_component_pcblib_reports_a_library_it_cannot_read() {
+            let dir = test_temp_dir();
+            let server = create_test_server(dir.path());
+            let path = dir.path().join("Corrupt.PcbLib");
+            write_corrupt_file(&path);
+
+            let result = server.call_delete_component(&json!({
+                "filepath": path.to_string_lossy(),
+                "component_names": ["CHIP_0402"],
+            }));
+            assert!(result.is_error);
+            let parsed = parse_result_json(&result);
+            assert_eq!(parsed["status"], "error");
+            assert_eq!(
+                parsed["filepath"], "Corrupt.PcbLib",
+                "the response must name the library that failed, by file name only"
+            );
+            assert!(
+                !parsed["error"].as_str().unwrap().is_empty(),
+                "the reader's reason must be carried through, got: {parsed}"
+            );
+        }
+
+        // Same guard on the SchLib side, which reads through a separate path: a
+        // symbol library that cannot be parsed must fail loudly rather than be
+        // rewritten from an empty in-memory library.
+        #[test]
+        fn delete_component_schlib_reports_a_library_it_cannot_read() {
+            let dir = test_temp_dir();
+            let server = create_test_server(dir.path());
+            let path = dir.path().join("Corrupt.SchLib");
+            write_corrupt_file(&path);
+
+            let result = server.call_delete_component(&json!({
+                "filepath": path.to_string_lossy(),
+                "component_names": ["RESISTOR"],
+            }));
+            assert!(result.is_error);
+            let parsed = parse_result_json(&result);
+            assert_eq!(parsed["status"], "error");
+            assert_eq!(parsed["filepath"], "Corrupt.SchLib");
+            assert!(!parsed["error"].as_str().unwrap().is_empty());
+        }
+
+        // Dry-run is what an operator reads before approving a delete. A name
+        // that does not exist has to come back as not_found: reported as
+        // would_delete, they would approve a list that then removes less than
+        // they were shown.
+        #[test]
+        fn delete_component_pcblib_dry_run_flags_names_that_do_not_exist() {
+            let dir = test_temp_dir();
+            let server = create_test_server(dir.path());
+            let path = dir.path().join("DryGhost.PcbLib");
+            create_test_pcblib(&path);
+
+            let parsed = parse_result_json(&server.call_delete_component(&json!({
+                "filepath": path.to_string_lossy(),
+                "component_names": ["CHIP_0402", "GHOST"],
+                "dry_run": true,
+            })));
+            assert_eq!(parsed["status"], "dry_run");
+            assert_eq!(parsed["results"][0]["name"], "CHIP_0402");
+            assert_eq!(parsed["results"][0]["status"], "would_delete");
+            assert_eq!(parsed["results"][1]["name"], "GHOST");
+            assert_eq!(parsed["results"][1]["status"], "not_found");
+            assert_eq!(parsed["deleted_count"], 1);
+            assert_eq!(parsed["remaining_count"], 1);
+        }
+
+        // The SchLib dry-run keeps its own copy of the counting logic. A name
+        // repeated in the request must count once, or the previewed
+        // remaining_count undershoots what the real delete actually leaves.
+        #[test]
+        fn delete_component_schlib_dry_run_counts_repeated_names_once() {
+            let dir = test_temp_dir();
+            let server = create_test_server(dir.path());
+            let path = dir.path().join("DryDup.SchLib");
+            create_test_schlib(&path);
+
+            let parsed = parse_result_json(&server.call_delete_component(&json!({
+                "filepath": path.to_string_lossy(),
+                "component_names": ["RESISTOR", "RESISTOR", "GHOST"],
+                "dry_run": true,
+            })));
+            assert_eq!(parsed["status"], "dry_run");
+            assert_eq!(parsed["file_type"], "SchLib");
+            assert_eq!(parsed["results"][0]["status"], "would_delete");
+            assert_eq!(parsed["results"][1]["status"], "would_delete");
+            assert_eq!(parsed["results"][2]["name"], "GHOST");
+            assert_eq!(parsed["results"][2]["status"], "not_found");
+            assert_eq!(
+                parsed["deleted_count"], 1,
+                "the repeat must not double-count"
+            );
+            assert_eq!(parsed["remaining_count"], 1);
+
+            assert_eq!(
+                SchLib::open(&path).unwrap().len(),
+                2,
+                "dry run must not modify the library"
+            );
+        }
+
+        // A SchLib delete has to distinguish a symbol it removed from one it
+        // never found. Reporting "deleted" for a name that was not there tells
+        // the operator an obsolete symbol is gone while it is still shipped.
+        #[test]
+        fn delete_component_schlib_reports_names_that_do_not_exist() {
+            let dir = test_temp_dir();
+            let server = create_test_server(dir.path());
+            let path = dir.path().join("SchGhost.SchLib");
+            create_test_schlib(&path);
+
+            let parsed = parse_result_json(&server.call_delete_component(&json!({
+                "filepath": path.to_string_lossy(),
+                "component_names": ["GHOST"],
+            })));
+            assert_eq!(parsed["status"], "success");
+            assert_eq!(parsed["results"][0]["name"], "GHOST");
+            assert_eq!(parsed["results"][0]["status"], "not_found");
+            assert_eq!(parsed["deleted_count"], 0);
+            assert_eq!(
+                SchLib::open(&path).unwrap().len(),
+                2,
+                "a delete that found nothing must not rewrite the file"
+            );
+        }
+
+        // The timestamped backup is the only recovery point before a
+        // destructive delete. If a failed backup stopped aborting the
+        // operation, the delete would go ahead with nothing to restore from.
+        #[test]
+        fn delete_component_pcblib_aborts_when_the_backup_cannot_be_written() {
+            let dir = test_temp_dir();
+            let server = create_test_server(dir.path());
+            let path = dir.path().join("NoBackup.PcbLib");
+            create_test_pcblib(&path);
+            block_backup_paths(&path);
+
+            let result = server.call_delete_component(&json!({
+                "filepath": path.to_string_lossy(),
+                "component_names": ["CHIP_0402"],
+            }));
+            assert!(result.is_error);
+            let parsed = parse_result_json(&result);
+            assert_eq!(parsed["status"], "error");
+            assert!(
+                parsed["error"]
+                    .as_str()
+                    .unwrap()
+                    .starts_with("Failed to create backup of 'NoBackup.PcbLib'"),
+                "the abort must name the library it could not back up, got: {parsed}"
+            );
+            assert_eq!(
+                PcbLib::open(&path).unwrap().len(),
+                2,
+                "no backup means no delete"
+            );
+        }
+
+        // Same guard on the SchLib path, which has its own copy of the
+        // backup-then-save sequence.
+        #[test]
+        fn delete_component_schlib_aborts_when_the_backup_cannot_be_written() {
+            let dir = test_temp_dir();
+            let server = create_test_server(dir.path());
+            let path = dir.path().join("NoBackup.SchLib");
+            create_test_schlib(&path);
+            block_backup_paths(&path);
+
+            let result = server.call_delete_component(&json!({
+                "filepath": path.to_string_lossy(),
+                "component_names": ["RESISTOR"],
+            }));
+            assert!(result.is_error);
+            let parsed = parse_result_json(&result);
+            assert_eq!(parsed["status"], "error");
+            assert!(
+                parsed["error"]
+                    .as_str()
+                    .unwrap()
+                    .starts_with("Failed to create backup of 'NoBackup.SchLib'"),
+                "the abort must name the library it could not back up, got: {parsed}"
+            );
+            assert_eq!(
+                SchLib::open(&path).unwrap().len(),
+                2,
+                "no backup, no delete"
+            );
+        }
+
+        // A library Altium has open (or one on a read-only share) cannot be
+        // written. The handler must report the failure and still list what it
+        // tried to remove — a bare error leaves the operator unable to tell
+        // whether the file on disk changed.
+        #[test]
+        fn delete_component_pcblib_reports_a_failed_write() {
+            let dir = test_temp_dir();
+            let server = create_test_server(dir.path());
+            let path = dir.path().join("Locked.PcbLib");
+            create_test_pcblib(&path);
+            let _readonly = ReadOnlyFile::new(&path);
+
+            let result = server.call_delete_component(&json!({
+                "filepath": path.to_string_lossy(),
+                "component_names": ["CHIP_0402"],
+            }));
+            assert!(result.is_error);
+            let parsed = parse_result_json(&result);
+            assert_eq!(parsed["status"], "error");
+            assert!(
+                parsed["error"]
+                    .as_str()
+                    .unwrap()
+                    .starts_with("Failed to write library"),
+                "got: {parsed}"
+            );
+            assert_eq!(parsed["results"][0]["name"], "CHIP_0402");
+            assert_eq!(
+                parsed["results"][0]["status"], "deleted",
+                "the attempted deletions must stay in the report"
+            );
+        }
+
+        // Same for SchLib: the write failure must not be reported as success,
+        // or a user would delete their symbol and only find out at the next
+        // open that it is still there.
+        #[test]
+        fn delete_component_schlib_reports_a_failed_write() {
+            let dir = test_temp_dir();
+            let server = create_test_server(dir.path());
+            let path = dir.path().join("Locked.SchLib");
+            create_test_schlib(&path);
+            let _readonly = ReadOnlyFile::new(&path);
+
+            let result = server.call_delete_component(&json!({
+                "filepath": path.to_string_lossy(),
+                "component_names": ["RESISTOR"],
+            }));
+            assert!(result.is_error);
+            let parsed = parse_result_json(&result);
+            assert_eq!(parsed["status"], "error");
+            assert!(
+                parsed["error"]
+                    .as_str()
+                    .unwrap()
+                    .starts_with("Failed to write library"),
+                "got: {parsed}"
+            );
+            assert_eq!(parsed["results"][0]["name"], "RESISTOR");
+            assert_eq!(parsed["results"][0]["status"], "deleted");
+        }
+
+        // ---------- validate_library ----------
+
+        // validate_library opens whatever path it is handed, so the sandbox
+        // check doubles as the guard that stops it being used to probe for
+        // files elsewhere on the machine.
+        #[test]
+        fn validate_library_rejects_path_outside_allowed_roots() {
+            let allowed = test_temp_dir();
+            let elsewhere = test_temp_dir();
+            let server = create_test_server(allowed.path());
+            let outside = elsewhere.path().join("Outside.PcbLib");
+            create_test_pcblib(&outside);
+
+            let result = server.call_validate_library(&json!({
+                "filepath": outside.to_string_lossy(),
+            }));
+            assert!(result.is_error);
+            assert_eq!(
+                get_result_text(&result),
+                "Access denied: path is outside the configured allowed directories"
+            );
+        }
+
+        // The extension picks the parser. An unrecognised one has to be named
+        // as unsupported; guessing instead would feed a .bak or .lib to the
+        // PcbLib reader and report "corrupt library" for a file that simply
+        // was never one.
+        #[test]
+        fn validate_library_rejects_unknown_extension() {
+            let dir = test_temp_dir();
+            let server = create_test_server(dir.path());
+            let path = dir.path().join("Notes.txt");
+
+            let result = server.call_validate_library(&json!({
+                "filepath": path.to_string_lossy(),
+            }));
+            assert!(result.is_error);
+            let parsed = parse_result_json(&result);
+            assert_eq!(parsed["status"], "error");
+            assert_eq!(
+                parsed["error"],
+                "Unknown file type. Expected .PcbLib or .SchLib extension."
+            );
+        }
+
+        // A PcbLib that cannot be parsed must come back as an error rather than
+        // as a library with zero footprints: "valid, 0 components" would tell
+        // the operator a corrupt file is fine to release.
+        #[test]
+        fn validate_pcblib_reports_a_library_it_cannot_read() {
+            let dir = test_temp_dir();
+            let server = create_test_server(dir.path());
+            let path = dir.path().join("Corrupt.PcbLib");
+            write_corrupt_file(&path);
+
+            let result = server.call_validate_library(&json!({
+                "filepath": path.to_string_lossy(),
+            }));
+            assert!(result.is_error);
+            let parsed = parse_result_json(&result);
+            assert_eq!(parsed["status"], "error");
+            assert_eq!(parsed["filepath"], "Corrupt.PcbLib");
+            assert!(!parsed["error"].as_str().unwrap().is_empty());
+        }
+
+        // Zero-width tracks and zero-radius arcs are silkscreen and courtyard
+        // geometry Altium draws as nothing: the outline simply vanishes on the
+        // fab drawing. The report has to carry the primitive index, or it
+        // cannot be found in a footprint with dozens of them.
+        #[test]
+        fn validate_pcblib_reports_degenerate_tracks_and_arcs() {
+            let dir = test_temp_dir();
+            let server = create_test_server(dir.path());
+
+            let mut fp = Footprint::new("DEGENERATE");
+            fp.add_pad(Pad::smd("1", 0.0, 0.0, 0.6, 0.5));
+            fp.add_track(Track::new(-1.0, -0.5, 1.0, -0.5, 0.15, Layer::TopOverlay));
+            fp.add_track(Track::new(-1.0, 0.5, 1.0, 0.5, 0.0, Layer::TopOverlay));
+            fp.add_arc(Arc::circle(0.0, 0.0, 0.5, 0.15, Layer::TopOverlay));
+            fp.add_arc(Arc::circle(0.0, 0.0, 0.0, 0.15, Layer::TopOverlay));
+            let mut lib = PcbLib::new();
+            lib.add(fp);
+            let path = dir.path().join("Degenerate.PcbLib");
+            lib.save(&path).unwrap();
+
+            let parsed = parse_result_json(
+                &server.call_validate_library(&json!({ "filepath": path.to_string_lossy() })),
+            );
+            assert_eq!(parsed["status"], "invalid");
+            let issues = parsed["issues"].as_array().unwrap();
+            assert!(
+                issues
+                    .iter()
+                    .any(|i| i["issue"] == "Track 1 has invalid width: 0"
+                        && i["component"] == "DEGENERATE"),
+                "the zero-width track must be reported by index: {issues:?}"
+            );
+            assert!(
+                issues
+                    .iter()
+                    .any(|i| i["issue"] == "Arc 1 has invalid radius: 0"
+                        && i["component"] == "DEGENERATE"),
+                "the zero-radius arc must be reported by index: {issues:?}"
+            );
+        }
+
+        // A region with fewer than three vertices encloses no area, so the
+        // copper it was meant to pour simply is not there. Validation must
+        // flag it by index rather than let a missing thermal pad reach fab.
+        #[test]
+        fn validate_pcblib_reports_region_with_too_few_vertices() {
+            let dir = test_temp_dir();
+            let server = create_test_server(dir.path());
+
+            let mut fp = Footprint::new("SLIVER");
+            fp.add_pad(Pad::smd("1", 0.0, 0.0, 0.6, 0.5));
+            fp.add_region(Region {
+                vertices: vec![Vertex { x: 0.0, y: 0.0 }, Vertex { x: 1.0, y: 0.0 }],
+                layer: Layer::TopLayer,
+                ..Region::default()
+            });
+            let mut lib = PcbLib::new();
+            lib.add(fp);
+            let path = dir.path().join("Sliver.PcbLib");
+            lib.save(&path).unwrap();
+
+            let parsed = parse_result_json(
+                &server.call_validate_library(&json!({ "filepath": path.to_string_lossy() })),
+            );
+            assert_eq!(parsed["status"], "invalid");
+            assert!(
+                parsed["issues"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|i| i["issue"] == "Region 0 has fewer than 3 vertices"
+                        && i["component"] == "SLIVER"),
+                "got: {parsed}"
+            );
+        }
+
+        // An empty SchLib is a warning rather than an error, but it has to be
+        // reported: a symbol library whose write silently produced nothing
+        // would otherwise pass validation and ship as an empty file.
+        #[test]
+        fn validate_schlib_reports_empty_library() {
+            let dir = test_temp_dir();
+            let server = create_test_server(dir.path());
+            let path = dir.path().join("Empty.SchLib");
+            SchLib::new().save(&path).unwrap();
+
+            let parsed = parse_result_json(
+                &server.call_validate_library(&json!({ "filepath": path.to_string_lossy() })),
+            );
+            assert_eq!(parsed["status"], "warnings");
+            assert_eq!(parsed["component_count"], 0);
+            assert_eq!(
+                parsed["issues"][0]["issue"],
+                "Library is empty (no symbols)"
+            );
+        }
+
+        // A symbol with no pins cannot be wired to anything: it drops out of
+        // the netlist without warning. Validation must surface it and name the
+        // symbol, so it can be found in a library of hundreds.
+        #[test]
+        fn validate_schlib_reports_symbol_without_pins() {
+            let dir = test_temp_dir();
+            let server = create_test_server(dir.path());
+
+            let mut sym = Symbol::new("BODY_ONLY");
+            sym.add_rectangle(Rectangle::new(-10, -5, 10, 5));
+            let mut lib = SchLib::new();
+            lib.add(sym);
+            let path = dir.path().join("NoPins.SchLib");
+            lib.save(&path).unwrap();
+
+            let parsed = parse_result_json(
+                &server.call_validate_library(&json!({ "filepath": path.to_string_lossy() })),
+            );
+            assert_eq!(parsed["status"], "warnings");
+            assert!(
+                parsed["issues"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|i| i["issue"] == "Symbol has no pins" && i["component"] == "BODY_ONLY"),
+                "got: {parsed}"
+            );
+        }
+
+        // A pin with no designator has nothing to map onto a footprint pad, so
+        // the schematic-to-layout sync silently drops the connection. This has
+        // to be an error, not a warning.
+        #[test]
+        fn validate_schlib_reports_empty_pin_designator() {
+            let dir = test_temp_dir();
+            let server = create_test_server(dir.path());
+
+            let mut sym = Symbol::new("NO_DESIGNATOR");
+            sym.add_pin(Pin::new("A", "", -20, 0, 10, PinOrientation::Left));
+            sym.add_rectangle(Rectangle::new(-10, -5, 10, 5));
+            let mut lib = SchLib::new();
+            lib.add(sym);
+            let path = dir.path().join("NoDesignator.SchLib");
+            lib.save(&path).unwrap();
+
+            let parsed = parse_result_json(
+                &server.call_validate_library(&json!({ "filepath": path.to_string_lossy() })),
+            );
+            assert_eq!(parsed["status"], "invalid");
+            assert!(
+                parsed["issues"].as_array().unwrap().iter().any(|i| {
+                    i["issue"] == "Pin has empty designator"
+                        && i["severity"] == "error"
+                        && i["component"] == "NO_DESIGNATOR"
+                }),
+                "got: {parsed}"
+            );
+        }
+
+        // ---------- post-write validation ----------
+
+        // Post-write validation is the last look at the file after it has been
+        // rewritten. If it stopped noticing degenerate geometry, a delete would
+        // report clean success on a library it had just left with invisible
+        // silkscreen, empty copper regions and shorted pad designators.
+        #[test]
+        fn delete_component_pcblib_post_write_validation_flags_degenerate_primitives() {
+            let dir = test_temp_dir();
+            let server = create_test_server(dir.path());
+
+            let mut lib = PcbLib::new();
+            lib.add(Footprint::new("GOOD")); // deleted below, to trigger the write
+            let mut bad = Footprint::new("BAD");
+            bad.add_pad(Pad::smd("1", 0.0, 0.0, 0.6, 0.5));
+            let mut zero_width = Pad::smd("2", 1.0, 0.0, 0.6, 0.5);
+            zero_width.width = 0.0;
+            bad.add_pad(zero_width);
+            bad.add_track(Track::new(-1.0, 0.0, 1.0, 0.0, 0.0, Layer::TopOverlay));
+            bad.add_arc(Arc::circle(0.0, 0.0, 0.0, 0.15, Layer::TopOverlay));
+            bad.add_region(Region {
+                vertices: vec![Vertex { x: 0.0, y: 0.0 }],
+                layer: Layer::TopLayer,
+                ..Region::default()
+            });
+            lib.add(bad);
+            let path = dir.path().join("PostWriteDefects.PcbLib");
+            lib.save(&path).unwrap();
+
+            let parsed = parse_result_json(&server.call_delete_component(&json!({
+                "filepath": path.to_string_lossy(),
+                "component_names": ["GOOD"],
+            })));
+            assert_eq!(parsed["status"], "success");
+            assert_eq!(parsed["validation"]["status"], "invalid");
+            let reported: Vec<&str> = parsed["validation"]["issues"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter_map(|i| i["issue"].as_str())
+                .collect();
+            for expected in [
+                "Pad '2' has invalid dimensions",
+                "Track 0 has invalid width",
+                "Arc 0 has invalid radius",
+                "Region 0 has fewer than 3 vertices",
+            ] {
+                assert!(
+                    reported.contains(&expected),
+                    "post-write validation must report {expected:?}, got: {reported:?}"
+                );
+            }
+        }
+
+        // The SchLib delete path runs its own post-write validation. Without
+        // it, a delete that leaves two pins claiming the same designator —
+        // which silently shorts two nets on import — reads as a clean success.
+        #[test]
+        fn delete_component_schlib_post_write_validation_flags_symbol_defects() {
+            let dir = test_temp_dir();
+            let server = create_test_server(dir.path());
+
+            let mut lib = SchLib::new();
+            lib.add(Symbol::new("GOOD")); // deleted below, to trigger the write
+            let mut bad = Symbol::new("BAD");
+            bad.add_pin(Pin::new("A", "1", -20, 0, 10, PinOrientation::Left));
+            bad.add_pin(Pin::new("K", "1", 20, 0, 10, PinOrientation::Right));
+            bad.add_rectangle(Rectangle::new(10, 5, -10, -5)); // inverted corners
+            lib.add(bad);
+            let path = dir.path().join("PostWriteSch.SchLib");
+            lib.save(&path).unwrap();
+
+            let parsed = parse_result_json(&server.call_delete_component(&json!({
+                "filepath": path.to_string_lossy(),
+                "component_names": ["GOOD"],
+            })));
+            assert_eq!(parsed["status"], "success");
+            assert_eq!(parsed["validation"]["status"], "invalid");
+            let reported: Vec<&str> = parsed["validation"]["issues"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter_map(|i| i["issue"].as_str())
+                .collect();
+            assert!(
+                reported.contains(&"Duplicate pin designator: '1'"),
+                "got: {reported:?}"
+            );
+            assert!(
+                reported.contains(&"Rectangle 0 has inverted corners"),
+                "got: {reported:?}"
+            );
+        }
+
+        // ---------- export_library ----------
+
+        // Export reads the whole library and hands it back to the client, so a
+        // missing sandbox check would turn it into an arbitrary-file reader.
+        #[test]
+        fn export_library_rejects_path_outside_allowed_roots() {
+            let allowed = test_temp_dir();
+            let elsewhere = test_temp_dir();
+            let server = create_test_server(allowed.path());
+            let outside = elsewhere.path().join("Outside.PcbLib");
+            create_test_pcblib(&outside);
+
+            let result = server.call_export_library(&json!({
+                "filepath": outside.to_string_lossy(),
+                "format": "json",
+            }));
+            assert!(result.is_error);
+            assert_eq!(
+                get_result_text(&result),
+                "Access denied: path is outside the configured allowed directories"
+            );
+        }
+
+        // Export has its own extension switch. An unsupported one must say so,
+        // rather than silently producing an empty export the caller then trusts
+        // as the library's real contents.
+        #[test]
+        fn export_library_rejects_unknown_extension() {
+            let dir = test_temp_dir();
+            let server = create_test_server(dir.path());
+            let path = dir.path().join("Parts.csv");
+
+            let result = server.call_export_library(&json!({
+                "filepath": path.to_string_lossy(),
+                "format": "json",
+            }));
+            assert!(result.is_error);
+            let parsed = parse_result_json(&result);
+            assert_eq!(
+                parsed["error"],
+                "Unknown file type. Expected .PcbLib or .SchLib extension."
+            );
+        }
+
+        // A corrupt PcbLib must fail the export instead of yielding an empty
+        // footprint list — a caller feeding that back through import_library
+        // would replace a real library with an empty one.
+        #[test]
+        fn export_pcblib_reports_a_library_it_cannot_read() {
+            let dir = test_temp_dir();
+            let server = create_test_server(dir.path());
+            let path = dir.path().join("Corrupt.PcbLib");
+            write_corrupt_file(&path);
+
+            let result = server.call_export_library(&json!({
+                "filepath": path.to_string_lossy(),
+                "format": "json",
+            }));
+            assert!(result.is_error);
+            let parsed = parse_result_json(&result);
+            assert_eq!(parsed["status"], "error");
+            assert_eq!(parsed["filepath"], "Corrupt.PcbLib");
+            assert!(!parsed["error"].as_str().unwrap().is_empty());
+        }
+
+        // Same for the SchLib exporter, which reads through a separate path.
+        #[test]
+        fn export_schlib_reports_a_library_it_cannot_read() {
+            let dir = test_temp_dir();
+            let server = create_test_server(dir.path());
+            let path = dir.path().join("Corrupt.SchLib");
+            write_corrupt_file(&path);
+
+            let result = server.call_export_library(&json!({
+                "filepath": path.to_string_lossy(),
+                "format": "csv",
+            }));
+            assert!(result.is_error);
+            let parsed = parse_result_json(&result);
+            assert_eq!(parsed["status"], "error");
+            assert_eq!(parsed["filepath"], "Corrupt.SchLib");
+            assert!(!parsed["error"].as_str().unwrap().is_empty());
+        }
+
+        // Compact export strips the per-layer arrays when every layer holds the
+        // same geometry — so it must also downgrade stack_mode to "simple".
+        // Left saying "full_stack", the payload describes a pad with
+        // independent per-layer geometry whose per-layer data is gone, and
+        // re-importing it loses the pad's real size.
+        #[test]
+        fn export_pcblib_compact_downgrades_uniform_full_stack_pads() {
+            let dir = test_temp_dir();
+            let server = create_test_server(dir.path());
+
+            let mut uniform = Pad::smd("1", 0.0, 0.0, 0.6, 0.5);
+            uniform.stack_mode = PadStackMode::FullStack;
+            uniform.per_layer_sizes = Some(vec![(0.6, 0.5); 32]);
+
+            // A genuinely tapered stack: layer 0 is wider than the rest.
+            let mut tapered = Pad::smd("2", 2.0, 0.0, 0.6, 0.5);
+            tapered.stack_mode = PadStackMode::FullStack;
+            let mut tapered_sizes = vec![(0.6, 0.5); 32];
+            tapered_sizes[0] = (1.2, 0.5);
+            tapered.per_layer_sizes = Some(tapered_sizes);
+
+            let mut fp = Footprint::new("FULLSTACK");
+            fp.add_pad(uniform);
+            fp.add_pad(tapered);
+            let mut lib = PcbLib::new();
+            lib.add(fp);
+            let path = dir.path().join("FullStack.PcbLib");
+            lib.save(&path).unwrap();
+
+            let parsed = parse_result_json(&server.call_export_library(&json!({
+                "filepath": path.to_string_lossy(),
+                "format": "json",
+                "compact": true,
+            })));
+            let exported = &parsed["footprints"][0]["pads"][0];
+            assert_eq!(
+                exported["stack_mode"], "simple",
+                "a stripped pad must not still claim a full stack: {exported}"
+            );
+            for stripped in [
+                "per_layer_sizes",
+                "per_layer_shapes",
+                "per_layer_corner_radii",
+                "per_layer_offsets",
+            ] {
+                assert!(
+                    exported.get(stripped).is_none(),
+                    "uniform {stripped} must be stripped: {exported}"
+                );
+            }
+            // The pad's real geometry has to survive the strip, or the compact
+            // form describes a pad of unknown size.
+            let width = exported["width"].as_f64().unwrap();
+            assert!((width - 0.6).abs() < 1e-3, "width lost: {exported}");
+
+            // The tapered pad's per-layer sizes are not redundant: stripping
+            // them would export a plain 0.6 mm pad and silently lose the wider
+            // layer-0 land the part actually needs.
+            let tapered = &parsed["footprints"][0]["pads"][1];
+            assert_eq!(
+                tapered["stack_mode"], "full_stack",
+                "a non-uniform stack must keep its mode: {tapered}"
+            );
+            let sizes = tapered["per_layer_sizes"]
+                .as_array()
+                .unwrap_or_else(|| panic!("per-layer sizes must be kept: {tapered}"));
+            assert!(
+                (sizes[0][0].as_f64().unwrap() - 1.2).abs() < 1e-3,
+                "the wider layer-0 size must survive: {tapered}"
+            );
+        }
+
+        // ---------- import_library ----------
+
+        // Import writes a file. Without the sandbox check it would be an
+        // arbitrary-file writer, which is the one thing the server must never
+        // become.
+        #[test]
+        fn import_library_rejects_path_outside_allowed_roots() {
+            let allowed = test_temp_dir();
+            let elsewhere = test_temp_dir();
+            let server = create_test_server(allowed.path());
+            let outside = elsewhere.path().join("Outside.PcbLib");
+
+            let result = server.call_import_library(&json!({
+                "output_path": outside.to_string_lossy(),
+                "json_data": { "file_type": "PcbLib", "footprints": [] },
+            }));
+            assert!(result.is_error);
+            assert_eq!(
+                get_result_text(&result),
+                "Access denied: path is outside the configured allowed directories"
+            );
+            assert!(!outside.exists(), "a refused import must write nothing");
+        }
+
+        // Append merges into whatever is already on disk. If an unreadable
+        // existing library were treated as absent, the append would quietly
+        // become an overwrite and destroy every footprint already there.
+        #[test]
+        fn import_pcblib_append_reports_an_existing_library_it_cannot_read() {
+            let dir = test_temp_dir();
+            let server = create_test_server(dir.path());
+            let output = dir.path().join("Corrupt.PcbLib");
+            write_corrupt_file(&output);
+            let before = std::fs::read(&output).unwrap();
+
+            let result = server.call_import_library(&json!({
+                "output_path": output.to_string_lossy(),
+                "json_data": { "file_type": "PcbLib", "footprints": [{ "name": "NEW" }] },
+                "append": true,
+            }));
+            assert!(result.is_error);
+            let text = get_result_text(&result);
+            assert!(
+                text.starts_with("Failed to read existing library for append"),
+                "got: {text}"
+            );
+            assert_eq!(
+                std::fs::read(&output).unwrap(),
+                before,
+                "a failed append must not overwrite the existing file"
+            );
+        }
+
+        // Two footprints under one name make the second unreachable — Altium
+        // resolves the name to whichever it indexed first. The import must
+        // refuse and say which name collided.
+        #[test]
+        fn import_pcblib_rejects_a_duplicate_footprint_name() {
+            let dir = test_temp_dir();
+            let server = create_test_server(dir.path());
+            let source = dir.path().join("DupSource.PcbLib");
+            create_test_pcblib(&source);
+            let exported = parse_result_json(&server.call_export_library(&json!({
+                "filepath": source.to_string_lossy(),
+                "format": "json",
+            })));
+            let fp = exported["footprints"][0].clone();
+
+            let output = dir.path().join("Dup.PcbLib");
+            let result = server.call_import_library(&json!({
+                "output_path": output.to_string_lossy(),
+                "json_data": { "file_type": "PcbLib", "footprints": [fp.clone(), fp] },
+            }));
+            assert!(result.is_error);
+            assert_eq!(
+                get_result_text(&result),
+                "Component 'CHIP_0402' already exists in library"
+            );
+        }
+
+        // serde deserialisation bypasses the create-path validators, so import
+        // re-checks ranges itself. A coordinate past the internal-unit limit
+        // wraps an i32 on write and lands the pad somewhere else entirely; the
+        // message has to name the footprint and the field.
+        #[test]
+        fn import_pcblib_rejects_out_of_range_coordinates() {
+            let dir = test_temp_dir();
+            let server = create_test_server(dir.path());
+            let source = dir.path().join("RangeSource.PcbLib");
+            create_test_pcblib(&source);
+            let exported = parse_result_json(&server.call_export_library(&json!({
+                "filepath": source.to_string_lossy(),
+                "format": "json",
+            })));
+            let mut fp = exported["footprints"][0].clone();
+            fp["pads"][0]["x"] = json!(9999.0);
+
+            let output = dir.path().join("Range.PcbLib");
+            let result = server.call_import_library(&json!({
+                "output_path": output.to_string_lossy(),
+                "json_data": { "file_type": "PcbLib", "footprints": [fp] },
+            }));
+            assert!(result.is_error);
+            let text = get_result_text(&result);
+            assert!(
+                text.starts_with("Footprint 0 ('CHIP_0402'):"),
+                "the offending footprint must be named: {text}"
+            );
+            assert!(
+                text.contains("pad 0 x") && text.contains("exceeds the maximum safe range"),
+                "the offending field must be named: {text}"
+            );
+            assert!(!output.exists(), "a rejected import must write nothing");
+        }
+
+        // A footprint the parser cannot read has to be reported with its index
+        // and name. A payload of fifty footprints is otherwise impossible to
+        // debug, and silently skipping it would ship a library missing a part.
+        #[test]
+        fn import_pcblib_rejects_an_unparseable_footprint() {
+            let dir = test_temp_dir();
+            let server = create_test_server(dir.path());
+            let output = dir.path().join("Unparseable.PcbLib");
+
+            let result = server.call_import_library(&json!({
+                "output_path": output.to_string_lossy(),
+                "json_data": {
+                    "file_type": "PcbLib",
+                    "footprints": [{ "name": "MANGLED", "pads": "not-an-array" }],
+                },
+            }));
+            assert!(result.is_error);
+            let text = get_result_text(&result);
+            assert!(
+                text.starts_with("Failed to parse footprint 0 ('MANGLED')"),
+                "got: {text}"
+            );
+            assert!(!output.exists(), "a rejected import must write nothing");
+        }
+
+        // If the save fails the import must not claim success: a caller that
+        // believes the library was written deletes its source data and loses
+        // the footprints.
+        #[test]
+        fn import_pcblib_reports_a_failed_write() {
+            let dir = test_temp_dir();
+            let server = create_test_server(dir.path());
+            let output = dir.path().join("LockedImport.PcbLib");
+            create_test_pcblib(&output);
+            let _readonly = ReadOnlyFile::new(&output);
+
+            let result = server.call_import_library(&json!({
+                "output_path": output.to_string_lossy(),
+                "json_data": { "file_type": "PcbLib", "footprints": [{ "name": "NEW" }] },
+                "append": true,
+            }));
+            assert!(result.is_error);
+            let text = get_result_text(&result);
+            assert!(text.starts_with("Failed to write library"), "got: {text}");
+        }
+
+        // Append mode has to report the running total, not just what this call
+        // added; the message is what an operator uses to confirm the merge
+        // landed on top of the existing library rather than replacing it.
+        #[test]
+        fn import_pcblib_append_adds_to_the_existing_library() {
+            let dir = test_temp_dir();
+            let server = create_test_server(dir.path());
+            let output = dir.path().join("AppendPcb.PcbLib");
+            create_test_pcblib(&output);
+
+            let parsed = parse_result_json(&server.call_import_library(&json!({
+                "output_path": output.to_string_lossy(),
+                "json_data": { "file_type": "PcbLib", "footprints": [{ "name": "CHIP_0805" }] },
+                "append": true,
+            })));
+            assert_eq!(parsed["status"], "success");
+            assert_eq!(parsed["imported_count"], 1);
+            assert_eq!(parsed["total_count"], 3);
+            assert_eq!(
+                parsed["message"],
+                "Imported 1 footprints (library now has 3 total)"
+            );
+
+            let lib = PcbLib::open(&output).unwrap();
+            assert!(
+                lib.get("CHIP_0402").is_some(),
+                "append must keep what was there"
+            );
+            assert!(lib.get("CHIP_0805").is_some());
+        }
+
+        // A SchLib import payload without a symbols array must be refused. Left
+        // to fall through it would write an empty library over the output path.
+        #[test]
+        fn import_schlib_requires_a_symbols_array() {
+            let dir = test_temp_dir();
+            let server = create_test_server(dir.path());
+            let output = dir.path().join("NoSymbols.SchLib");
+
+            let result = server.call_import_library(&json!({
+                "output_path": output.to_string_lossy(),
+                "json_data": { "file_type": "SchLib" },
+            }));
+            assert!(result.is_error);
+            assert_eq!(
+                get_result_text(&result),
+                "JSON data must contain 'symbols' array"
+            );
+            assert!(!output.exists());
+        }
+
+        // As on the PcbLib side, an unreadable existing library must abort the
+        // append rather than let it silently turn into an overwrite.
+        #[test]
+        fn import_schlib_append_reports_an_existing_library_it_cannot_read() {
+            let dir = test_temp_dir();
+            let server = create_test_server(dir.path());
+            let output = dir.path().join("Corrupt.SchLib");
+            write_corrupt_file(&output);
+            let before = std::fs::read(&output).unwrap();
+
+            let result = server.call_import_library(&json!({
+                "output_path": output.to_string_lossy(),
+                "json_data": {
+                    "file_type": "SchLib",
+                    "symbols": [{ "name": "NEW", "pins": [] }],
+                },
+                "append": true,
+            }));
+            assert!(result.is_error);
+            let text = get_result_text(&result);
+            assert!(
+                text.starts_with("Failed to read existing library for append"),
+                "got: {text}"
+            );
+            assert_eq!(std::fs::read(&output).unwrap(), before);
+        }
+
+        // Duplicate symbol names make the second symbol unreachable from a
+        // schematic; the import must refuse and name the collision.
+        #[test]
+        fn import_schlib_rejects_a_duplicate_symbol_name() {
+            let dir = test_temp_dir();
+            let server = create_test_server(dir.path());
+            let output = dir.path().join("DupSym.SchLib");
+            let symbol = json!({
+                "name": "DIODE",
+                "designator": "D?",
+                "pins": [{ "designator": "1", "name": "A", "x": -20, "y": 0, "length": 10 }],
+            });
+
+            let result = server.call_import_library(&json!({
+                "output_path": output.to_string_lossy(),
+                "json_data": { "file_type": "SchLib", "symbols": [symbol.clone(), symbol] },
+            }));
+            assert!(result.is_error);
+            assert_eq!(
+                get_result_text(&result),
+                "Component 'DIODE' already exists in library"
+            );
+        }
+
+        // validate_symbol_json only checks that fields are present, so the
+        // range check afterwards is the only thing standing between an
+        // out-of-range pin and a coordinate that wraps on write, putting the
+        // pin at the wrong end of the sheet.
+        #[test]
+        fn import_schlib_rejects_out_of_range_coordinates() {
+            let dir = test_temp_dir();
+            let server = create_test_server(dir.path());
+            let output = dir.path().join("RangeSym.SchLib");
+
+            let result = server.call_import_library(&json!({
+                "output_path": output.to_string_lossy(),
+                "json_data": {
+                    "file_type": "SchLib",
+                    "symbols": [{
+                        "name": "FAR_AWAY",
+                        "pins": [{ "designator": "1", "name": "A", "x": 99999, "y": 0, "length": 10 }],
+                    }],
+                },
+            }));
+            assert!(result.is_error);
+            let text = get_result_text(&result);
+            assert!(
+                text.starts_with("Symbol 0 ('FAR_AWAY'):"),
+                "the offending symbol must be named: {text}"
+            );
+            assert!(
+                text.contains("pin 0 x") && text.contains("exceeds the maximum safe range"),
+                "the offending field must be named: {text}"
+            );
+            assert!(!output.exists(), "a rejected import must write nothing");
+        }
+
+        // A symbol serde cannot deserialise must be reported with its index and
+        // name, not skipped: a library silently missing a part passes every
+        // later check and only fails on the schematic.
+        #[test]
+        fn import_schlib_rejects_an_unparseable_symbol() {
+            let dir = test_temp_dir();
+            let server = create_test_server(dir.path());
+            let output = dir.path().join("BadSym.SchLib");
+
+            let result = server.call_import_library(&json!({
+                "output_path": output.to_string_lossy(),
+                "json_data": {
+                    "file_type": "SchLib",
+                    "symbols": [{
+                        "name": "MANGLED",
+                        "pins": [{
+                            "designator": "1", "name": "A",
+                            "x": 0, "y": 0, "length": 10,
+                            "orientation": "sideways",
+                        }],
+                    }],
+                },
+            }));
+            assert!(result.is_error);
+            let text = get_result_text(&result);
+            assert!(
+                text.starts_with("Failed to parse symbol 0 ('MANGLED')"),
+                "got: {text}"
+            );
+            assert!(!output.exists(), "a rejected import must write nothing");
+        }
+
+        // A failed SchLib save must be reported. Reporting success would have
+        // the caller discard the source JSON while the file on disk still holds
+        // the old symbols.
+        #[test]
+        fn import_schlib_reports_a_failed_write() {
+            let dir = test_temp_dir();
+            let server = create_test_server(dir.path());
+            let output = dir.path().join("LockedImport.SchLib");
+            create_test_schlib(&output);
+            let _readonly = ReadOnlyFile::new(&output);
+
+            let result = server.call_import_library(&json!({
+                "output_path": output.to_string_lossy(),
+                "json_data": {
+                    "file_type": "SchLib",
+                    "symbols": [{
+                        "name": "DIODE",
+                        "pins": [{ "designator": "1", "name": "A", "x": -20, "y": 0, "length": 10 }],
+                    }],
+                },
+                "append": true,
+            }));
+            assert!(result.is_error);
+            let text = get_result_text(&result);
+            assert!(text.starts_with("Failed to write library"), "got: {text}");
+        }
+    }
 }

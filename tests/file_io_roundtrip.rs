@@ -853,3 +853,74 @@ fn schlib_file_roundtrip_pin_symbols_and_colour() {
     assert_eq!(p2.symbol_outside, PinSymbol::OpenCollector);
     assert_eq!(p2.colour, 0xFF_0000);
 }
+
+/// Numeric silkscreen text must survive a write → read cycle unchanged (#309).
+///
+/// Pin-1 markers and value legends are routinely just digits, and the reader
+/// used to treat any all-digit content block as a `/WideStrings` index.
+///
+/// Note on what this test does and does not prove today: it passes both with
+/// and without that fix, because the reader looks for `/WideStrings` at the
+/// root while the writer (and Altium) store it per component, so the lookup
+/// table is always empty and the heuristic never fires end to end. The unit
+/// test `text_content_block_is_literal_never_a_wide_strings_index` is the one
+/// that actually pins the fix, by passing a populated table directly. This
+/// guards the same behaviour through the real file path for when the stream
+/// mismatch is fixed and the table stops being empty.
+#[test]
+fn pcblib_roundtrip_preserves_numeric_silkscreen_text() {
+    let temp_dir = test_temp_dir();
+    let file_path = temp_dir.path().join("numeric_text.PcbLib");
+
+    let numeric_text = |content: &str, y: f64| Text {
+        x: 0.0,
+        y,
+        text: content.to_string(),
+        height: 1.0,
+        layer: Layer::TopOverlay,
+        kind: TextKind::Stroke,
+        rotation: 0.0,
+        stroke_font: None,
+        stroke_width: None,
+        italic: false,
+        bold: false,
+        mirror: false,
+        is_comment: false,
+        is_designator: false,
+        font_name: "Arial".to_string(),
+        justification: TextJustification::default(),
+        is_inverted: false,
+        inverted_border: None,
+        use_inverted_rectangle: false,
+        inverted_rect_width: None,
+        inverted_rect_height: None,
+        inverted_rect_text_offset: None,
+        flags: PcbFlags::default(),
+        net_index: 0xFFFF,
+        polygon_index: 0xFFFF,
+        component_index: -1,
+        unique_id: None,
+    };
+
+    let mut lib = PcbLib::new();
+    let mut fp = Footprint::new("NUMERIC_MARKS");
+    // Several entries so a mis-resolved index would land on a different string
+    // rather than coincidentally matching.
+    for (i, content) in ["1", "2", "10", "0"].iter().enumerate() {
+        #[allow(clippy::cast_precision_loss)]
+        fp.add_text(numeric_text(content, -(i as f64) - 1.0));
+    }
+    fp.add_text(numeric_text("REF", -9.0));
+    lib.add(fp);
+    lib.save(&file_path).expect("save");
+
+    let read_back = PcbLib::open(&file_path).expect("open");
+    let fp = read_back.get("NUMERIC_MARKS").expect("footprint");
+
+    let got: Vec<&str> = fp.text.iter().map(|t| t.text.as_str()).collect();
+    assert_eq!(
+        got,
+        vec!["1", "2", "10", "0", "REF"],
+        "numeric silkscreen must round-trip verbatim"
+    );
+}

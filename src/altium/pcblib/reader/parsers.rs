@@ -914,11 +914,18 @@ pub(super) fn parse_text(
         // Text block is a length-prefixed string
         let content = read_string_from_block(text_block);
         if content.is_empty() {
-            // Check for special designator/comment text in geometry block
+            // Only an empty block 1 means the text lives elsewhere: either a
+            // special `.Designator`/`.Comment` marker or the /WideStrings entry
+            // named by the index at geometry offset 115.
             extract_text_from_block(geometry_block, wide_strings)
         } else {
-            // Check if content is a WideStrings index reference
-            resolve_text_content(&content, wide_strings)
+            // A non-empty block 1 IS the text, verbatim. It used to be treated
+            // as a possible /WideStrings index whenever it parsed as a number,
+            // which silently replaced ordinary numeric silkscreen — pin-1
+            // markers, value legends — with an unrelated entry. The index is a
+            // real field at offset 115, not something inferred from content;
+            // see docs/PCBLIB_FORMAT.md § /{component}/WideStrings.
+            content
         }
     } else {
         // Fallback: check geometry block
@@ -998,30 +1005,6 @@ const fn pcb_justification_from_id(id: u8) -> TextJustification {
         // 3 (LeftBottom, the template default) and 0 (manual) → BottomLeft.
         _ => TextJustification::BottomLeft,
     }
-}
-
-/// Resolves text content, looking up `WideStrings` if needed.
-///
-/// If the content looks like a `WideStrings` index (numeric), attempts to look it up.
-/// Otherwise returns the content as-is.
-pub(super) fn resolve_text_content(content: &str, wide_strings: Option<&WideStrings>) -> String {
-    // Special text values are returned as-is
-    if content.starts_with('.') {
-        return content.to_string();
-    }
-
-    // Try to parse as a WideStrings index
-    if let Some(ws) = wide_strings {
-        if let Ok(index) = content.parse::<usize>() {
-            if let Some(resolved) = ws.get(&index) {
-                tracing::trace!(index, resolved = %resolved, "Resolved WideStrings text");
-                return resolved.clone();
-            }
-        }
-    }
-
-    // Return content as-is if not a WideStrings reference
-    content.to_string()
 }
 
 /// Extracts the text content from a Text geometry block.
@@ -1699,6 +1682,16 @@ mod tests {
 
     /// Wraps `payload` in the `[u32 len][payload]` framing every `PcbLib` record
     /// block uses, so a test can hand-build a record without the writer.
+    /// A Pascal short string as the text content block holds it:
+    /// `[u8 len][Windows-1252 bytes]`.
+    fn pascal(s: &str) -> Vec<u8> {
+        let bytes = s.as_bytes();
+        let mut out = Vec::with_capacity(bytes.len() + 1);
+        out.push(u8::try_from(bytes.len()).expect("fixture fits"));
+        out.extend_from_slice(bytes);
+        out
+    }
+
     fn block(payload: &[u8]) -> Vec<u8> {
         let mut out = Vec::with_capacity(payload.len() + 4);
         out.extend_from_slice(
@@ -2417,40 +2410,59 @@ mod tests {
     }
 
     #[test]
-    fn special_dot_prefixed_text_is_never_treated_as_a_wide_strings_index() {
-        // ".Designator" / ".Comment" are field references, not literal strings;
-        // resolving them through /WideStrings would replace the live designator
-        // binding with a frozen literal, so the silkscreen would stop tracking
-        // the component's real designator.
+    fn text_content_block_is_literal_never_a_wide_strings_index() {
+        // Regression for #309. A non-empty block 1 IS the text. It used to be
+        // run through a lookup that treated ANY all-digit content as a
+        // /WideStrings index, so a pin-1 marker "1" in a library that merely
+        // carried a /WideStrings stream read back as an unrelated string — and
+        // read-modify-write persisted the substitution with no signal.
+        //
+        // The index is a real field at geometry offset 115 (see
+        // docs/PCBLIB_FORMAT.md), not something inferred from the content.
         let mut ws = WideStrings::new();
-        ws.insert(0, "unrelated".to_string());
-        assert_eq!(resolve_text_content(".Designator", None), ".Designator");
-        assert_eq!(resolve_text_content(".Comment", Some(&ws)), ".Comment");
-        assert_eq!(resolve_text_content("R1", Some(&ws)), "R1");
-        assert_eq!(
-            resolve_text_content("42", Some(&ws)),
-            "42",
-            "a numeric index with no entry is returned verbatim"
-        );
-        assert_eq!(
-            resolve_text_content("1", None),
-            "1",
-            "without a WideStrings table the content is always literal"
-        );
+        ws.insert(1, "TOTALLY UNRELATED".to_string());
+        ws.insert(2, "ALSO UNRELATED".to_string());
+
+        // Numeric silkscreen survives verbatim, with and without a table.
+        for (content, table) in [
+            ("1", Some(&ws)),
+            ("2", Some(&ws)),
+            ("42", Some(&ws)),
+            ("1", None),
+        ] {
+            let mut record = block(&text_geometry(200));
+            record.extend_from_slice(&block(&pascal(content)));
+            let (text, _) = parse_text(&record, 0, table).expect("text parses");
+            assert_eq!(
+                text.text, content,
+                "content {content:?} must be taken literally"
+            );
+        }
+
+        // Ordinary and special content are unaffected.
+        for content in ["R1", "10uF", ".Designator", ".Comment"] {
+            let mut record = block(&text_geometry(200));
+            record.extend_from_slice(&block(&pascal(content)));
+            let (text, _) = parse_text(&record, 0, Some(&ws)).expect("text parses");
+            assert_eq!(text.text, content);
+        }
     }
 
     #[test]
-    fn numeric_text_content_is_swallowed_by_the_wide_strings_lookup() {
-        // CHARACTERISATION OF A KNOWN DEFECT — reported, deliberately NOT fixed
-        // in this tests-only change. `resolve_text_content` treats ANY all-digit
-        // content block as a /WideStrings index. Numeric silkscreen text is
-        // routine (pin-1 markers "1"/"2", value legends), so reading a library
-        // that merely happens to carry a /WideStrings stream rewrites that text
-        // to an unrelated string — and the next save persists the corruption.
-        // This test pins the current behaviour so the fix shows up as a diff.
+    fn wide_strings_still_resolve_when_the_content_block_is_empty() {
+        // The out-of-line path must keep working: an empty block 1 means the
+        // text lives in /WideStrings under the index at geometry offset 115.
+        // Removing the content heuristic must not disturb this.
         let mut ws = WideStrings::new();
-        ws.insert(1, "TOTALLY UNRELATED".to_string());
-        assert_eq!(resolve_text_content("1", Some(&ws)), "TOTALLY UNRELATED");
+        ws.insert(3, "PLACE COMPONENT HERE".to_string());
+
+        let mut geom = text_geometry(200);
+        geom[115..117].copy_from_slice(&3_u16.to_le_bytes());
+        let mut record = block(&geom);
+        record.extend_from_slice(&block(&pascal("")));
+
+        let (text, _) = parse_text(&record, 0, Some(&ws)).expect("text parses");
+        assert_eq!(text.text, "PLACE COMPONENT HERE");
     }
 
     // -------------------------------------------------------------------------

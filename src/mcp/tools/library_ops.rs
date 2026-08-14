@@ -1400,6 +1400,7 @@ mod tests {
 
     use crate::altium::pcblib::{Footprint, PcbLib};
     use crate::altium::schlib::{Pin, PinOrientation, SchLib, Symbol};
+    use crate::mcp::server::McpServer;
     use crate::mcp::tools::test_support::{
         create_test_pcblib, create_test_schlib, create_test_server, get_result_text,
         parse_result_json, test_temp_dir,
@@ -2030,5 +2031,129 @@ mod tests {
             assert_eq!(parsed["validation"]["status"], "invalid");
             assert!(parsed["validation"]["error_count"].as_u64().unwrap() >= 1);
         }
+    }
+    /// `validate_symbol_json` gates every graphic primitive `write_schlib`
+    /// accepts, and none of its rejection branches had coverage: a symbol whose
+    /// pins or shapes were missing required coordinates would reach the writer
+    /// on the strength of untested guards. Walks every family and every required
+    /// field, so a guard that is dropped or mis-keyed fails here.
+    #[test]
+    fn validate_symbol_json_rejects_every_missing_required_field() {
+        use serde_json::json;
+
+        let ok = |v: &serde_json::Value| McpServer::validate_symbol_json(v);
+
+        // A complete symbol passes.
+        assert!(ok(&json!({
+            "name": "GOOD",
+            "pins": [{"designator": "1", "name": "A", "x": 0, "y": 0, "length": 20}],
+            "rectangles": [{"x1": 0, "y1": 0, "x2": 1, "y2": 1}],
+            "lines": [{"x1": 0, "y1": 0, "x2": 1, "y2": 1}],
+            "arcs": [{"x": 0, "y": 0, "radius": 1}],
+            "ellipses": [{"x": 0, "y": 0, "radius_x": 1, "radius_y": 1}],
+            "labels": [{"x": 0, "y": 0, "text": "L"}],
+        }))
+        .is_ok());
+
+        // Each family, each required field: dropping it must be reported, and the
+        // message must name the symbol, the primitive index and the field.
+        let cases: Vec<(&str, serde_json::Value, &str)> = vec![
+            (
+                "pins",
+                json!({"designator": "1", "name": "A", "y": 0, "length": 20}),
+                "x",
+            ),
+            (
+                "pins",
+                json!({"designator": "1", "name": "A", "x": 0, "length": 20}),
+                "y",
+            ),
+            (
+                "pins",
+                json!({"designator": "1", "name": "A", "x": 0, "y": 0}),
+                "length",
+            ),
+            ("rectangles", json!({"y1": 0, "x2": 1, "y2": 1}), "x1"),
+            ("rectangles", json!({"x1": 0, "x2": 1, "y2": 1}), "y1"),
+            ("rectangles", json!({"x1": 0, "y1": 0, "y2": 1}), "x2"),
+            ("rectangles", json!({"x1": 0, "y1": 0, "x2": 1}), "y2"),
+            ("lines", json!({"y1": 0, "x2": 1, "y2": 1}), "x1"),
+            ("lines", json!({"x1": 0, "x2": 1, "y2": 1}), "y1"),
+            ("lines", json!({"x1": 0, "y1": 0, "y2": 1}), "x2"),
+            ("lines", json!({"x1": 0, "y1": 0, "x2": 1}), "y2"),
+            ("arcs", json!({"y": 0, "radius": 1}), "x"),
+            ("arcs", json!({"x": 0, "radius": 1}), "y"),
+            ("arcs", json!({"x": 0, "y": 0}), "radius"),
+            (
+                "ellipses",
+                json!({"y": 0, "radius_x": 1, "radius_y": 1}),
+                "x",
+            ),
+            (
+                "ellipses",
+                json!({"x": 0, "radius_x": 1, "radius_y": 1}),
+                "y",
+            ),
+            (
+                "ellipses",
+                json!({"x": 0, "y": 0, "radius_y": 1}),
+                "radius_x",
+            ),
+            (
+                "ellipses",
+                json!({"x": 0, "y": 0, "radius_x": 1}),
+                "radius_y",
+            ),
+            ("labels", json!({"y": 0, "text": "L"}), "x"),
+            ("labels", json!({"x": 0, "text": "L"}), "y"),
+            ("labels", json!({"x": 0, "y": 0}), "text"),
+        ];
+        for (family, primitive, missing) in cases {
+            let sym = json!({ "name": "SYM", family: [primitive] });
+            let err = ok(&sym).expect_err(&format!("{family} missing {missing} must fail"));
+            assert!(
+                err.contains("SYM") && err.contains(missing),
+                "{family}/{missing}: unhelpful message {err:?}"
+            );
+        }
+    }
+
+    /// The identifier fallbacks in the same function: an unnamed symbol reports
+    /// as 'Unnamed' and an unlabelled pin as '?', so a failure is still
+    /// attributable when the caller omitted the descriptive fields.
+    #[test]
+    fn validate_symbol_json_falls_back_to_placeholder_identifiers() {
+        use serde_json::json;
+
+        let err = McpServer::validate_symbol_json(&json!({
+            "pins": [{"y": 0, "length": 20}]
+        }))
+        .expect_err("missing x must fail");
+        assert!(err.contains("Unnamed"), "symbol name fallback: {err}");
+        assert!(err.contains("name='?'"), "pin name fallback: {err}");
+        assert!(err.contains("designator='?'"), "designator fallback: {err}");
+
+        // Label text fallback is reported the same way.
+        let err = McpServer::validate_symbol_json(&json!({
+            "name": "S", "labels": [{"y": 0, "text": "T"}]
+        }))
+        .expect_err("missing x must fail");
+        assert!(err.contains("text='T'"), "label text echoed: {err}");
+    }
+
+    /// Empty primitive arrays and absent keys are both valid - a symbol need not
+    /// carry every family. Guards against a future `is_empty()` check turning an
+    /// ordinary pins-only symbol into an error.
+    #[test]
+    fn validate_symbol_json_accepts_absent_and_empty_families() {
+        use serde_json::json;
+
+        assert!(McpServer::validate_symbol_json(&json!({"name": "BARE"})).is_ok());
+        assert!(McpServer::validate_symbol_json(&json!({
+            "name": "EMPTY",
+            "pins": [], "rectangles": [], "lines": [],
+            "arcs": [], "ellipses": [], "labels": [],
+        }))
+        .is_ok());
     }
 }

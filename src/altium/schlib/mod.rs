@@ -728,10 +728,9 @@ mod tests {
 
     #[test]
     fn bytesless_embedded_image_does_not_steal_next_payload_same_symbol() {
-        // Regression: an `embed_image` image WITHOUT carried bytes used to be
-        // skipped by the writer while the reader still consumed a payload for
-        // it, so it stole the next embedded image's bytes. The writer now
-        // emits an empty placeholder entry, keeping the ordinals aligned.
+        // An `embed_image` image WITHOUT carried bytes must still emit an
+        // empty placeholder entry: the reader consumes one payload per such
+        // image, so skipping it on write would steal the next image's bytes.
         let mut symbol = Symbol::new("BYTELESS_FIRST");
 
         let mut byteless = Image::new(0, 0, 10, 6, r"C:\img\byteless.bmp");

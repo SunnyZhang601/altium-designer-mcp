@@ -1253,11 +1253,10 @@ mod tests {
 
     #[test]
     fn extract_by_footprint_output_path_is_a_directory_even_for_one_match() {
-        // Regression (bug sweep 2026-07, deferred item): with exactly one
-        // matching model `output_path` used to be treated as a FILE path, but
-        // as a DIRECTORY for two or more — the same argument changed meaning
-        // based on data the caller does not control. It is now always a
-        // directory for extract_by_footprint.
+        // `output_path` is ALWAYS a directory here, whatever the match count.
+        // An argument whose meaning switches between file and directory based
+        // on how many models happen to match is data the caller does not
+        // control.
         let temp = test_temp_dir();
         let lib_path = temp.path().join("with_model.PcbLib");
         create_test_pcblib_with_model(&lib_path);
@@ -1308,9 +1307,9 @@ mod tests {
     // SchLib primitive-family completeness Tests
     // =========================================================================
 
-    /// Builds a symbol carrying every primitive family that a read-modify-write
-    /// used to drop (pies, images, beziers, elliptical arcs, footprint links)
-    /// plus a non-default part count.
+    /// Builds a symbol carrying every primitive family a read-modify-write is
+    /// at risk of dropping (pies, images, beziers, elliptical arcs, footprint
+    /// links) plus a non-default part count.
     fn symbol_with_every_at_risk_family() -> Symbol {
         use crate::altium::schlib::{Bezier, EllipticalArc, FootprintModel, Image, Pie};
 
@@ -1407,8 +1406,8 @@ mod tests {
     fn symbol_validation_rejects_out_of_range_pie_and_image() {
         use crate::altium::schlib::{Image, Pie};
 
-        // Pies and images used to bypass the ±32000-unit coordinate guard that
-        // every other family goes through before a write.
+        // Pies and images must go through the same ±32000-unit coordinate
+        // guard as every other family before a write.
         let mut with_pie = Symbol::new("BAD_PIE");
         with_pie.pies.push(Pie::new(100_000, 0, 5, 0.0, 90.0));
         assert!(
@@ -2002,9 +2001,9 @@ mod tests {
 
     #[test]
     fn write_schlib_authors_beziers_and_elliptical_arcs() {
-        // These two families used to be read/RMW-preserved only (write_schlib
-        // rejected the keys). Author one of each and read them back through
-        // the real writer + reader.
+        // Both families must be authorable, not merely read and preserved.
+        // Author one of each and read them back through the real writer and
+        // reader.
         let temp = test_temp_dir();
         let lib_path = temp.path().join("bez_earc.SchLib");
         let server = create_test_server(temp.path());
@@ -2055,10 +2054,9 @@ mod tests {
     #[test]
     fn export_schlib_write_schlib_round_trip_preserves_symbol_header_fields() {
         // The five symbol header fields beyond part_count are emitted by
-        // export_schlib and must survive a replay through write_schlib —
-        // previously the allow-list rejected them and the create path never
-        // parsed them, so an export -> write round-trip collapsed e.g. a
-        // two-display-mode symbol back to one.
+        // export_schlib and must survive a replay through write_schlib, or an
+        // export -> write round-trip collapses e.g. a two-display-mode symbol
+        // back to one.
         let temp = test_temp_dir();
         let src_path = temp.path().join("hdr_src.SchLib");
         let dst_path = temp.path().join("hdr_dst.SchLib");
@@ -2229,9 +2227,9 @@ mod tests {
     #[test]
     fn write_schlib_geometry_echo_covers_only_written_symbols() {
         // The geometry echo exists so the caller can verify the pins it just wrote.
-        // It previously walked the whole library, so an `append: true` sequence
-        // re-echoed every pre-existing symbol and the response grew quadratically
-        // with the number of appends. Assert it is scoped to this call's symbols.
+        // Scoped to this call's symbols: walking the whole library makes an
+        // `append: true` sequence re-echo every pre-existing symbol, growing
+        // the response quadratically with the number of appends.
         let temp = test_temp_dir();
         let lib_path = temp.path().join("geom_scope.SchLib");
         create_test_schlib(&lib_path); // seeds RESISTOR + CAPACITOR

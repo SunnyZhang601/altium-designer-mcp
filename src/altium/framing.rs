@@ -3,7 +3,7 @@
 //! Both the `PcbLib` (binary) and `SchLib` (ASCII-record) writers frame data
 //! with the same handful of length-prefixed primitives. They live here so the
 //! two formats share one implementation of each frame instead of copy-pasting
-//! the exact byte layout (which previously drifted and caused issue #68's
+//! the exact byte layout, which is easy to let drift (issue #68's
 //! "Data does not end with 0x00").
 //!
 //! The per-format record *shape* (`PcbLib`'s binary sub-blocks vs `SchLib`'s

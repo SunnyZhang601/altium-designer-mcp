@@ -3,8 +3,8 @@
 //!
 //! Both `PcbLib` (mm coordinates) and `SchLib` (rotation/angle fields) round
 //! float JSON output identically; this is the single implementation they share
-//! (it previously lived as duplicate `coord_serde`/`float_serde` modules). The
-//! rounding is unchanged, so serialized output is bit-identical.
+//! rather than duplicate `coord_serde`/`float_serde` modules. The
+//! rounding is identical for both, so serialized output matches.
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 

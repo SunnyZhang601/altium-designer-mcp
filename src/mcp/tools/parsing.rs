@@ -9,8 +9,8 @@ use crate::mcp::server::McpServer;
 
 /// Reads a JSON integer field as `i32`, returning `None` if it is missing, not
 /// an integer, or outside `i32` range — so an out-of-range value is rejected
-/// rather than silently wrapped (`as i32`), which previously let an absurd input
-/// land as a small in-range coordinate that bypassed range validation.
+/// rather than silently wrapped (`as i32`), which would let an absurd input
+/// land as a small in-range coordinate that bypasses range validation.
 fn json_i32(json: &Value, field: &str) -> Option<i32> {
     json.get(field)
         .and_then(Value::as_i64)
@@ -133,12 +133,9 @@ impl McpServer {
     /// Parses a pad shape name, shared by `write_pcblib` and `update_pad` so the
     /// same spelling is accepted everywhere.
     ///
-    /// The two tools previously carried separate `match` arms with different
-    /// vocabularies: `write_pcblib` took `rounded_rectangle`/`circle` but rejected
-    /// any capitalisation, while `update_pad` lower-cased its input yet only knew
-    /// `roundedrectangle`/`circular` — so the very spelling `write_pcblib`
-    /// documents and defaults to (`rounded_rectangle`) was rejected by
-    /// `update_pad`. This accepts the union, case-insensitively, ignoring `_`/`-`.
+    /// Both tools must accept the same spellings, or a pad written with one
+    /// cannot be updated with the other. This takes the union of the
+    /// vocabularies they document, case-insensitively, ignoring `_`/`-`.
     pub(crate) fn parse_pad_shape(s: &str) -> Option<crate::altium::pcblib::PadShape> {
         use crate::altium::pcblib::PadShape;
         match s.to_lowercase().replace(['_', '-'], "").as_str() {
@@ -758,8 +755,8 @@ impl McpServer {
     /// Parses a `ComponentBody` (3D body) from JSON. Shared by the write-tool
     /// create path (`call_write_pcblib`) and the in-place update path
     /// (`update_pcblib_component`) so neither can silently drop bodies or drift.
-    /// Every field defaults to the exact value the create handler used to
-    /// hard-code, so a from-scratch body stays byte-identical (oracle 0).
+    /// Every field defaults to the create handler's own value, so a
+    /// from-scratch body stays byte-identical (oracle 0).
     #[allow(clippy::too_many_lines)] // ComponentBody has many optional fields
     pub(crate) fn parse_component_body_json(
         body_json: &Value,
@@ -1167,7 +1164,7 @@ impl McpServer {
             .and_then(Value::as_str)
             .map_or(PinSymbol::None, parse_pin_symbol);
 
-        // Authoring fields these previously hard-coded; read each from JSON so an
+        // Authoring fields read from JSON so an
         // AI can set them, matching the names `read_schlib` exposes (serialised
         // straight from the `Pin` struct). `colour` is a BGR integer; absent keys
         // keep the from-scratch defaults (`part_and_sequence` defaults to "|&|").
@@ -1274,7 +1271,7 @@ impl McpServer {
             .and_then(Value::as_u64)
             .unwrap_or(0xB0_FF_FF) as u32;
         let filled = json.get("filled").and_then(Value::as_bool).unwrap_or(true);
-        // Style fields these previously hard-coded; read from JSON (matches the
+        // Style fields read from JSON (matches the
         // names `read_schlib` exposes). `line_style`: 0=Solid, 1=Dashed, 2=Dotted.
         let line_style = json.get("line_style").and_then(Value::as_u64).unwrap_or(0) as u8;
         let transparent = json
@@ -1328,7 +1325,7 @@ impl McpServer {
             .and_then(Value::as_u64)
             .unwrap_or(0xB0_FF_FF) as u32;
         let filled = json.get("filled").and_then(Value::as_bool).unwrap_or(true);
-        // Style fields these previously hard-coded; read from JSON (matches the
+        // Style fields read from JSON (matches the
         // names `read_schlib` exposes). `line_style`: 0=Solid, 1=Dashed, 2=Dotted.
         let line_style = json.get("line_style").and_then(Value::as_u64).unwrap_or(0) as u8;
         let transparent = json
@@ -1373,10 +1370,10 @@ impl McpServer {
             .get("color")
             .and_then(Value::as_u64)
             .unwrap_or(0x00_00_80) as u32;
-        // `line_style` previously hard-coded; read from JSON (matches the name
+        // `line_style` read from JSON (matches the name
         // `read_schlib` exposes). 0=Solid, 1=Dashed, 2=Dotted.
         let line_style = json.get("line_style").and_then(Value::as_u64).unwrap_or(0) as u8;
-        // `is_not_accessible` previously hard-coded true; read from JSON (matches
+        // `is_not_accessible` read from JSON, defaulting true (matches
         // the name `read_schlib` exposes). Altium tags every line, so default true.
         let is_not_accessible = json
             .get("is_not_accessible")
@@ -1508,7 +1505,7 @@ impl McpServer {
             .get("color")
             .and_then(Value::as_u64)
             .unwrap_or(0x00_00_80) as u32;
-        // Style + arrowhead fields these previously hard-coded; read from JSON
+        // Style + arrowhead fields read from JSON
         // (matches the names `read_schlib` exposes). `line_style`: 0=Solid,
         // 1=Dashed, 2=Dotted. `start_line_shape`/`end_line_shape` are endpoint
         // (arrowhead) shapes and `line_shape_size` their size.
@@ -1529,7 +1526,7 @@ impl McpServer {
             .get("transparent")
             .and_then(Value::as_bool)
             .unwrap_or(false);
-        // `is_not_accessible` previously unmodelled; read from JSON (matches
+        // `is_not_accessible` read from JSON (matches
         // the name `read_schlib` exposes). Altium tags every polyline, so
         // default true.
         let is_not_accessible = json
@@ -1638,10 +1635,10 @@ impl McpServer {
             .get("color")
             .and_then(Value::as_u64)
             .unwrap_or(0x00_00_80) as u32;
-        // `fill_color` previously hard-coded to 0; read from JSON (matches the name
+        // `fill_color` read from JSON, defaulting 0 (matches the name
         // `read_schlib` exposes). Maps to the `AreaColor` param; 0 = no fill.
         let fill_color = json.get("fill_color").and_then(Value::as_u64).unwrap_or(0) as u32;
-        // `is_not_accessible` previously hard-coded true; read from JSON (matches
+        // `is_not_accessible` read from JSON, defaulting true (matches
         // the name `read_schlib` exposes). Altium tags every arc, so default true.
         let is_not_accessible = json
             .get("is_not_accessible")
@@ -1945,13 +1942,13 @@ impl McpServer {
             .and_then(Value::as_u64)
             .unwrap_or(0xB0_FF_FF) as u32;
         let filled = json.get("filled").and_then(Value::as_bool).unwrap_or(true);
-        // `transparent` previously hard-coded; read from JSON (matches the name
+        // `transparent` read from JSON (matches the name
         // `read_schlib` exposes). The ellipse struct carries no `line_style`.
         let transparent = json
             .get("transparent")
             .and_then(Value::as_bool)
             .unwrap_or(false);
-        // `is_not_accessible` previously unmodelled; read from JSON (matches
+        // `is_not_accessible` read from JSON (matches
         // the name `read_schlib` exposes). Altium tags every ellipse, so
         // default true.
         let is_not_accessible = json
@@ -2417,8 +2414,8 @@ mod tests {
 
     #[test]
     fn parse_text_reads_authoring_fields() {
-        // PR-10: kind/stroke_font/italic/bold/mirror/font_name/justification were
-        // previously hard-coded; each must now flow from JSON onto the struct.
+        // kind/stroke_font/italic/bold/mirror/font_name/justification must each
+        // flow from JSON onto the struct.
         use crate::altium::pcblib::{StrokeFont, TextJustification, TextKind};
         let text = McpServer::parse_text(&json!({
             "x": 0.0, "y": 0.0, "text": "REF", "height": 0.5, "layer": "Top Overlay",
@@ -2467,9 +2464,9 @@ mod tests {
         assert_eq!(text.justification, TextJustification::BottomLeft);
     }
 
-    // --- PR-12/PR-13: SchLib write-path authoring fields. These were previously
-    // hard-coded in the parsers, so the structs round-tripped them on read but no
-    // JSON value reached them on write. Each test sets a non-default value and
+    // --- SchLib write-path authoring fields. Each must reach the struct from
+    // JSON on write, not just round-trip on read. Each test sets a non-default
+
     // asserts it lands on the struct (the field names match the read DTO).
 
     #[test]
@@ -2654,8 +2651,8 @@ mod tests {
     }
 
     // --- PR-R1: round-trip preservation of a primitive's `unique_id` (identity
-    // GUID). The write-tool parsers previously hard-coded `unique_id: None`,
-    // dropping whatever the reader surfaced; these lock the accept-fix. Absent
+    // GUID). An absent `unique_id` MUST stay `None` (the writer then
+
     // `unique_id` MUST stay `None` (the writer then auto-generates, keeping
     // from-scratch output byte-identical).
 
@@ -2708,8 +2705,8 @@ mod tests {
     #[test]
     fn pad_shape_vocabulary_is_shared_and_lenient() {
         use crate::altium::pcblib::PadShape;
-        // Both tools now resolve the same spellings. The pairs below span the two
-        // previously-divergent vocabularies: `rounded_rectangle`/`circle` came from
+        // Both tools resolve the same spellings. The pairs below span the two
+        // documented vocabularies: `rounded_rectangle`/`circle` from
         // write_pcblib, `roundedrectangle`/`circular`/`rect` from update_pad.
         for (input, want) in [
             ("rectangle", PadShape::Rectangle),

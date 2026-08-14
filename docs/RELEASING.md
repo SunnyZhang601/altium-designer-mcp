@@ -21,6 +21,18 @@ only after a human has looked at the artefacts**.
 
 The final publish is a manual click. Nothing in CI makes a release public.
 
+### What ships in an archive
+
+The binary, `example-config.json`, `LICENCE`, `CHANGELOG.md`, and `docs/`
+(`CLAUDE_CODE_GUIDE`, `ANTIGRAVITY_GUIDE`, `AGENT_GUIDE`, `TOOLS`) — plus a
+**bundle-specific `README.md` generated from
+[`.github/release-assets/README.md`](../.github/release-assets/README.md)**, with
+`@VERSION@` substituted for the tag. That file is what someone sees first after
+unzipping, so it covers installing the binary, writing a config, and wiring the
+server into Claude Code, Claude Desktop, Antigravity, Cursor and VS Code — not
+the repository's own contributor-facing README. Edit it when the setup steps
+change; the `build` job fails if any expected file is missing from an archive.
+
 ## Dry run — do this first
 
 The whole pipeline can be exercised without a tag:
@@ -67,11 +79,15 @@ Two notes on dry runs:
 5. **Dry-run once more** on that exact commit (see above), now that the changelog
    heading exists. This is the last free rehearsal.
 
-6. **Tag and push.**
+6. **Tag and push — the tag must be signed.** A repository ruleset covers all
+   tags with `required_signatures`, and restricts creation, update and deletion
+   to organisation admins. An unsigned tag is rejected at push time, so configure
+   commit signing first (`git config --global user.signingkey …`, or
+   `gpg.format=ssh` with an SSH key) and use `-s`:
 
    ```bash
    git switch main && git pull
-   git tag -a v0.1.0 -m "v0.1.0"
+   git tag -s v0.1.0 -m "v0.1.0"
    git push origin v0.1.0
    ```
 
@@ -96,6 +112,18 @@ Two notes on dry runs:
    ```
 
 10. **Announce** — including a note on the tracking issue if one is open.
+
+## Who can release
+
+A repository ruleset (`tags`, active, covering `~ALL` tags) restricts tag
+**creation, update and deletion**, with organisation admins as the only bypass
+actor, and requires signatures. Two consequences worth knowing:
+
+- Only an organisation admin can start a release, since the workflow triggers on
+  a pushed tag and `GITHUB_TOKEN` cannot create one. A compromised contributor
+  account cannot ship a version.
+- Published tags are immutable for everyone else — they cannot be force-moved or
+  deleted to retarget a release. Deleting a mistaken tag needs the admin bypass.
 
 ## Supply chain
 
@@ -122,6 +150,8 @@ draft than after the release is public.
 ## If something is wrong
 
 - **Before publishing** — delete the draft, fix, and re-tag. Nothing was public.
+  Deleting the remote tag requires the organisation-admin bypass on the tag
+  ruleset; if the delete is refused, that is the ruleset working as intended.
 
   ```bash
   gh release delete v0.1.0 --yes

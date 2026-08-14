@@ -243,12 +243,17 @@ jobs:
               if: runner.os != 'Windows'
               shell: bash
               run: |
-                mkdir -p dist
-                cp target/${{ matrix.target }}/release/${{ matrix.binary }} dist/
-                cp README.md LICENCE CHANGELOG.md dist/
-                cp config/example-config.json dist/
                 mkdir -p dist/docs
+                cp target/${{ matrix.target }}/release/${{ matrix.binary }} dist/
+                cp LICENCE CHANGELOG.md dist/
+                cp config/example-config.json dist/
                 cp docs/AGENT_GUIDE.md docs/TOOLS.md dist/docs/
+                cp docs/CLAUDE_CODE_GUIDE.md docs/ANTIGRAVITY_GUIDE.md dist/docs/
+
+                # A bundle-specific README rather than the repository's own:
+                # someone unpacking a binary wants install and verification
+                # steps, not the contributor-facing project page.
+                sed "s/@VERSION@/${{ needs.validate.outputs.tag }}/g" .github/release-assets/README.md > dist/README.md
                 cd dist
                 tar -czvf ../${{ matrix.artifact }}.tar.gz *
 
@@ -264,7 +269,8 @@ jobs:
                 mkdir -p verify && tar -xzf ${{ matrix.artifact }}.tar.gz -C verify
 
                 for f in ${{ matrix.binary }} README.md LICENCE CHANGELOG.md \
-                         example-config.json docs/AGENT_GUIDE.md docs/TOOLS.md; do
+                         example-config.json docs/AGENT_GUIDE.md docs/TOOLS.md \
+                         docs/CLAUDE_CODE_GUIDE.md docs/ANTIGRAVITY_GUIDE.md; do
                     if [[ ! -e "verify/$f" ]]; then
                         echo "Error: $f missing from ${{ matrix.artifact }}"
                         exit 1
@@ -286,12 +292,17 @@ jobs:
               if: runner.os == 'Windows'
               shell: bash
               run: |
-                mkdir -p dist
-                cp target/${{ matrix.target }}/release/${{ matrix.binary }} dist/
-                cp README.md LICENCE CHANGELOG.md dist/
-                cp config/example-config.json dist/
                 mkdir -p dist/docs
+                cp target/${{ matrix.target }}/release/${{ matrix.binary }} dist/
+                cp LICENCE CHANGELOG.md dist/
+                cp config/example-config.json dist/
                 cp docs/AGENT_GUIDE.md docs/TOOLS.md dist/docs/
+                cp docs/CLAUDE_CODE_GUIDE.md docs/ANTIGRAVITY_GUIDE.md dist/docs/
+
+                # A bundle-specific README rather than the repository's own:
+                # someone unpacking a binary wants install and verification
+                # steps, not the contributor-facing project page.
+                sed "s/@VERSION@/${{ needs.validate.outputs.tag }}/g" .github/release-assets/README.md > dist/README.md
                 cd dist
                 7z a -tzip ../${{ matrix.artifact }}.zip *
 
@@ -304,7 +315,8 @@ jobs:
                 mkdir -p verify && 7z x -overify ${{ matrix.artifact }}.zip >/dev/null
 
                 for f in ${{ matrix.binary }} README.md LICENCE CHANGELOG.md \
-                         example-config.json docs/AGENT_GUIDE.md docs/TOOLS.md; do
+                         example-config.json docs/AGENT_GUIDE.md docs/TOOLS.md \
+                         docs/CLAUDE_CODE_GUIDE.md docs/ANTIGRAVITY_GUIDE.md; do
                     if [[ ! -e "verify/$f" ]]; then
                         echo "Error: $f missing from ${{ matrix.artifact }}"
                         exit 1

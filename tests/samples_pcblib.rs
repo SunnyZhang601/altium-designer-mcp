@@ -45,7 +45,7 @@ fn samples_pcblib_pad_shapes() {
     // thermal-relief/power-plane setters crash AD24's scripting engine on a fresh
     // library pad in every sequence tried (batch 4b final bisect); see
     // GenerateSamples.pas.
-    assert_eq!(lib.len(), 17, "expected exactly seventeen footprints");
+    assert_eq!(lib.len(), 18, "expected exactly eighteen footprints");
     let names = lib.names();
     for expected in [
         "PAD_SHAPES",
@@ -63,6 +63,7 @@ fn samples_pcblib_pad_shapes() {
         "TEXT_STYLE",
         "REGION_CUTOUT",
         "TEXT_SPECIAL",
+        "TEXT_LONG",
         "MULTILAYER",
         "EMBSTEP",
     ] {
@@ -686,6 +687,41 @@ fn samples_pcblib_text_win1252() {
 }
 
 #[test]
+fn samples_pcblib_text_long_comes_from_wide_strings() {
+    // The out-of-line text path, against a real Altium file (#314, #309).
+    //
+    // A Text record's block 1 is a Pascal SHORT string, so Altium truncates it
+    // at 255 bytes and writes the full text to /{component}/WideStrings. This
+    // footprint's first string is 264 characters, which is what makes that path
+    // observable: every other sample text is short enough for Altium to
+    // duplicate inline, where block 1 alone is sufficient.
+    //
+    // The short string alongside it is the last entry in the stream, so it
+    // covers the null terminator that ends the final value.
+    let lib = PcbLib::open(sample("footprints.PcbLib")).expect("failed to open footprints.PcbLib");
+
+    let footprint = lib.get("TEXT_LONG").expect("footprint TEXT_LONG not found");
+    assert_eq!(footprint.text.len(), 2, "TEXT_LONG has 2 strings");
+
+    let long = footprint
+        .text
+        .iter()
+        .find(|t| t.text.len() > 255)
+        .expect("the long string must survive block 1's 255-byte limit");
+    let expected: String = "A".repeat(260) + "_END";
+    assert_eq!(long.text.len(), 264, "264 characters, not truncated to 255");
+    assert_eq!(long.text, expected, "the full authored text, verbatim");
+
+    // Last entry in the stream, so its final character sits against the
+    // terminator.
+    assert!(
+        footprint.text.iter().any(|t| t.text == "SHORT"),
+        "the final entry keeps its last character: {:?}",
+        footprint.text.iter().map(|t| &t.text).collect::<Vec<_>>()
+    );
+}
+
+#[test]
 fn samples_pcblib_body3d() {
     let lib = PcbLib::open(sample("footprints.PcbLib")).expect("failed to open footprints.PcbLib");
 
@@ -934,7 +970,7 @@ fn samples_pcblib_embstep() {
     let body = &fp.component_bodies[0];
 
     assert_eq!(
-        body.model_id, "{A0448C65-C10D-4882-92F6-D6E5A5C55B3D}",
+        body.model_id, "{D4BDEABF-2E68-4209-B79B-0953B6FBECEF}",
         "the body references the embedded model's GUID"
     );
     assert_eq!(body.model_name, "minimal.step", "MODEL.NAME");

@@ -317,9 +317,19 @@ pub fn encode_data_stream(footprint: &Footprint) -> crate::altium::error::Altium
         encode_track(&mut data, track);
     }
 
+    // Counts only the texts `encode_component_wide_strings` emits an entry for,
+    // so the index stamped in each record addresses the right one.
+    let mut wide_index: u32 = 0;
     for text in &footprint.text {
         data.push(0x05); // Text record type
-        encode_text(&mut data, text)?;
+        let index = if text.text.starts_with('.') || text.text.is_empty() {
+            None
+        } else {
+            let current = wide_index;
+            wide_index += 1;
+            Some(current)
+        };
+        encode_text(&mut data, text, index)?;
     }
 
     for region in &footprint.regions {
@@ -1047,9 +1057,13 @@ fn encode_arc(data: &mut Vec<u8>, arc: &Arc) {
 /// Text has 2 blocks:
 /// - Block 0: Geometry/metadata (layer, position, height, rotation, font info)
 /// - Block 1: Text content (length-prefixed string)
-fn encode_text(data: &mut Vec<u8>, text: &Text) -> crate::altium::error::AltiumResult<()> {
+fn encode_text(
+    data: &mut Vec<u8>,
+    text: &Text,
+    wide_index: Option<u32>,
+) -> crate::altium::error::AltiumResult<()> {
     // Block 0: Geometry
-    let geometry = encode_text_geometry(text);
+    let geometry = encode_text_geometry(text, wide_index);
     write_block(data, &geometry);
 
     // Block 1: Text content
@@ -1089,8 +1103,17 @@ const TEXT_SR1_TEMPLATE: [u8; 252] = [
 /// varying field is written at its fixed offset. Real Altium text records are
 /// always this fixed 252-byte block — the previous ~80-byte guessed layout put
 /// the kind, stroke width, font id and v7 layer id at the wrong places.
-pub fn encode_text_geometry(text: &Text) -> Vec<u8> {
+/// `wide_index` is this text's `/WideStrings` entry number, stamped as an `i32`
+/// at offset 115 — the field a reader uses to find the primitive's out-of-line
+/// content. It must match the enumeration in
+/// [`encode_component_wide_strings`]. `None` writes Altium's `-1`, meaning the
+/// text has no entry (special or empty).
+pub fn encode_text_geometry(text: &Text, wide_index: Option<u32>) -> Vec<u8> {
     let mut block = TEXT_SR1_TEMPLATE;
+
+    // i32 at 115: the entry number, or -1 for "no entry".
+    let index_field: i32 = wide_index.and_then(|i| i32::try_from(i).ok()).unwrap_or(-1);
+    block[115..119].copy_from_slice(&index_field.to_le_bytes());
 
     // Common header (offsets 0-12): layer + Altium flag word + 0xFF net/poly/comp.
     let mut header = Vec::with_capacity(13);
@@ -2070,7 +2093,7 @@ mod tests {
             component_index: -1,
             unique_id: None,
         };
-        let geom = encode_text_geometry(&text);
+        let geom = encode_text_geometry(&text, None);
         assert_eq!(geom[40], 0x01, "IsComment @40");
         assert_eq!(geom[41], 0x01, "IsDesignator @41");
     }
@@ -2153,7 +2176,7 @@ mod tests {
             component_index: -1,
             unique_id: None,
         };
-        let geom = encode_text_geometry(&text);
+        let geom = encode_text_geometry(&text, None);
         assert_eq!(
             &geom[3..9],
             &[0xFF; 6],
@@ -2217,7 +2240,7 @@ mod tests {
             component_index: -1,
             unique_id: None,
         };
-        let geom = encode_text_geometry(&text);
+        let geom = encode_text_geometry(&text, None);
         assert_eq!(geom[110], 0x01, "IsInverted @110");
         assert_eq!(
             &geom[111..115],

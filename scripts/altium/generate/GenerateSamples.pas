@@ -499,15 +499,17 @@ end;
 { ---- PcbLib authoring -------------------------------------------------------
 
   Footprints: PAD_SHAPES, PAD_HOLES, VIAS, TRACKS, ARCS, REGIONS, FILLS, TEXT_STROKE,
-  TEXT_WIN1252, TEXT_UNICODE. Each new footprint is wrapped in try/except so one failing primitive
+  TEXT_WIN1252, TEXT_LONG. Each new footprint is wrapped in try/except so one failing primitive
   doesn't abort the whole script (a missing footprint then shows up as a failed read
   test). Blind/buried vias, stacks and 3D bodies follow in later batches. }
 procedure GeneratePcbLib;
 var
-    Lib   : IPCB_Library;
-    DefFP : IPCB_LibComponent;
-    Comp  : IPCB_LibComponent;
-    Doc   : IServerDocument;
+    Lib      : IPCB_Library;
+    DefFP    : IPCB_LibComponent;
+    Comp     : IPCB_LibComponent;
+    Doc      : IServerDocument;
+    LongText : String;
+    I        : Integer;
 begin
     // CreateNewDocumentFromDocumentKind creates + focuses a blank doc and returns its
     // IServerDocument (Client.OpenNewDocumentOfKind, used in the v0, does not exist).
@@ -655,27 +657,29 @@ begin
     except
     end;
 
-    // TEXT_UNICODE: characters that Windows-1252 CANNOT represent, so Altium has to fall
-    // back on the out-of-line /{component}/WideStrings stream for the real content. Every
-    // text in the samples so far is Win1252-representable and Altium duplicates it inline
-    // in block 1, which means the reader's WideStrings path has never been proven against
-    // a real Altium file (see issue #314).
+    // TEXT_LONG: a text longer than 255 characters. Block 1 of a Text record is a Pascal
+    // SHORT string, so anything past 255 bytes cannot be stored inline and Altium has to
+    // use the out-of-line /{component}/WideStrings stream. Every other text in these
+    // samples is short and Win1252-representable, and Altium duplicates those inline, so
+    // the reader's WideStrings path has never been proven against a real Altium file
+    // (issue #314). 260 'A's plus a marker tail makes the boundary unambiguous.
     //
-    // Built with Chr() for the same reason as TEXT_WIN1252 — a literal high codepoint was
-    // not interpreted. Chr(937)=Greek capital omega (the ohm sign on a resistor legend),
-    // Chr(956)=Greek small mu, Chr(1050)/Chr(1054)/Chr(1053) = Cyrillic KON, and
-    // Chr(20013)=CJK 'zhong'. If AD24 rejects any of these the try/except leaves the rest
-    // of the library intact; record the negative here and in docs/FIXTURE_COVERAGE.md
-    // rather than retrying blindly.
+    // DOCUMENTED NEGATIVE (do not retry): authoring genuine Unicode via Chr(N) for N > 255
+    // does NOT work in AD24 DelphiScript — the codepoint is truncated modulo 256. A first
+    // attempt with Chr(937)/Chr(956)/Chr(1050)/Chr(20013) (Greek omega and mu, Cyrillic,
+    // CJK) produced bytes 169, 188, 26 and 45 instead: '(c)', '1/4' and two control
+    // characters. Non-Win1252 text is therefore not authorable by script here.
     try
         Comp := PCBServer.CreatePCBLibComp;
-        Comp.Name := 'TEXT_UNICODE';
+        Comp.Name := 'TEXT_LONG';
         Lib.RegisterComponent(Comp);
         PCBServer.PreProcess;
-        AddText(Comp, 0,   0, '100' + Chr(937),                  50, 0, eTopOverlay);
-        AddText(Comp, 0, 100, '4' + Chr(956) + '7',              50, 0, eTopOverlay);
-        AddText(Comp, 0, 200, Chr(1050) + Chr(1054) + Chr(1053), 50, 0, eTopOverlay);
-        AddText(Comp, 0, 300, Chr(20013),                        50, 0, eTopOverlay);
+        LongText := '';
+        for I := 1 to 260 do
+            LongText := LongText + 'A';
+        AddText(Comp, 0, 0, LongText + '_END', 50, 0, eTopOverlay);
+        // A short one alongside it, so the component exercises both paths at once.
+        AddText(Comp, 0, 100, 'SHORT', 50, 0, eTopOverlay);
         PCBServer.PostProcess;
     except
     end;

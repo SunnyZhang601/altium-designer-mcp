@@ -1118,9 +1118,34 @@ fn samples_schlib_dispmode() {
 // system-parameter record must match the golden token-for-token.
 // ---------------------------------------------------------------------------
 
+/// Replaces each `UniqueID` value with the `<UID>` placeholder.
+///
+/// Altium mints fresh random ids every time the samples are authored, so the
+/// literal values cannot be asserted without the expectations breaking on every
+/// regeneration. The shape still is: the key must be present, in the same
+/// position, with exactly eight uppercase letters.
+fn normalise_unique_ids(record: &str) -> String {
+    let mut out = String::with_capacity(record.len());
+    let mut rest = record;
+    while let Some(at) = rest.find("UniqueID=") {
+        let (before, tail) = rest.split_at(at + "UniqueID=".len());
+        out.push_str(before);
+        let id: String = tail.chars().take_while(char::is_ascii_uppercase).collect();
+        assert_eq!(
+            id.len(),
+            8,
+            "UniqueID must be 8 uppercase letters, got {id:?} in {record:?}"
+        );
+        out.push_str("<UID>");
+        rest = &tail[id.len()..];
+    }
+    out.push_str(rest);
+    out
+}
+
 /// Re-encodes `name` from the golden and returns its records as text (the
 /// trailing NUL trimmed; binary pin records surface as `"<PIN>"`), excluding
-/// the RECORD=1 component header.
+/// the RECORD=1 component header, with `UniqueID` values normalised.
 fn reencoded_records(lib: &SchLib, name: &str) -> Vec<String> {
     let symbol = lib.get(name).unwrap_or_else(|| panic!("{name} not found"));
     let data = altium_designer_mcp::altium::schlib::writer::encode_data_stream(symbol)
@@ -1143,7 +1168,7 @@ fn reencoded_records(lib: &SchLib, name: &str) -> Vec<String> {
         off += 4 + len;
     }
     records.remove(0); // RECORD=1 header (see doc comment)
-    records
+    records.iter().map(|r| normalise_unique_ids(r)).collect()
 }
 
 #[test]
@@ -1155,10 +1180,10 @@ fn samples_schlib_rmw_dispmode_matches_golden_records() {
     assert_eq!(
         reencoded_records(&lib, "DISPMODE"),
         [
-            "|RECORD=14|IsNotAccesible=T|OwnerPartId=1|Location.X=-5|Location.Y=-2|Location.Y_Frac=-50000|Corner.X=5|Corner.Y=2|Corner.Y_Frac=50000|LineWidth=1|AreaColor=11599871|IsSolid=T|UniqueID=ODNTDFPU",
-            "|RECORD=14|IsNotAccesible=T|IndexInSheet=1|OwnerPartId=1|OwnerPartDisplayMode=1|Location.X=-6|Location.Y=-3|Corner.X=6|Corner.Y=3|LineWidth=1|AreaColor=11599871|IsSolid=T|UniqueID=IELVGVKJ",
-            "|RECORD=34|IndexInSheet=-1|OwnerPartId=-1|Location.X=-5|Location.Y=5|Color=8388608|FontID=1|Text=U?|Name=Designator|ReadOnlyState=1|UniqueID=SMDBFRGL",
-            "|RECORD=41|IndexInSheet=-1|OwnerPartId=-1|Location.X=-5|Location.Y=-15|Color=8388608|FontID=1|Text=*|Name=Comment|UniqueID=SBJHPTML",
+            "|RECORD=14|IsNotAccesible=T|OwnerPartId=1|Location.X=-5|Location.Y=-2|Location.Y_Frac=-50000|Corner.X=5|Corner.Y=2|Corner.Y_Frac=50000|LineWidth=1|AreaColor=11599871|IsSolid=T|UniqueID=<UID>",
+            "|RECORD=14|IsNotAccesible=T|IndexInSheet=1|OwnerPartId=1|OwnerPartDisplayMode=1|Location.X=-6|Location.Y=-3|Corner.X=6|Corner.Y=3|LineWidth=1|AreaColor=11599871|IsSolid=T|UniqueID=<UID>",
+            "|RECORD=34|IndexInSheet=-1|OwnerPartId=-1|Location.X=-5|Location.Y=5|Color=8388608|FontID=1|Text=U?|Name=Designator|ReadOnlyState=1|UniqueID=<UID>",
+            "|RECORD=41|IndexInSheet=-1|OwnerPartId=-1|Location.X=-5|Location.Y=-15|Color=8388608|FontID=1|Text=*|Name=Comment|UniqueID=<UID>",
             "|RECORD=44",
         ]
     );
@@ -1172,11 +1197,11 @@ fn samples_schlib_rmw_lines_matches_golden_records() {
     assert_eq!(
         reencoded_records(&lib, "LINES"),
         [
-            "|RECORD=13|IsNotAccesible=T|OwnerPartId=1|Corner.X=10|LineWidth=1|UniqueID=FCYPDKZN",
-            "|RECORD=13|IsNotAccesible=T|IndexInSheet=1|OwnerPartId=1|Corner.Y=10|LineWidth=1|UniqueID=JMQVUFCD",
-            "|RECORD=13|IsNotAccesible=T|IndexInSheet=2|OwnerPartId=1|Corner.X=10|Corner.Y=10|LineWidth=1|UniqueID=DYQARGHF",
-            "|RECORD=34|IndexInSheet=-1|OwnerPartId=-1|Location.X=-5|Location.Y=5|Color=8388608|FontID=1|Text=U?|Name=Designator|ReadOnlyState=1|UniqueID=ASDZUIEM",
-            "|RECORD=41|IndexInSheet=-1|OwnerPartId=-1|Location.X=-5|Location.Y=-15|Color=8388608|FontID=1|Text=*|Name=Comment|UniqueID=GYQMZDTX",
+            "|RECORD=13|IsNotAccesible=T|OwnerPartId=1|Corner.X=10|LineWidth=1|UniqueID=<UID>",
+            "|RECORD=13|IsNotAccesible=T|IndexInSheet=1|OwnerPartId=1|Corner.Y=10|LineWidth=1|UniqueID=<UID>",
+            "|RECORD=13|IsNotAccesible=T|IndexInSheet=2|OwnerPartId=1|Corner.X=10|Corner.Y=10|LineWidth=1|UniqueID=<UID>",
+            "|RECORD=34|IndexInSheet=-1|OwnerPartId=-1|Location.X=-5|Location.Y=5|Color=8388608|FontID=1|Text=U?|Name=Designator|ReadOnlyState=1|UniqueID=<UID>",
+            "|RECORD=41|IndexInSheet=-1|OwnerPartId=-1|Location.X=-5|Location.Y=-15|Color=8388608|FontID=1|Text=*|Name=Comment|UniqueID=<UID>",
             "|RECORD=44",
         ]
     );
@@ -1191,20 +1216,20 @@ fn samples_schlib_rmw_arcs_and_fracshapes_match_golden_records() {
     assert_eq!(
         reencoded_records(&lib, "ARCS"),
         [
-            "|RECORD=12|IsNotAccesible=T|OwnerPartId=1|Radius=5|LineWidth=1|EndAngle=360.000|UniqueID=WNJAMTGY",
-            "|RECORD=12|IsNotAccesible=T|IndexInSheet=1|OwnerPartId=1|Location.Y=-20|Radius=5|LineWidth=1|EndAngle=90.000|UniqueID=USLKBUSP",
-            "|RECORD=34|IndexInSheet=-1|OwnerPartId=-1|Location.X=-5|Location.Y=5|Color=8388608|FontID=1|Text=U?|Name=Designator|ReadOnlyState=1|UniqueID=LTWNMYJP",
-            "|RECORD=41|IndexInSheet=-1|OwnerPartId=-1|Location.X=-5|Location.Y=-15|Color=8388608|FontID=1|Text=*|Name=Comment|UniqueID=SQPHRIRA",
+            "|RECORD=12|IsNotAccesible=T|OwnerPartId=1|Radius=5|LineWidth=1|EndAngle=360.000|UniqueID=<UID>",
+            "|RECORD=12|IsNotAccesible=T|IndexInSheet=1|OwnerPartId=1|Location.Y=-20|Radius=5|LineWidth=1|EndAngle=90.000|UniqueID=<UID>",
+            "|RECORD=34|IndexInSheet=-1|OwnerPartId=-1|Location.X=-5|Location.Y=5|Color=8388608|FontID=1|Text=U?|Name=Designator|ReadOnlyState=1|UniqueID=<UID>",
+            "|RECORD=41|IndexInSheet=-1|OwnerPartId=-1|Location.X=-5|Location.Y=-15|Color=8388608|FontID=1|Text=*|Name=Comment|UniqueID=<UID>",
             "|RECORD=44",
         ]
     );
     assert_eq!(
         reencoded_records(&lib, "FRACSHAPES"),
         [
-            "|RECORD=14|IsNotAccesible=T|OwnerPartId=1|Location.X=-5|Location.X_Frac=-45000|Location.Y=-2|Location.Y_Frac=-45000|Corner.X=5|Corner.X_Frac=55000|Corner.Y=2|Corner.Y_Frac=55000|LineWidth=1|AreaColor=11599871|IsSolid=T|UniqueID=VKRDSRLW",
-            "|RECORD=12|IsNotAccesible=T|IndexInSheet=1|OwnerPartId=1|Location.X_Frac=5000|Location.Y_Frac=5000|Radius=4|Radius_Frac=5000|LineWidth=1|EndAngle=270.000|UniqueID=JAISQJHX",
-            "|RECORD=34|IndexInSheet=-1|OwnerPartId=-1|Location.X=-5|Location.Y=5|Color=8388608|FontID=1|Text=U?|Name=Designator|ReadOnlyState=1|UniqueID=DAAXULYF",
-            "|RECORD=41|IndexInSheet=-1|OwnerPartId=-1|Location.X=-5|Location.Y=-15|Color=8388608|FontID=1|Text=*|Name=Comment|UniqueID=DPBAJSZG",
+            "|RECORD=14|IsNotAccesible=T|OwnerPartId=1|Location.X=-5|Location.X_Frac=-45000|Location.Y=-2|Location.Y_Frac=-45000|Corner.X=5|Corner.X_Frac=55000|Corner.Y=2|Corner.Y_Frac=55000|LineWidth=1|AreaColor=11599871|IsSolid=T|UniqueID=<UID>",
+            "|RECORD=12|IsNotAccesible=T|IndexInSheet=1|OwnerPartId=1|Location.X_Frac=5000|Location.Y_Frac=5000|Radius=4|Radius_Frac=5000|LineWidth=1|EndAngle=270.000|UniqueID=<UID>",
+            "|RECORD=34|IndexInSheet=-1|OwnerPartId=-1|Location.X=-5|Location.Y=5|Color=8388608|FontID=1|Text=U?|Name=Designator|ReadOnlyState=1|UniqueID=<UID>",
+            "|RECORD=41|IndexInSheet=-1|OwnerPartId=-1|Location.X=-5|Location.Y=-15|Color=8388608|FontID=1|Text=*|Name=Comment|UniqueID=<UID>",
             "|RECORD=44",
         ]
     );
@@ -1220,24 +1245,24 @@ fn samples_schlib_rmw_justify_and_params_match_golden_records() {
     assert_eq!(
         reencoded_records(&lib, "JUSTIFY"),
         [
-            "|RECORD=4|IsNotAccesible=T|OwnerPartId=1|Location.X=-10|Location.Y=10|FontID=1|Text=BL|UniqueID=ACYBKFVW",
-            "|RECORD=4|IsNotAccesible=T|IndexInSheet=1|OwnerPartId=1|Location.X=-10|Location.Y=5|Justification=4|FontID=1|Text=CC|UniqueID=YTFHWNMI",
-            "|RECORD=4|IsNotAccesible=T|IndexInSheet=2|OwnerPartId=1|Location.X=-10|Justification=8|FontID=1|Text=TR|UniqueID=CJCQRBLJ",
-            "|RECORD=4|IsNotAccesible=T|IndexInSheet=3|OwnerPartId=1|Location.X=-10|Location.Y=-5|Orientation=1|FontID=1|Text=ROT90|UniqueID=IDQKERMA",
-            "|RECORD=41|IndexInSheet=4|OwnerPartId=1|Location.X=10|Location.Y=10|Justification=8|FontID=1|Text=1k|Name=Value|UniqueID=NEHWQTTU",
-            "|RECORD=41|IndexInSheet=5|OwnerPartId=1|Location.X=10|Location.Y=5|Orientation=1|Justification=4|FontID=1|IsHidden=T|Text=5%|Name=Tol|UniqueID=FZATTLUK",
-            "|RECORD=34|IndexInSheet=-1|OwnerPartId=-1|Location.X=-5|Location.Y=5|Color=8388608|FontID=1|Text=U?|Name=Designator|ReadOnlyState=1|UniqueID=ABWZNYSQ",
-            "|RECORD=41|IndexInSheet=-1|OwnerPartId=-1|Location.X=-5|Location.Y=-15|Color=8388608|FontID=1|Text=*|Name=Comment|UniqueID=YZOSGIDV",
+            "|RECORD=4|IsNotAccesible=T|OwnerPartId=1|Location.X=-10|Location.Y=10|FontID=1|Text=BL|UniqueID=<UID>",
+            "|RECORD=4|IsNotAccesible=T|IndexInSheet=1|OwnerPartId=1|Location.X=-10|Location.Y=5|Justification=4|FontID=1|Text=CC|UniqueID=<UID>",
+            "|RECORD=4|IsNotAccesible=T|IndexInSheet=2|OwnerPartId=1|Location.X=-10|Justification=8|FontID=1|Text=TR|UniqueID=<UID>",
+            "|RECORD=4|IsNotAccesible=T|IndexInSheet=3|OwnerPartId=1|Location.X=-10|Location.Y=-5|Orientation=1|FontID=1|Text=ROT90|UniqueID=<UID>",
+            "|RECORD=41|IndexInSheet=4|OwnerPartId=1|Location.X=10|Location.Y=10|Justification=8|FontID=1|Text=1k|Name=Value|UniqueID=<UID>",
+            "|RECORD=41|IndexInSheet=5|OwnerPartId=1|Location.X=10|Location.Y=5|Orientation=1|Justification=4|FontID=1|IsHidden=T|Text=5%|Name=Tol|UniqueID=<UID>",
+            "|RECORD=34|IndexInSheet=-1|OwnerPartId=-1|Location.X=-5|Location.Y=5|Color=8388608|FontID=1|Text=U?|Name=Designator|ReadOnlyState=1|UniqueID=<UID>",
+            "|RECORD=41|IndexInSheet=-1|OwnerPartId=-1|Location.X=-5|Location.Y=-15|Color=8388608|FontID=1|Text=*|Name=Comment|UniqueID=<UID>",
             "|RECORD=44",
         ]
     );
     assert_eq!(
         reencoded_records(&lib, "PARAMS"),
         [
-            "|RECORD=41|OwnerPartId=1|Location.X=5|Location.Y=40|FontID=1|Text=10k|Name=Value|UniqueID=GADODMNF",
-            "|RECORD=41|IndexInSheet=1|OwnerPartId=1|Location.X=5|Location.Y=45|FontID=1|IsHidden=T|Text=100nF|Name=Comment|UniqueID=NHWFFDTP",
-            "|RECORD=34|IndexInSheet=-1|OwnerPartId=-1|Location.X=-5|Location.Y=5|Color=8388608|FontID=1|Text=U?|Name=Designator|ReadOnlyState=1|UniqueID=XFLFRTGP",
-            "|RECORD=41|IndexInSheet=-1|OwnerPartId=-1|Location.X=-5|Location.Y=-15|Color=8388608|FontID=1|Text=*|Name=Comment|UniqueID=SXCVEESM",
+            "|RECORD=41|OwnerPartId=1|Location.X=5|Location.Y=40|FontID=1|Text=10k|Name=Value|UniqueID=<UID>",
+            "|RECORD=41|IndexInSheet=1|OwnerPartId=1|Location.X=5|Location.Y=45|FontID=1|IsHidden=T|Text=100nF|Name=Comment|UniqueID=<UID>",
+            "|RECORD=34|IndexInSheet=-1|OwnerPartId=-1|Location.X=-5|Location.Y=5|Color=8388608|FontID=1|Text=U?|Name=Designator|ReadOnlyState=1|UniqueID=<UID>",
+            "|RECORD=41|IndexInSheet=-1|OwnerPartId=-1|Location.X=-5|Location.Y=-15|Color=8388608|FontID=1|Text=*|Name=Comment|UniqueID=<UID>",
             "|RECORD=44",
         ]
     );
@@ -1252,37 +1277,37 @@ fn samples_schlib_rmw_polyline_ellipse_bezier_textframe_match_golden_records() {
     assert_eq!(
         reencoded_records(&lib, "POLYLINES"),
         [
-            "|RECORD=6|IsNotAccesible=T|OwnerPartId=1|LineWidth=1|LocationCount=3|X2=10|Y2=5|Y3=10|UniqueID=IEYJUDXC",
-            "|RECORD=34|IndexInSheet=-1|OwnerPartId=-1|Location.X=-5|Location.Y=5|Color=8388608|FontID=1|Text=U?|Name=Designator|ReadOnlyState=1|UniqueID=WTSVHJIG",
-            "|RECORD=41|IndexInSheet=-1|OwnerPartId=-1|Location.X=-5|Location.Y=-15|Color=8388608|FontID=1|Text=*|Name=Comment|UniqueID=XVLJQMAQ",
+            "|RECORD=6|IsNotAccesible=T|OwnerPartId=1|LineWidth=1|LocationCount=3|X2=10|Y2=5|Y3=10|UniqueID=<UID>",
+            "|RECORD=34|IndexInSheet=-1|OwnerPartId=-1|Location.X=-5|Location.Y=5|Color=8388608|FontID=1|Text=U?|Name=Designator|ReadOnlyState=1|UniqueID=<UID>",
+            "|RECORD=41|IndexInSheet=-1|OwnerPartId=-1|Location.X=-5|Location.Y=-15|Color=8388608|FontID=1|Text=*|Name=Comment|UniqueID=<UID>",
             "|RECORD=44",
         ]
     );
     assert_eq!(
         reencoded_records(&lib, "ELLIPSES"),
         [
-            "|RECORD=8|IsNotAccesible=T|OwnerPartId=1|Radius=5|SecondaryRadius=5|LineWidth=1|AreaColor=65535|IsSolid=T|UniqueID=NXDNREIT",
-            "|RECORD=8|IsNotAccesible=T|IndexInSheet=1|OwnerPartId=1|Location.X=20|Radius=8|SecondaryRadius=4|LineWidth=1|AreaColor=65535|UniqueID=WLVBMNUS",
-            "|RECORD=34|IndexInSheet=-1|OwnerPartId=-1|Location.X=-5|Location.Y=5|Color=8388608|FontID=1|Text=U?|Name=Designator|ReadOnlyState=1|UniqueID=VRYVUQEJ",
-            "|RECORD=41|IndexInSheet=-1|OwnerPartId=-1|Location.X=-5|Location.Y=-15|Color=8388608|FontID=1|Text=*|Name=Comment|UniqueID=QHSKZEGZ",
+            "|RECORD=8|IsNotAccesible=T|OwnerPartId=1|Radius=5|SecondaryRadius=5|LineWidth=1|AreaColor=65535|IsSolid=T|UniqueID=<UID>",
+            "|RECORD=8|IsNotAccesible=T|IndexInSheet=1|OwnerPartId=1|Location.X=20|Radius=8|SecondaryRadius=4|LineWidth=1|AreaColor=65535|UniqueID=<UID>",
+            "|RECORD=34|IndexInSheet=-1|OwnerPartId=-1|Location.X=-5|Location.Y=5|Color=8388608|FontID=1|Text=U?|Name=Designator|ReadOnlyState=1|UniqueID=<UID>",
+            "|RECORD=41|IndexInSheet=-1|OwnerPartId=-1|Location.X=-5|Location.Y=-15|Color=8388608|FontID=1|Text=*|Name=Comment|UniqueID=<UID>",
             "|RECORD=44",
         ]
     );
     assert_eq!(
         reencoded_records(&lib, "BEZIERSYM"),
         [
-            "|RECORD=5|IsNotAccesible=T|OwnerPartId=1|LineWidth=1|LocationCount=4|X1=-10|X2=-5|Y2=8|X3=5|Y3=8|X4=10|UniqueID=JSQWLQHD",
-            "|RECORD=34|IndexInSheet=-1|OwnerPartId=-1|Location.X=-5|Location.Y=5|Color=8388608|FontID=1|Text=U?|Name=Designator|ReadOnlyState=1|UniqueID=OIGYBMXZ",
-            "|RECORD=41|IndexInSheet=-1|OwnerPartId=-1|Location.X=-5|Location.Y=-15|Color=8388608|FontID=1|Text=*|Name=Comment|UniqueID=ZVXINTHS",
+            "|RECORD=5|IsNotAccesible=T|OwnerPartId=1|LineWidth=1|LocationCount=4|X1=-10|X2=-5|Y2=8|X3=5|Y3=8|X4=10|UniqueID=<UID>",
+            "|RECORD=34|IndexInSheet=-1|OwnerPartId=-1|Location.X=-5|Location.Y=5|Color=8388608|FontID=1|Text=U?|Name=Designator|ReadOnlyState=1|UniqueID=<UID>",
+            "|RECORD=41|IndexInSheet=-1|OwnerPartId=-1|Location.X=-5|Location.Y=-15|Color=8388608|FontID=1|Text=*|Name=Comment|UniqueID=<UID>",
             "|RECORD=44",
         ]
     );
     assert_eq!(
         reencoded_records(&lib, "TEXTFRAMESYM"),
         [
-            "|RECORD=28|IsNotAccesible=T|OwnerPartId=1|Location.X=-10|Location.Y=-5|Corner.X=10|Corner.Y=5|LineWidth=1|AreaColor=11599871|TextColor=8388608|FontID=1|IsSolid=T|ShowBorder=T|Alignment=1|WordWrap=T|ClipToRect=T|Text=Frame text|TextMargin_Frac=20000|UniqueID=PSBHQHBJ",
-            "|RECORD=34|IndexInSheet=-1|OwnerPartId=-1|Location.X=-5|Location.Y=5|Color=8388608|FontID=1|Text=U?|Name=Designator|ReadOnlyState=1|UniqueID=LDPXQTGW",
-            "|RECORD=41|IndexInSheet=-1|OwnerPartId=-1|Location.X=-5|Location.Y=-15|Color=8388608|FontID=1|Text=*|Name=Comment|UniqueID=IRGIXFIZ",
+            "|RECORD=28|IsNotAccesible=T|OwnerPartId=1|Location.X=-10|Location.Y=-5|Corner.X=10|Corner.Y=5|LineWidth=1|AreaColor=11599871|TextColor=8388608|FontID=1|IsSolid=T|ShowBorder=T|Alignment=1|WordWrap=T|ClipToRect=T|Text=Frame text|TextMargin_Frac=20000|UniqueID=<UID>",
+            "|RECORD=34|IndexInSheet=-1|OwnerPartId=-1|Location.X=-5|Location.Y=5|Color=8388608|FontID=1|Text=U?|Name=Designator|ReadOnlyState=1|UniqueID=<UID>",
+            "|RECORD=41|IndexInSheet=-1|OwnerPartId=-1|Location.X=-5|Location.Y=-15|Color=8388608|FontID=1|Text=*|Name=Comment|UniqueID=<UID>",
             "|RECORD=44",
         ]
     );
@@ -1309,14 +1334,14 @@ fn samples_schlib_rmw_shapestyle_records_match_golden_ignoring_stream_order() {
         .map(|s| strip(s))
         .collect();
     let mut golden: Vec<String> = [
-        "|RECORD=13|IsNotAccesible=T|OwnerPartId=1|Location.X=-20|LineWidth=1|LineStyle=1|LineStyleExt=1|UniqueID=CWJAILHF",
-        "|RECORD=13|IsNotAccesible=T|IndexInSheet=1|OwnerPartId=1|Corner.X=20|LineWidth=1|LineStyle=2|LineStyleExt=2|UniqueID=LUUVYAAJ",
-        "|RECORD=14|IsNotAccesible=T|IndexInSheet=2|OwnerPartId=1|Location.X=-10|Location.Y=-10|Corner.X=10|Corner.Y=-5|LineWidth=1|AreaColor=65535|IsSolid=T|UniqueID=ZUSIIVGA",
-        "|RECORD=14|IsNotAccesible=T|IndexInSheet=3|OwnerPartId=1|Location.X=-10|Location.Y=5|Corner.X=10|Corner.Y=10|LineWidth=1|AreaColor=11599871|IsSolid=T|Transparent=T|UniqueID=NUNKJAWX",
-        "|RECORD=7|IsNotAccesible=T|IndexInSheet=4|OwnerPartId=1|LineWidth=1|AreaColor=65280|IsSolid=T|Transparent=T|LocationCount=3|X1=-5|Y1=12|X2=5|Y2=12|X3=5|Y3=17|UniqueID=HVIMIANR",
-        "|RECORD=8|IsNotAccesible=T|IndexInSheet=5|OwnerPartId=1|Location.X=15|Location.Y=10|Radius=3|SecondaryRadius=2|LineWidth=1|AreaColor=11599871|IsSolid=T|Transparent=T|UniqueID=OULMQULV",
-        "|RECORD=34|IndexInSheet=-1|OwnerPartId=-1|Location.X=-5|Location.Y=5|Color=8388608|FontID=1|Text=U?|Name=Designator|ReadOnlyState=1|UniqueID=DVZWHKPJ",
-        "|RECORD=41|IndexInSheet=-1|OwnerPartId=-1|Location.X=-5|Location.Y=-15|Color=8388608|FontID=1|Text=*|Name=Comment|UniqueID=WKKBBVMD",
+        "|RECORD=13|IsNotAccesible=T|OwnerPartId=1|Location.X=-20|LineWidth=1|LineStyle=1|LineStyleExt=1|UniqueID=<UID>",
+        "|RECORD=13|IsNotAccesible=T|IndexInSheet=1|OwnerPartId=1|Corner.X=20|LineWidth=1|LineStyle=2|LineStyleExt=2|UniqueID=<UID>",
+        "|RECORD=14|IsNotAccesible=T|IndexInSheet=2|OwnerPartId=1|Location.X=-10|Location.Y=-10|Corner.X=10|Corner.Y=-5|LineWidth=1|AreaColor=65535|IsSolid=T|UniqueID=<UID>",
+        "|RECORD=14|IsNotAccesible=T|IndexInSheet=3|OwnerPartId=1|Location.X=-10|Location.Y=5|Corner.X=10|Corner.Y=10|LineWidth=1|AreaColor=11599871|IsSolid=T|Transparent=T|UniqueID=<UID>",
+        "|RECORD=7|IsNotAccesible=T|IndexInSheet=4|OwnerPartId=1|LineWidth=1|AreaColor=65280|IsSolid=T|Transparent=T|LocationCount=3|X1=-5|Y1=12|X2=5|Y2=12|X3=5|Y3=17|UniqueID=<UID>",
+        "|RECORD=8|IsNotAccesible=T|IndexInSheet=5|OwnerPartId=1|Location.X=15|Location.Y=10|Radius=3|SecondaryRadius=2|LineWidth=1|AreaColor=11599871|IsSolid=T|Transparent=T|UniqueID=<UID>",
+        "|RECORD=34|IndexInSheet=-1|OwnerPartId=-1|Location.X=-5|Location.Y=5|Color=8388608|FontID=1|Text=U?|Name=Designator|ReadOnlyState=1|UniqueID=<UID>",
+        "|RECORD=41|IndexInSheet=-1|OwnerPartId=-1|Location.X=-5|Location.Y=-15|Color=8388608|FontID=1|Text=*|Name=Comment|UniqueID=<UID>",
         "|RECORD=44",
     ]
     .iter()

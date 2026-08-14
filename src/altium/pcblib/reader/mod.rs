@@ -93,11 +93,13 @@ pub type UniqueIdMap = Vec<UniqueIdEntry>;
 pub fn parse_wide_strings(data: &[u8]) -> WideStrings {
     let mut strings = WideStrings::new();
 
-    // WideStrings is pipe-delimited key=value pairs
-    let Ok(text) = String::from_utf8(data.to_vec()) else {
-        tracing::debug!("WideStrings stream is not valid UTF-8");
-        return strings;
-    };
+    // Pipe-delimited key=value pairs in Windows-1252, null-terminated. Decoding
+    // is lossless for any byte, unlike UTF-8, which cannot represent an
+    // arbitrary Windows-1252 stream. The terminator must be trimmed before
+    // splitting or it stays glued to the final value ("84\0"), which then fails
+    // to parse as a byte.
+    let text = crate::altium::decode_windows1252(data);
+    let text = text.trim_end_matches('\u{0}');
 
     for pair in text.split('|') {
         if pair.is_empty() {
@@ -135,22 +137,14 @@ pub fn parse_wide_strings(data: &[u8]) -> WideStrings {
 /// Values 128-255 are replaced with the Unicode replacement character (U+FFFD)
 /// since Altium's ENCODEDTEXT format should only contain ASCII.
 fn decode_ascii_codes(encoded: &str) -> String {
-    encoded
+    // The values are Windows-1252 bytes despite the ENCODEDTEXT name — Altium
+    // writes `10µF` as `49,48,181,70` — so the whole set goes through the
+    // shared decoder rather than being treated as ASCII.
+    let bytes: Vec<u8> = encoded
         .split(',')
         .filter_map(|s| s.trim().parse::<u8>().ok())
-        .map(|c| {
-            if c.is_ascii() {
-                c as char
-            } else {
-                // Non-ASCII byte - use replacement character and log warning
-                tracing::warn!(
-                    byte = c,
-                    "Non-ASCII byte in ENCODEDTEXT, replacing with U+FFFD"
-                );
-                '\u{FFFD}'
-            }
-        })
-        .collect()
+        .collect();
+    crate::altium::decode_windows1252(&bytes)
 }
 
 /// Parses the `UniqueIDPrimitiveInformation/Data` stream content.
@@ -826,14 +820,18 @@ mod tests {
     }
 
     #[test]
-    fn test_decode_ascii_codes_non_ascii() {
-        // Non-ASCII bytes (128-255) should be replaced with U+FFFD
-        assert_eq!(decode_ascii_codes("65,200,66"), "A\u{FFFD}B");
-        assert_eq!(decode_ascii_codes("255"), "\u{FFFD}");
-        // Boundary: 127 is still ASCII
+    fn test_decode_ascii_codes_high_bytes_are_windows_1252() {
+        // The values are Windows-1252 bytes, despite the ENCODEDTEXT name:
+        // Altium writes `10µF` as `49,48,181,70`. Anything above 127 must
+        // decode through the code page, not be treated as non-ASCII and lost.
+        assert_eq!(decode_ascii_codes("49,48,181,70"), "10\u{B5}F");
+        assert_eq!(decode_ascii_codes("177,53,37"), "\u{B1}5%");
+        assert_eq!(decode_ascii_codes("65,200,66"), "A\u{C8}B");
+        assert_eq!(decode_ascii_codes("255"), "\u{FF}");
+        // 0x7F is a control character and maps to itself; 0x80 is the Euro
+        // sign in Windows-1252, not an invalid byte.
         assert_eq!(decode_ascii_codes("127"), "\x7F");
-        // Boundary: 128 is non-ASCII
-        assert_eq!(decode_ascii_codes("128"), "\u{FFFD}");
+        assert_eq!(decode_ascii_codes("128"), "\u{20AC}");
     }
 
     // =============================================================================

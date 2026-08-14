@@ -2188,51 +2188,42 @@ mod tests {
             }
         }
 
-        /// Clears or sets the read-only attribute, ignoring failures on paths
-        /// that have already gone away.
-        #[allow(clippy::permissions_set_readonly_false)] // cleanup: the temp dir must stay deletable
-        fn set_readonly(path: &Path, readonly: bool) {
-            if let Ok(meta) = std::fs::metadata(path) {
-                let mut perms = meta.permissions();
-                perms.set_readonly(readonly);
-                let _ = std::fs::set_permissions(path, perms);
-            }
-        }
+        /// Makes the next save of `path` fail, on every platform, by occupying
+        /// the temp file `save_atomic` needs with a directory.
+        ///
+        /// Marking the library file read-only is the obvious approach and works
+        /// only on Windows: `save_atomic` writes `<stem>.<kind>.tmp` and renames
+        /// it over the target, and POSIX `rename` requires write permission on
+        /// the *directory*, not on the file being replaced — so on Linux and
+        /// macOS the save succeeded and the test did not. Making the directory
+        /// read-only instead would also block the pre-write backup, turning
+        /// these into duplicates of the backup-failure tests. Taking the temp
+        /// path fails `File::create` everywhere while leaving the backup free to
+        /// succeed, which is what these tests are actually about.
+        struct BlockedSave(PathBuf);
 
-        /// Makes a library file read-only for the guard's lifetime, so the next
-        /// write fails the way it does when Altium holds the file open or the
-        /// library lives on a read-only share. Write access is restored on
-        /// drop — including on the backup copies, which inherit the attribute
-        /// on Windows and would otherwise block temp-directory cleanup.
-        struct ReadOnlyFile(PathBuf);
-
-        impl ReadOnlyFile {
+        impl BlockedSave {
             fn new(path: &Path) -> Self {
-                set_readonly(path, true);
-                assert!(
-                    std::fs::metadata(path)
-                        .expect("metadata")
-                        .permissions()
-                        .readonly(),
-                    "test setup: could not make the library read-only"
-                );
-                Self(path.to_path_buf())
+                // Mirrors the extension `save_atomic` is called with for each
+                // library kind, so the blocked path is the one it will use.
+                let tmp_ext = if path
+                    .extension()
+                    .is_some_and(|e| e.eq_ignore_ascii_case("schlib"))
+                {
+                    "schlib.tmp"
+                } else {
+                    "pcblib.tmp"
+                };
+                let temp = path.with_extension(tmp_ext);
+                std::fs::create_dir_all(&temp)
+                    .expect("test setup: could not occupy the save temp path");
+                Self(temp)
             }
         }
 
-        impl Drop for ReadOnlyFile {
+        impl Drop for BlockedSave {
             fn drop(&mut self) {
-                let prefix = self.0.to_string_lossy().into_owned();
-                let parent = self
-                    .0
-                    .parent()
-                    .unwrap_or_else(|| Path::new("."))
-                    .to_path_buf();
-                for entry in std::fs::read_dir(parent).into_iter().flatten().flatten() {
-                    if entry.path().to_string_lossy().starts_with(&prefix) {
-                        set_readonly(&entry.path(), false);
-                    }
-                }
+                let _ = std::fs::remove_dir_all(&self.0);
             }
         }
 
@@ -2490,7 +2481,7 @@ mod tests {
             let server = create_test_server(dir.path());
             let path = dir.path().join("Locked.PcbLib");
             create_test_pcblib(&path);
-            let _readonly = ReadOnlyFile::new(&path);
+            let _blocked = BlockedSave::new(&path);
 
             let result = server.call_delete_component(&json!({
                 "filepath": path.to_string_lossy(),
@@ -2522,7 +2513,7 @@ mod tests {
             let server = create_test_server(dir.path());
             let path = dir.path().join("Locked.SchLib");
             create_test_schlib(&path);
-            let _readonly = ReadOnlyFile::new(&path);
+            let _blocked = BlockedSave::new(&path);
 
             let result = server.call_delete_component(&json!({
                 "filepath": path.to_string_lossy(),
@@ -3162,7 +3153,7 @@ mod tests {
             let server = create_test_server(dir.path());
             let output = dir.path().join("LockedImport.PcbLib");
             create_test_pcblib(&output);
-            let _readonly = ReadOnlyFile::new(&output);
+            let _blocked = BlockedSave::new(&output);
 
             let result = server.call_import_library(&json!({
                 "output_path": output.to_string_lossy(),
@@ -3350,7 +3341,7 @@ mod tests {
             let server = create_test_server(dir.path());
             let output = dir.path().join("LockedImport.SchLib");
             create_test_schlib(&output);
-            let _readonly = ReadOnlyFile::new(&output);
+            let _blocked = BlockedSave::new(&output);
 
             let result = server.call_import_library(&json!({
                 "output_path": output.to_string_lossy(),

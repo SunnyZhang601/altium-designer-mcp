@@ -12,6 +12,13 @@ on:
             - "v[0-9]+.[0-9]+.[0-9]+"
             - "v[0-9]+.[0-9]+.[0-9]+-*"
 
+    # Dry run. Builds, packages, smoke-tests and checksums every artefact
+    # exactly as a real release does, then stops before publishing anything.
+    # A pushed tag is permanent and a published release is public the instant
+    # it exists, so the pipeline is meant to be proven here first — see
+    # docs/RELEASING.md.
+    workflow_dispatch:
+
 # Serialise releases per-tag so re-running a tag (or pushing two tags
 # back-to-back) doesn't race on the same GitHub release page or
 # attestation upload. Don't cancel an in-progress release — half-
@@ -37,30 +44,54 @@ jobs:
         outputs:
             version: ${{ steps.version.outputs.version }}
             tag: ${{ steps.version.outputs.tag }}
+            is-release: ${{ steps.version.outputs.is-release }}
 
         steps:
             - name: Checkout repository
               uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+              with:
+                # Full history: the "tag is on main" check below needs the main
+                # branch and the tagged commit in the same clone.
+                fetch-depth: 0
 
             - name: Determine version
               id: version
               shell: bash
               run: |
-                TAG="${GITHUB_REF#refs/tags/}"
+                # Read the [package] version once; both modes need it.
+                CARGO_VERSION=$(awk -F'"' '
+                    /^\[package\]/ { in_pkg = 1; next }
+                    /^\[/          { in_pkg = 0 }
+                    in_pkg && /^version[[:space:]]*=/ { print $2; exit }
+                ' Cargo.toml)
 
-                # Validate tag format
-                if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-.*)?$ ]]; then
-                    echo "Error: Invalid tag format: $TAG"
-                    echo "Expected format: v0.0.0 or v0.0.0-suffix"
-                    exit 1
+                if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+                    TAG="${GITHUB_REF#refs/tags/}"
+
+                    # Validate tag format
+                    if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-.*)?$ ]]; then
+                        echo "Error: Invalid tag format: $TAG"
+                        echo "Expected format: v0.0.0 or v0.0.0-suffix"
+                        exit 1
+                    fi
+
+                    VERSION="${TAG#v}"
+                    echo "is-release=true" >> "$GITHUB_OUTPUT"
+                else
+                    # Dry run: build the version Cargo.toml currently declares
+                    # and publish nothing.
+                    VERSION="$CARGO_VERSION"
+                    TAG="(dry run)"
+                    echo "is-release=false" >> "$GITHUB_OUTPUT"
+                    echo "::notice::Dry run — artefacts will be built and verified but NOT published."
                 fi
 
-                VERSION="${TAG#v}"
                 echo "tag=$TAG" >> "$GITHUB_OUTPUT"
                 echo "version=$VERSION" >> "$GITHUB_OUTPUT"
                 echo "Release version: $VERSION (tag: $TAG)"
 
             - name: Verify Cargo.toml version matches tag
+              if: steps.version.outputs.is-release == 'true'
               shell: bash
               run: |
                 # Extract the version from the [package] section specifically.
@@ -88,6 +119,74 @@ jobs:
                 fi
 
                 echo "Version verified: $CARGO_VERSION"
+
+            # A tag can be pushed from any commit, including one that never sat
+            # on main and never passed CI. Releases are permanent, so refuse to
+            # build one from a commit main does not contain.
+            - name: Verify the tagged commit is on main
+              if: steps.version.outputs.is-release == 'true'
+              shell: bash
+              run: |
+                # Fetch main explicitly rather than relying on the checkout
+                # action having created the remote-tracking ref for it.
+                git fetch --no-tags --quiet origin +refs/heads/main:refs/remotes/origin/main
+
+                if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+                    echo "Error: the tagged commit is not an ancestor of origin/main."
+                    echo "  tagged commit: $GITHUB_SHA"
+                    echo ""
+                    echo "Release only from a commit that has been merged to main"
+                    echo "and has a green CI run."
+                    exit 1
+                fi
+                echo "Tagged commit is on main."
+
+            # Release notes are extracted from CHANGELOG.md at the very end of
+            # this workflow. Without this check a missing entry is only noticed
+            # after ~30 minutes of building, and the release silently publishes
+            # with the placeholder note "Release <version>".
+            - name: Verify CHANGELOG has an entry for this version
+              shell: bash
+              run: |
+                VERSION="${{ steps.version.outputs.version }}"
+                NOTES=$(awk -v ver="## [${VERSION}]" '
+                    index($0, ver) == 1 { found=1; next }
+                    found && /^## \[/ { exit }
+                    found { print }
+                ' CHANGELOG.md | tr -d '[:space:]')
+
+                if [[ -n "$NOTES" ]]; then
+                    echo "CHANGELOG entry found for ${VERSION}."
+                    exit 0
+                fi
+
+                MSG="CHANGELOG.md has no non-empty '## [${VERSION}]' section."
+                if [[ "${{ steps.version.outputs.is-release }}" == "true" ]]; then
+                    echo "Error: $MSG"
+                    echo ""
+                    echo "Stamp the heading (and its date) before tagging, so the"
+                    echo "published release notes are the real changelog entry."
+                    exit 1
+                fi
+                # Dry runs are expected to happen before the heading is stamped,
+                # so this is informational there rather than fatal.
+                echo "::warning::${MSG} Fine for a dry run; it will block the real tag."
+
+            # Fail fast rather than discovering the collision in `gh release
+            # create` after the whole matrix has built.
+            - name: Verify the release does not already exist
+              if: steps.version.outputs.is-release == 'true'
+              shell: bash
+              env:
+                GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+              run: |
+                TAG="${{ steps.version.outputs.tag }}"
+                if gh release view "$TAG" >/dev/null 2>&1; then
+                    echo "Error: a GitHub release for $TAG already exists."
+                    echo "Releases are not overwritten by this workflow."
+                    exit 1
+                fi
+                echo "No existing release for $TAG."
 
     build:
         name: Build (${{ matrix.target }})
@@ -153,6 +252,36 @@ jobs:
                 cd dist
                 tar -czvf ../${{ matrix.artifact }}.tar.gz *
 
+            - name: Verify archive contents and run the packaged binary (Unix)
+              if: runner.os != 'Windows'
+              shell: bash
+              env:
+                EXPECTED_VERSION: ${{ needs.validate.outputs.version }}
+              run: |
+                # Unpack into a clean directory and exercise *that* copy, so the
+                # thing being checked is the artefact users download rather than
+                # the build tree it came from.
+                mkdir -p verify && tar -xzf ${{ matrix.artifact }}.tar.gz -C verify
+
+                for f in ${{ matrix.binary }} README.md LICENCE CHANGELOG.md \
+                         example-config.json docs/AGENT_GUIDE.md docs/TOOLS.md; do
+                    if [[ ! -e "verify/$f" ]]; then
+                        echo "Error: $f missing from ${{ matrix.artifact }}"
+                        exit 1
+                    fi
+                done
+
+                chmod +x "verify/${{ matrix.binary }}"
+                OUT="$(verify/${{ matrix.binary }} --version)"
+                echo "Packaged binary reports: $OUT"
+
+                # Pre-release tags (0.1.0-rc1) carry a suffix the crate version
+                # does not, so compare against the base version.
+                if [[ "$OUT" != *"${EXPECTED_VERSION%%-*}"* ]]; then
+                    echo "Error: expected version ${EXPECTED_VERSION%%-*} in --version output"
+                    exit 1
+                fi
+
             - name: Prepare artifact (Windows)
               if: runner.os == 'Windows'
               shell: bash
@@ -166,13 +295,39 @@ jobs:
                 cd dist
                 7z a -tzip ../${{ matrix.artifact }}.zip *
 
+            - name: Verify archive contents and run the packaged binary (Windows)
+              if: runner.os == 'Windows'
+              shell: bash
+              env:
+                EXPECTED_VERSION: ${{ needs.validate.outputs.version }}
+              run: |
+                mkdir -p verify && 7z x -overify ${{ matrix.artifact }}.zip >/dev/null
+
+                for f in ${{ matrix.binary }} README.md LICENCE CHANGELOG.md \
+                         example-config.json docs/AGENT_GUIDE.md docs/TOOLS.md; do
+                    if [[ ! -e "verify/$f" ]]; then
+                        echo "Error: $f missing from ${{ matrix.artifact }}"
+                        exit 1
+                    fi
+                done
+
+                OUT="$(verify/${{ matrix.binary }} --version)"
+                echo "Packaged binary reports: $OUT"
+
+                if [[ "$OUT" != *"${EXPECTED_VERSION%%-*}"* ]]; then
+                    echo "Error: expected version ${EXPECTED_VERSION%%-*} in --version output"
+                    exit 1
+                fi
+
             - name: Upload artifact (Unix)
               if: runner.os != 'Windows'
               uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
               with:
                 name: ${{ matrix.artifact }}
                 path: ${{ matrix.artifact }}.tar.gz
-                retention-days: 1
+                # A week, so a dry run's artefacts can be downloaded and
+                # inspected by hand before anyone tags.
+                retention-days: 7
 
             - name: Upload artifact (Windows)
               if: runner.os == 'Windows'
@@ -180,11 +335,14 @@ jobs:
               with:
                 name: ${{ matrix.artifact }}
                 path: ${{ matrix.artifact }}.zip
-                retention-days: 1
+                retention-days: 7
 
     release:
         name: Create Release
         needs: [validate, build]
+        # Dry runs stop here: everything above has built, been unpacked, run and
+        # checksummed, but nothing is published.
+        if: needs.validate.outputs.is-release == 'true'
         runs-on: ubuntu-latest
         timeout-minutes: 10
 
@@ -208,6 +366,27 @@ jobs:
             - name: List artifacts
               run: find artifacts -type f
 
+            # Guards against publishing a partial release. `needs: build` already
+            # fails the job if a matrix leg fails, but this also catches a leg
+            # that succeeded while uploading nothing (a mis-set path, a renamed
+            # artefact), which would otherwise ship a release silently missing
+            # one platform.
+            - name: Verify every platform artefact is present
+              shell: bash
+              run: |
+                missing=0
+                for expected in \
+                    altium-designer-mcp-linux-x86_64.tar.gz \
+                    altium-designer-mcp-macos-aarch64.tar.gz \
+                    altium-designer-mcp-windows-x86_64.zip; do
+                    if ! find artifacts -type f -name "$expected" | grep -q .; then
+                        echo "Error: missing artefact $expected"
+                        missing=1
+                    fi
+                done
+                [[ $missing -eq 0 ]] || exit 1
+                echo "All three platform artefacts present."
+
             - name: Generate checksums
               shell: bash
               run: |
@@ -215,6 +394,11 @@ jobs:
                 find . -type f \( -name "*.tar.gz" -o -name "*.zip" \) -exec mv {} . \;
                 sha256sum *.tar.gz *.zip > SHA256SUMS.txt
                 cat SHA256SUMS.txt
+
+                # Read the file back and re-hash: the checksums published beside
+                # the binaries are the one thing a user can verify a download
+                # against, so prove they match before anyone relies on them.
+                sha256sum --check --strict SHA256SUMS.txt
 
             - name: Attest build provenance
               uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
@@ -272,8 +456,17 @@ jobs:
                     RELEASE_FLAGS+=(--latest)
                 fi
 
-                # Create the release with gh CLI (more reliable than third-party actions)
+                # Created as a DRAFT on purpose. Everything above is automated
+                # and verified, but publishing is the one step that cannot be
+                # taken back: the moment a release is public it is mirrored,
+                # scraped and downloaded, and deleting it afterwards leaves
+                # dangling links rather than undoing anything. A draft is
+                # private to maintainers and can be deleted without trace, so
+                # the last action is a human opening the draft, checking the
+                # notes and the three archives, and pressing Publish.
+                # See docs/RELEASING.md.
                 gh release create "$TAG" \
+                    --draft \
                     --title "$TAG" \
                     --notes-file release_notes.md \
                     "${RELEASE_FLAGS[@]}" \
@@ -281,4 +474,15 @@ jobs:
                     artifacts/*.zip \
                     artifacts/SHA256SUMS.txt
 
-                echo "Release created: $TAG"
+                echo "Draft release created: $TAG"
+                echo "Review it, then publish:  gh release edit $TAG --draft=false"
+
+                {
+                    echo "### Draft release \`$TAG\` is ready"
+                    echo ""
+                    echo "Nothing is public yet. Review the draft, then publish with:"
+                    echo ""
+                    echo '```'
+                    echo "gh release edit $TAG --draft=false"
+                    echo '```'
+                } >> "$GITHUB_STEP_SUMMARY"

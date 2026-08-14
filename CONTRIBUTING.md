@@ -273,6 +273,7 @@ cargo test module_name::
 | `docs/CLAUDE_CODE_GUIDE.md` | Step-by-step Claude Code setup guide |
 | `docs/ANTIGRAVITY_GUIDE.md` | Google Antigravity setup guide |
 | `docs/SECURITY.md` | Security threat model and design rationale |
+| `docs/RELEASING.md` | Release runbook: dry run, tag-day steps, draft review, rollback |
 | `docs/errors.md` | Error reference catalogue |
 | `docs/TOOLS.md` | Generated tool reference (source of truth: `src/mcp/tool_definitions.rs`) |
 | `docs/PCBLIB_FORMAT.md` | `.PcbLib` binary format reference |

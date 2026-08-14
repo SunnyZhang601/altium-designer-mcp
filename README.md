@@ -280,6 +280,21 @@ See [CONTRIBUTING.md § Development Setup](CONTRIBUTING.md#development-setup) fo
 
 The release binary will be at `target/release/altium-designer-mcp`.
 
+### Verifying a downloaded release
+
+Released archives are built by GitHub Actions and carry a signed
+[SLSA build provenance](https://slsa.dev/) attestation, so a download can be traced
+back to the workflow run and commit that produced it:
+
+```bash
+gh attestation verify <archive> --repo embedded-society/altium-designer-mcp
+sha256sum --check --ignore-missing SHA256SUMS.txt
+```
+
+The binaries are not code-signed, so Windows SmartScreen and macOS Gatekeeper warn on
+first run (on macOS, right-click → Open). The attestation is the stronger check.
+See [docs/RELEASING.md](docs/RELEASING.md) for how releases are produced.
+
 ### Command-Line Usage
 
 ```bash

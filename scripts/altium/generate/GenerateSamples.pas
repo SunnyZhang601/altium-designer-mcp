@@ -499,7 +499,7 @@ end;
 { ---- PcbLib authoring -------------------------------------------------------
 
   Footprints: PAD_SHAPES, PAD_HOLES, VIAS, TRACKS, ARCS, REGIONS, FILLS, TEXT_STROKE,
-  TEXT_WIN1252. Each new footprint is wrapped in try/except so one failing primitive
+  TEXT_WIN1252, TEXT_UNICODE. Each new footprint is wrapped in try/except so one failing primitive
   doesn't abort the whole script (a missing footprint then shows up as a failed read
   test). Blind/buried vias, stacks and 3D bodies follow in later batches. }
 procedure GeneratePcbLib;
@@ -651,6 +651,31 @@ begin
         PCBServer.PreProcess;
         AddText(Comp, 0,   0, '10' + Chr(181) + 'F', 50, 0, eTopOverlay);
         AddText(Comp, 0, 100, Chr(177) + '5%',       50, 0, eTopOverlay);
+        PCBServer.PostProcess;
+    except
+    end;
+
+    // TEXT_UNICODE: characters that Windows-1252 CANNOT represent, so Altium has to fall
+    // back on the out-of-line /{component}/WideStrings stream for the real content. Every
+    // text in the samples so far is Win1252-representable and Altium duplicates it inline
+    // in block 1, which means the reader's WideStrings path has never been proven against
+    // a real Altium file (see issue #314).
+    //
+    // Built with Chr() for the same reason as TEXT_WIN1252 — a literal high codepoint was
+    // not interpreted. Chr(937)=Greek capital omega (the ohm sign on a resistor legend),
+    // Chr(956)=Greek small mu, Chr(1050)/Chr(1054)/Chr(1053) = Cyrillic KON, and
+    // Chr(20013)=CJK 'zhong'. If AD24 rejects any of these the try/except leaves the rest
+    // of the library intact; record the negative here and in docs/FIXTURE_COVERAGE.md
+    // rather than retrying blindly.
+    try
+        Comp := PCBServer.CreatePCBLibComp;
+        Comp.Name := 'TEXT_UNICODE';
+        Lib.RegisterComponent(Comp);
+        PCBServer.PreProcess;
+        AddText(Comp, 0,   0, '100' + Chr(937),                  50, 0, eTopOverlay);
+        AddText(Comp, 0, 100, '4' + Chr(956) + '7',              50, 0, eTopOverlay);
+        AddText(Comp, 0, 200, Chr(1050) + Chr(1054) + Chr(1053), 50, 0, eTopOverlay);
+        AddText(Comp, 0, 300, Chr(20013),                        50, 0, eTopOverlay);
         PCBServer.PostProcess;
     except
     end;

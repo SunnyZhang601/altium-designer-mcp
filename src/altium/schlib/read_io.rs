@@ -114,6 +114,20 @@ struct FileHeader {
 /// # Errors
 ///
 /// Returns an error if the file is not a valid `SchLib` (wrong file type).
+/// Recognises a `PcbLib`'s `/FileHeader` so it can be rejected by name rather
+/// than parsed as an empty `SchLib`.
+///
+/// The layout is `[u32 len][u8 len]["PCB <v> Binary Library File"]`, so the
+/// version string starts at offset 5. Both markers are required: `PCB ` alone
+/// is short enough to appear by chance in a corrupt block, whereas the pair
+/// only occurs in a genuine footprint-library header.
+fn looks_like_pcblib_header(data: &[u8]) -> bool {
+    const SCAN: usize = 64;
+    let window = &data[..data.len().min(SCAN)];
+    let contains = |needle: &[u8]| window.windows(needle.len()).any(|w| w == needle);
+    contains(b"PCB ") && contains(b"Binary Library File")
+}
+
 fn read_file_header<R: Read + Seek>(cfb: &mut CompoundFile<R>) -> AltiumResult<FileHeader> {
     // A `SchLib` without a readable FileHeader is invalid, so map the shared
     // optional read onto a hard error.
@@ -123,6 +137,18 @@ fn read_file_header<R: Read + Seek>(cfb: &mut CompoundFile<R>) -> AltiumResult<F
     // Parse header: [length:4 LE][pipe-delimited key=value pairs]
     if data.len() < 4 {
         return Err(AltiumError::parse_error(0, "FileHeader too short"));
+    }
+
+    // A PcbLib's FileHeader is a binary version-string block, not a
+    // length-prefixed pipe list, so it yields no properties at all and used to
+    // fall straight through to "zero symbols". Detect it positively: reading a
+    // footprint library as a symbol library must fail, not look empty, because
+    // any append-style caller would then save an empty library over the file.
+    if looks_like_pcblib_header(&data) {
+        return Err(AltiumError::wrong_file_type(
+            "SchLib",
+            "PcbLib (PCB Footprint Library)",
+        ));
     }
 
     let length = u32::from_le_bytes([data[0], data[1], data[2], data[3]]) as usize;
@@ -136,17 +162,25 @@ fn read_file_header<R: Read + Seek>(cfb: &mut CompoundFile<R>) -> AltiumResult<F
     let text = text.trim_end_matches('\u{0}');
     let props = crate::altium::parse_pipe_params(text);
 
-    // Validate file type - must be a Schematic Library
-    if let Some(header) = props.get("header") {
-        if !header.contains("Schematic Library") {
-            // Detect what type it actually is for a helpful error message
-            let actual_type = if header.contains("PCB Library") {
-                "PcbLib (PCB Footprint Library)"
-            } else {
-                header
-            };
-            return Err(AltiumError::wrong_file_type("SchLib", actual_type));
-        }
+    // Validate file type - must be a Schematic Library. The HEADER property is
+    // required rather than optional: Altium always writes it and so do we (see
+    // `schlib::writer`), so its absence means this is not a SchLib, and treating
+    // that as an empty-but-valid library is the same silent-data-loss trap as
+    // the PcbLib case above.
+    let Some(header) = props.get("header") else {
+        return Err(AltiumError::wrong_file_type(
+            "SchLib",
+            "unrecognised file (FileHeader has no HEADER property)",
+        ));
+    };
+    if !header.contains("Schematic Library") {
+        // Detect what type it actually is for a helpful error message
+        let actual_type = if header.contains("PCB Library") {
+            "PcbLib (PCB Footprint Library)"
+        } else {
+            header
+        };
+        return Err(AltiumError::wrong_file_type("SchLib", actual_type));
     }
 
     // Get component count

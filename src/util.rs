@@ -52,8 +52,17 @@ pub fn redact_absolute_paths(message: &str) -> String {
     // Over-matching a trailing word is harmless — `basename` keeps it inside the
     // final segment, so "Failed to read x.PcbLib now" still reads correctly —
     // whereas under-matching discloses directories, so the bias is deliberate.
+    // The prefix alternation spells out all four shapes, longest first. The
+    // verbatim forms matter because `std::fs::canonicalize` returns them on
+    // Windows: an `\\?\C:\…` path met a body that excludes `?`, so the match
+    // ended after two backslashes and the rest of the path survived into the
+    // message as `<path>?\C:…`. Excluding `?` is still right for the body — it
+    // cannot occur in a real file name — so the prefix absorbs it instead.
     let windows = WINDOWS.get_or_init(|| {
-        Regex::new(r#"(^|[\s"'(=:])((?:[A-Za-z]:[\\/]|\\\\)[^"'<>|?*:,;()\r\n]*)"#).unwrap()
+        Regex::new(
+            r#"(^|[\s"'(=:])((?:\\\\[?.]\\UNC\\|\\\\[?.]\\[A-Za-z]:[\\/]|\\\\|[A-Za-z]:[\\/])[^"'<>|?*:,;()\r\n]*)"#,
+        )
+        .unwrap()
     });
     // Unix paths take the same treatment, for `/home/me/My Libraries/x.PcbLib`.
     // The leading segment must still be space-free so ordinary prose starting
@@ -300,6 +309,27 @@ mod tests {
         assert_eq!(
             redact_absolute_paths("at /home/me/My Libraries/Parts.PcbLib"),
             "at Parts.PcbLib"
+        );
+    }
+
+    #[test]
+    fn redact_windows_verbatim_prefixed_paths() {
+        // `std::fs::canonicalize` returns `\\?\C:\…` on Windows, so this is the
+        // shape the server actually handles after resolving a path — not an
+        // exotic input. It previously redacted to `<path>?\C:Corrupt.PcbLib`,
+        // which both leaked and was unreadable.
+        assert_eq!(
+            redact_absolute_paths("Failed to read \\\\?\\C:\\Users\\me\\proj\\Corrupt.PcbLib"),
+            "Failed to read Corrupt.PcbLib"
+        );
+        // Device namespace and verbatim UNC take the same route.
+        assert_eq!(
+            redact_absolute_paths("at \\\\?\\UNC\\server\\Team Libs\\Parts.SchLib"),
+            "at Parts.SchLib"
+        );
+        assert_eq!(
+            redact_absolute_paths("at \\\\.\\C:\\libs\\X.PcbLib"),
+            "at X.PcbLib"
         );
     }
 

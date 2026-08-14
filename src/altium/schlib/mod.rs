@@ -1455,6 +1455,39 @@ mod tests {
     }
 
     #[test]
+    fn wrong_file_type_real_pcblib_as_schlib() {
+        // Regression for #310. The test above hand-builds a hybrid — a
+        // SchLib-format length-prefixed FileHeader whose *text* names a PCB
+        // library — and that shape was already detected. A real PcbLib's
+        // FileHeader is a binary version-string block, so it yielded no
+        // properties at all and the reader returned Ok with zero symbols: the
+        // wrong-type guard never fired on the only file shape that occurs in
+        // practice. An append-style caller would then have saved an empty
+        // library over a real one.
+        use crate::altium::pcblib::{Footprint, Pad, PcbLib};
+
+        let mut lib = PcbLib::new();
+        let mut fp = Footprint::new("R0402");
+        fp.add_pad(Pad::smd("1", -0.5, 0.0, 0.6, 0.5));
+        lib.add(fp);
+
+        let mut buffer = Cursor::new(Vec::new());
+        lib.write(&mut buffer).expect("write a genuine PcbLib");
+
+        buffer.set_position(0);
+        let err = SchLib::read(&mut buffer).expect_err("a PcbLib must not read as a SchLib");
+        let err_str = err.to_string();
+        assert!(
+            err_str.contains("Wrong file type") && err_str.contains("expected SchLib"),
+            "got: {err_str}"
+        );
+        assert!(
+            err_str.contains("PcbLib"),
+            "the error should name what the file actually is, got: {err_str}"
+        );
+    }
+
+    #[test]
     fn roundtrip_line_fractional_and_negative_coords() {
         // Off-grid endpoints — including a negative fractional coordinate, the
         // case the elliptical-arc encoder never exercised — must survive a

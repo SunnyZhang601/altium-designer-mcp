@@ -58,9 +58,14 @@ pub fn redact_absolute_paths(message: &str) -> String {
     // ended after two backslashes and the rest of the path survived into the
     // message as `<path>?\C:…`. Excluding `?` is still right for the body — it
     // cannot occur in a real file name — so the prefix absorbs it instead.
+    // Separators are matched as `\{1,2}` throughout because this function is
+    // applied to an already-serialised JSON body (see `ToolCallResult::error`),
+    // where every Windows separator arrives escaped as `\\`. Matching only the
+    // single form meant a path inside a JSON string was left almost entirely
+    // intact — the visible failure was `<path>?\C:Corrupt.PcbLib`.
     let windows = WINDOWS.get_or_init(|| {
         Regex::new(
-            r#"(^|[\s"'(=:])((?:\\\\[?.]\\UNC\\|\\\\[?.]\\[A-Za-z]:[\\/]|\\\\|[A-Za-z]:[\\/])[^"'<>|?*:,;()\r\n]*)"#,
+            r#"(^|[\s"'(=:])((?:\\{2,4}[?.]\\{1,2}UNC\\{1,2}|\\{2,4}[?.]\\{1,2}[A-Za-z]:[\\/]{1,2}|\\{2,4}|[A-Za-z]:[\\/]{1,2})[^"'<>|?*:,;()\r\n]*)"#,
         )
         .unwrap()
     });
@@ -330,6 +335,25 @@ mod tests {
         assert_eq!(
             redact_absolute_paths("at \\\\.\\C:\\libs\\X.PcbLib"),
             "at X.PcbLib"
+        );
+    }
+
+    #[test]
+    fn redact_json_escaped_windows_paths() {
+        // The real input shape: `ToolCallResult::error` redacts an already
+        // serialised JSON body, so every Windows separator arrives doubled.
+        // A pattern matching only single separators left the path essentially
+        // intact, which is how a full path reached clients on Windows.
+        let json =
+            r#"{"status": "error", "filepath": "\\\\?\\C:\\Users\\me\\proj\\Corrupt.PcbLib"}"#;
+        assert_eq!(
+            redact_absolute_paths(json),
+            r#"{"status": "error", "filepath": "Corrupt.PcbLib"}"#
+        );
+        let plain_drive = r#"{"filepath": "C:\\Users\\me\\embedded society\\X.PcbLib"}"#;
+        assert_eq!(
+            redact_absolute_paths(plain_drive),
+            r#"{"filepath": "X.PcbLib"}"#
         );
     }
 

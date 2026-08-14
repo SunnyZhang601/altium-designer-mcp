@@ -400,12 +400,18 @@ jobs:
                 # against, so prove they match before anyone relies on them.
                 sha256sum --check --strict SHA256SUMS.txt
 
+            # SLSA build provenance: signs a statement binding each artefact's
+            # digest to this workflow, commit and runner, verifiable offline-ish
+            # with `gh attestation verify`. SHA256SUMS.txt is a subject too —
+            # otherwise the file everyone is told to check their download
+            # against is the one file with no provenance of its own.
             - name: Attest build provenance
               uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
               with:
                 subject-path: |
                     artifacts/*.tar.gz
                     artifacts/*.zip
+                    artifacts/SHA256SUMS.txt
 
             - name: Extract release notes from CHANGELOG
               id: release-notes
@@ -431,6 +437,39 @@ jobs:
                     echo "No CHANGELOG entry for ${VERSION}, using default"
                     echo "Release ${VERSION}" > release_notes.md
                 fi
+
+                # Append verification instructions to every release. Provenance
+                # nobody knows how to check is decoration, and the release body
+                # is the one place a downloader is guaranteed to look. Generated
+                # here rather than kept in CHANGELOG.md so the changelog stays a
+                # record of changes.
+                # (Built with echo rather than a heredoc: heredoc bodies sit at
+                # column 0, which would end this YAML block scalar.)
+                {
+                    echo ""
+                    echo "---"
+                    echo ""
+                    echo "## Verifying this download"
+                    echo ""
+                    echo "Every archive is built by GitHub Actions from a tagged commit and"
+                    echo "carries a signed [SLSA build provenance](https://slsa.dev/)"
+                    echo "attestation. To confirm an archive really came from this"
+                    echo "repository's release workflow:"
+                    echo ""
+                    echo '```bash'
+                    echo "gh attestation verify <archive> --repo ${GITHUB_REPOSITORY}"
+                    echo '```'
+                    echo ""
+                    echo "To check a download is byte-for-byte intact:"
+                    echo ""
+                    echo '```bash'
+                    echo "sha256sum --check --ignore-missing SHA256SUMS.txt"
+                    echo '```'
+                    echo ""
+                    echo "The binaries are unsigned, so Windows SmartScreen and macOS"
+                    echo "Gatekeeper will warn on first run; on macOS use right-click →"
+                    echo "Open. The attestation above is the stronger check either way."
+                } >> release_notes.md
 
                 echo "--- Release Notes ---"
                 cat release_notes.md

@@ -97,6 +97,28 @@ Two notes on dry runs:
 
 10. **Announce** — including a note on the tracking issue if one is open.
 
+## Supply chain
+
+Each archive — and `SHA256SUMS.txt` itself — gets a signed
+[SLSA build provenance](https://slsa.dev/) attestation, binding the artefact's
+digest to this repository, the workflow that built it and the commit it was built
+from. The attestation lives in GitHub's attestation store, not in the release, so
+it cannot be swapped out by editing release assets.
+
+Verify any published artefact (this works for anyone, not just maintainers):
+
+```bash
+gh attestation verify altium-designer-mcp-linux-x86_64.tar.gz \
+    --repo embedded-society/altium-designer-mcp
+```
+
+The release body carries these instructions automatically — the workflow appends
+them to the changelog-derived notes, so there is nothing to remember at tag time.
+
+Worth checking once on the draft before publishing: download one archive and run
+the verify command against it. If provenance is broken, it is better found on a
+draft than after the release is public.
+
 ## If something is wrong
 
 - **Before publishing** — delete the draft, fix, and re-tag. Nothing was public.
@@ -118,5 +140,7 @@ Two notes on dry runs:
   `--locked` is the usual practice for a distributed binary; worth deciding
   before the first release rather than after.
 - **No code signing.** Windows SmartScreen and macOS Gatekeeper will warn on
-  first run. macOS users need right-click → Open. Worth documenting in the
-  release notes so it does not read as a broken download.
+  first run; macOS users need right-click → Open. The generated release notes say
+  so, and point at the provenance attestation as the stronger check. Proper
+  signing needs a paid Apple Developer account and a Windows certificate, so it
+  is a cost decision rather than a technical one.

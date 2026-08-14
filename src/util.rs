@@ -40,12 +40,55 @@ pub fn redact_absolute_paths(message: &str) -> String {
     // is still redacted. The false-positive guard holds: in `https://` the drive
     // candidate `s:/` is preceded by `p` (a letter, not in the class), so it never
     // matches.
+    // The path body deliberately allows spaces: `C:\Program Files\…`,
+    // `C:\Users\First Last\…` and `OneDrive - Company\…` are ordinary Windows
+    // paths, and a body of `[^\s…]` stopped at the first space and left the rest
+    // of the directory tree in the message. It instead terminates on characters
+    // that cannot appear in a Windows path (`" < > | ? *`) or that end a path in
+    // prose: a *second* colon (the drive's is already consumed by the prefix, so
+    // a later one means `…\x.PcbLib: permission denied`), a comma, a semicolon,
+    // brackets, an apostrophe, or a newline.
+    //
+    // Over-matching a trailing word is harmless — `basename` keeps it inside the
+    // final segment, so "Failed to read x.PcbLib now" still reads correctly —
+    // whereas under-matching discloses directories, so the bias is deliberate.
+    // The prefix alternation spells out all four shapes, longest first. The
+    // verbatim forms matter because `std::fs::canonicalize` returns them on
+    // Windows: an `\\?\C:\…` path met a body that excludes `?`, so the match
+    // ended after two backslashes and the rest of the path survived into the
+    // message as `<path>?\C:…`. Excluding `?` is still right for the body — it
+    // cannot occur in a real file name — so the prefix absorbs it instead.
+    // Separators are matched as `\{1,2}` throughout because this function is
+    // applied to an already-serialised JSON body (see `ToolCallResult::error`),
+    // where every Windows separator arrives escaped as `\\`. Matching only the
+    // single form meant a path inside a JSON string was left almost entirely
+    // intact — the visible failure was `<path>?\C:Corrupt.PcbLib`.
     let windows = WINDOWS.get_or_init(|| {
-        Regex::new(r#"(^|[\s"'(=:])((?:[A-Za-z]:[\\/]|\\\\)[^\s"'<>|]*)"#).unwrap()
+        Regex::new(
+            r#"(^|[\s"'(=:])((?:\\{2,4}[?.]\\{1,2}UNC\\{1,2}|\\{2,4}[?.]\\{1,2}[A-Za-z]:[\\/]{1,2}|\\{2,4}|[A-Za-z]:[\\/]{1,2})[^"'<>|?*:,;()\r\n]*)"#,
+        )
+        .unwrap()
     });
-    let unix = UNIX.get_or_init(|| Regex::new(r"(^|\s)(/[^\s/]+(?:/[^\s/]+)+)").unwrap());
+    // Unix paths take the same treatment, for `/home/me/My Libraries/x.PcbLib`.
+    // The leading segment must still be space-free so ordinary prose starting
+    // with a slash-word is not swallowed, and at least one separator is required.
+    //
+    // The boundary class matches the Windows one rather than plain `\s`. Every
+    // tool response is JSON, so a path is normally reached as `"filepath":
+    // "/home/…"` — preceded by a quote, never by whitespace — and a
+    // whitespace-only boundary left those completely unredacted. URLs stay safe:
+    // in `https://h/p` the first `/` is followed by another `/`, which the
+    // segment body rejects, and the second `/` is preceded by `/`, which is not
+    // a boundary character.
+    let unix = UNIX.get_or_init(|| {
+        Regex::new(r#"(^|[\s"'(=:])(/[^\s/"'<>|:,;()\r\n]+(?:/[^/"'<>|:,;()\r\n]+)+)"#).unwrap()
+    });
 
-    let redact = |caps: &regex::Captures| format!("{}{}", &caps[1], basename(&caps[2]));
+    let redact = |caps: &regex::Captures| {
+        // Trim trailing whitespace the greedy body may have taken with it, so a
+        // path at the end of a sentence does not keep a dangling space.
+        format!("{}{}", &caps[1], basename(caps[2].trim_end()))
+    };
     let step1 = windows.replace_all(message, &redact);
     let step2 = unix.replace_all(&step1, &redact);
     step2.into_owned()
@@ -242,6 +285,110 @@ mod tests {
         assert_eq!(
             redact_absolute_paths("at /a/b and C:\\x\\y.PcbLib"),
             "at b and y.PcbLib"
+        );
+    }
+
+    #[test]
+    fn redact_paths_containing_spaces() {
+        // Regression for the leak found via #306: the path body used to stop at
+        // the first space, so everything after it stayed in the message. Spaces
+        // are ordinary in Windows paths, so this was the common case, not an
+        // edge one — every affected user saw part of their directory tree, and
+        // potentially their account name, in error text.
+        assert_eq!(
+            redact_absolute_paths(
+                "Failed to read C:\\Users\\me\\Documents\\embedded society\\proj\\Corrupt.PcbLib"
+            ),
+            "Failed to read Corrupt.PcbLib"
+        );
+        assert_eq!(
+            redact_absolute_paths("Failed to read C:\\Program Files\\Altium\\Lib.PcbLib"),
+            "Failed to read Lib.PcbLib"
+        );
+        // UNC share with spaces.
+        assert_eq!(
+            redact_absolute_paths("at \\\\file server\\Team Libs\\Parts.SchLib"),
+            "at Parts.SchLib"
+        );
+        // Unix paths with spaces leaked the same way.
+        assert_eq!(
+            redact_absolute_paths("at /home/me/My Libraries/Parts.PcbLib"),
+            "at Parts.PcbLib"
+        );
+    }
+
+    #[test]
+    fn redact_windows_verbatim_prefixed_paths() {
+        // `std::fs::canonicalize` returns `\\?\C:\…` on Windows, so this is the
+        // shape the server actually handles after resolving a path — not an
+        // exotic input. It previously redacted to `<path>?\C:Corrupt.PcbLib`,
+        // which both leaked and was unreadable.
+        assert_eq!(
+            redact_absolute_paths("Failed to read \\\\?\\C:\\Users\\me\\proj\\Corrupt.PcbLib"),
+            "Failed to read Corrupt.PcbLib"
+        );
+        // Device namespace and verbatim UNC take the same route.
+        assert_eq!(
+            redact_absolute_paths("at \\\\?\\UNC\\server\\Team Libs\\Parts.SchLib"),
+            "at Parts.SchLib"
+        );
+        assert_eq!(
+            redact_absolute_paths("at \\\\.\\C:\\libs\\X.PcbLib"),
+            "at X.PcbLib"
+        );
+    }
+
+    #[test]
+    fn redact_json_escaped_windows_paths() {
+        // The real input shape: `ToolCallResult::error` redacts an already
+        // serialised JSON body, so every Windows separator arrives doubled.
+        // A pattern matching only single separators left the path essentially
+        // intact, which is how a full path reached clients on Windows.
+        let json =
+            r#"{"status": "error", "filepath": "\\\\?\\C:\\Users\\me\\proj\\Corrupt.PcbLib"}"#;
+        assert_eq!(
+            redact_absolute_paths(json),
+            r#"{"status": "error", "filepath": "Corrupt.PcbLib"}"#
+        );
+        let plain_drive = r#"{"filepath": "C:\\Users\\me\\embedded society\\X.PcbLib"}"#;
+        assert_eq!(
+            redact_absolute_paths(plain_drive),
+            r#"{"filepath": "X.PcbLib"}"#
+        );
+    }
+
+    #[test]
+    fn redact_quoted_paths_as_they_appear_in_json_responses() {
+        // Every tool response is JSON, so this is how a path is actually reached
+        // in practice — preceded by a quote, never by whitespace. The Unix
+        // pattern used to require a whitespace boundary, so these leaked in full
+        // on Linux and macOS: not a truncated tail, the entire absolute path.
+        assert_eq!(
+            redact_absolute_paths(r#"{"filepath": "/home/me/work/proj/.tmp/Corrupt.PcbLib"}"#),
+            r#"{"filepath": "Corrupt.PcbLib"}"#
+        );
+        assert_eq!(
+            redact_absolute_paths("Failed to read '/home/me/libs/X.PcbLib'"),
+            "Failed to read 'X.PcbLib'"
+        );
+        assert_eq!(
+            redact_absolute_paths("(/home/me/libs/X.PcbLib)"),
+            "(X.PcbLib)"
+        );
+    }
+
+    #[test]
+    fn redact_stops_at_trailing_prose_after_a_path() {
+        // A later colon ends the path: the drive's own colon is consumed by the
+        // prefix, so the next one is punctuation rather than part of the name.
+        assert_eq!(
+            redact_absolute_paths("Failed to read C:\\a b\\x.PcbLib: permission denied"),
+            "Failed to read x.PcbLib: permission denied"
+        );
+        // A comma likewise, so a path inside a list does not swallow the rest.
+        assert_eq!(
+            redact_absolute_paths("tried C:\\a b\\x.PcbLib, then gave up"),
+            "tried x.PcbLib, then gave up"
         );
     }
 

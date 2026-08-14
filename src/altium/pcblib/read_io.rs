@@ -28,9 +28,6 @@ impl PcbLib {
         // Note: This is currently a stub - the format is not fully documented
         Self::read_storage_stream(&mut cfb);
 
-        // Read WideStrings stream if present (contains text content for Text primitives)
-        let wide_strings = Self::read_wide_strings(&mut cfb);
-
         // Read embedded 3D models if present
         library.models = Self::read_models(&mut cfb);
 
@@ -63,12 +60,7 @@ impl PcbLib {
 
                 if !component_name.is_empty() && !is_internal {
                     // Read the component data
-                    match Self::read_footprint(
-                        &mut cfb,
-                        &entry_path,
-                        &component_name,
-                        &wide_strings,
-                    ) {
+                    match Self::read_footprint(&mut cfb, &entry_path, &component_name) {
                         Ok(footprint) => {
                             footprints_by_ole_name.insert(component_name.clone(), footprint);
                         }
@@ -337,14 +329,19 @@ impl PcbLib {
         }
     }
 
-    /// Reads the `WideStrings` stream if present.
+    /// Reads a component's `WideStrings` stream if present.
+    ///
+    /// The stream is **per component** (`/{component}/WideStrings`), matching
+    /// Altium and our own writer. This used to read a library-wide
+    /// `/WideStrings`, which no `PcbLib` contains, so the table was always empty
+    /// and every out-of-line text resolved to nothing.
     fn read_wide_strings<F: std::io::Read + std::io::Seek>(
         cfb: &mut cfb::CompoundFile<F>,
+        path: &std::path::Path,
     ) -> reader::WideStrings {
-        if let Some(data) = crate::altium::read_stream_opt(cfb, "/WideStrings") {
-            return reader::parse_wide_strings(&data);
-        }
-        reader::WideStrings::new()
+        crate::altium::read_stream_opt(cfb, path)
+            .map(|data| reader::parse_wide_strings(&data))
+            .unwrap_or_default()
     }
 
     /// Reads embedded 3D models from `/Library/Models/` storage.
@@ -423,9 +420,12 @@ impl PcbLib {
         cfb: &mut cfb::CompoundFile<F>,
         storage_path: &std::path::Path,
         name: &str,
-        wide_strings: &reader::WideStrings,
     ) -> AltiumResult<Footprint> {
         let mut footprint = Footprint::new(name);
+
+        // This component's out-of-line text, read here rather than library-wide
+        // because that is where Altium puts it.
+        let wide_strings = Self::read_wide_strings(cfb, &storage_path.join("WideStrings"));
 
         // Read parameters if present
         let params_path = storage_path.join("Parameters");
@@ -444,7 +444,7 @@ impl PcbLib {
                 AltiumError::invalid_ole(format!("Failed to read Data stream: {e}"))
             })?;
 
-            Self::parse_primitives(&mut footprint, &data, wide_strings);
+            Self::parse_primitives(&mut footprint, &data, &wide_strings);
         }
 
         // Read UniqueIDPrimitiveInformation stream if present (contains unique IDs for primitives)

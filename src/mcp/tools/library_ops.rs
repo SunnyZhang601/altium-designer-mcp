@@ -2111,8 +2111,13 @@ mod tests {
         for (family, primitive, missing) in cases {
             let sym = json!({ "name": "SYM", family: [primitive] });
             let err = ok(&sym).expect_err(&format!("{family} missing {missing} must fail"));
+            // Match the quoted field name, not the bare one: the message text
+            // itself contains most single letters, so `contains("y")` is
+            // satisfied by the 'y' in "Symbol" and `contains("x")` by the 'x'
+            // in a label's "(text='L')" — both would pass even if the guard
+            // named the wrong field.
             assert!(
-                err.contains("SYM") && err.contains(missing),
+                err.contains("SYM") && err.contains(&format!("'{missing}'")),
                 "{family}/{missing}: unhelpful message {err:?}"
             );
         }

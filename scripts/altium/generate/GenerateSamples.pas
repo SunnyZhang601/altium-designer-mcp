@@ -332,6 +332,29 @@ begin
                                   PCBM_BoardRegisteration, Txt.I_ObjectAddress);
 end;
 
+{ A pad in a jumper group. VERIFIED: JumperID is present in Advpcb.dll (the native
+  Delphi engine), which is the test that decides whether a name resolves in
+  DelphiScript — a Set* counterpart is not required and its absence proves nothing. }
+procedure AddPadJumper(Comp : IPCB_LibComponent; X : Integer; Y : Integer;
+                       Nm : String; Jumper : Integer);
+var Pad : IPCB_Pad;
+begin
+    Pad := PCBServer.PCBObjectFactory(ePadObject, eNoDimension, eCreate_Default);
+    if Pad = nil then Exit;
+    Pad.Name     := Nm;
+    Pad.X        := MilsToCoord(X);
+    Pad.Y        := MilsToCoord(Y);
+    Pad.TopXSize := MilsToCoord(60);
+    Pad.TopYSize := MilsToCoord(60);
+    Pad.TopShape := eRounded;
+    Pad.HoleSize := MilsToCoord(30);
+    Pad.Layer    := eMultiLayer;
+    Pad.JumperID := Jumper;
+    Comp.AddPCBObject(Pad);
+    PCBServer.SendMessageToRobots(Comp.I_ObjectAddress, c_Broadcast,
+                                  PCBM_BoardRegisteration, Pad.I_ObjectAddress);
+end;
+
 { A board-cutout region. VERIFIED: IPCB_Region.Kind : TRegionKind, direct
   assignment, constant eRegionKind_BoardCutout. }
 procedure AddRegionCutout(Comp : IPCB_LibComponent; X1 : Integer; Y1 : Integer;
@@ -908,6 +931,11 @@ begin
         // pad apart from its coordinates, so AD24 keeps the press-fit/simple
         // classification somewhere other than the library record. The probe pad was
         // removed again rather than left asserting nothing.
+
+        // Pads 7-8: a jumper pair. JumperID is in Advpcb.dll and links pads sharing
+        // a non-zero id as a 0-ohm net; pad 2 above keeps the default 0 as the control.
+        AddPadJumper(Comp,  60, -60, '7', 4);
+        AddPadJumper(Comp, 120, -60, '8', 4);
 
         // Pad 3 carries the keepout flag, the other bit of the same word.
         Pad := PCBServer.PCBObjectFactory(ePadObject, eNoDimension, eCreate_Default);

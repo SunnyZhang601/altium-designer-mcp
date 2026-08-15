@@ -160,6 +160,7 @@ pub(super) fn parse_pad(data: &[u8], offset: usize) -> ParseResult<Pad> {
     // the golden fixture), so an absent byte reads back as `true`.
     let is_plated = geometry.get(60).map_or(true, |&b| b != 0);
     let solder_mask_expansion_from_hole_edge = geometry.get(125).is_some_and(|&b| b != 0);
+    let jumper_id = read_i16(geometry, 110).unwrap_or(0);
 
     // Per-pad identity GUIDs — extended-tail 16-byte fields @126 (GUID-A) and
     // @142 (GUID-B), read back verbatim (including the golden's nil GUIDs) so
@@ -311,6 +312,7 @@ pub(super) fn parse_pad(data: &[u8], offset: usize) -> ParseResult<Pad> {
         layer,
         hole_size,
         is_plated,
+        jumper_id,
         solder_mask_expansion_from_hole_edge,
         hole_shape,
         hole_slot_length,

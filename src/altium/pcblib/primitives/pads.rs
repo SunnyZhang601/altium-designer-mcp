@@ -134,6 +134,11 @@ pub struct Pad {
     )]
     pub solder_mask_expansion: Option<f64>,
 
+    /// Jumper group id — main-block i16 @110-111. Pads sharing a non-zero id are
+    /// linked as a jumper / 0-ohm net. `0` (no jumper) from scratch.
+    #[serde(default, skip_serializing_if = "is_zero_i16")]
+    pub jumper_id: i16,
+
     /// Paste-mask expansion mode (None/FromRule/Manual) — main-block tri-state byte @101.
     #[serde(default)]
     pub paste_mask_expansion_mode: MaskExpansionMode,
@@ -299,6 +304,11 @@ const fn default_component_index() -> i32 {
 }
 
 /// Default pad thermal-relief conductor width (10 mil = 0.254mm; raw 100000).
+#[allow(clippy::trivially_copy_pass_by_ref)] // serde requires &T
+const fn is_zero_i16(v: &i16) -> bool {
+    *v == 0
+}
+
 const fn default_pad_relief_conductor_width() -> f64 {
     0.254
 }
@@ -337,6 +347,7 @@ impl Pad {
             layer: Layer::TopLayer,
             hole_size: None,
             is_plated: true,
+            jumper_id: 0,
             solder_mask_expansion_from_hole_edge: false,
             hole_shape: HoleShape::Round,
             hole_slot_length: 0.0,
@@ -390,6 +401,7 @@ impl Pad {
             layer: Layer::MultiLayer,
             hole_size: Some(hole_size),
             is_plated: true,
+            jumper_id: 0,
             solder_mask_expansion_from_hole_edge: false,
             hole_shape: HoleShape::Round,
             hole_slot_length: 0.0,

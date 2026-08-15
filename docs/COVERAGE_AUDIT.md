@@ -50,9 +50,6 @@ Each of these is unmodelled: no struct field, nothing parsed, nothing written, n
 exposed. A golden fixture cannot cover them until the field exists, so the reader work
 leads and the fixture follows.
 
-- **[gap | read]** `JumperID` — `AltiumSharp` reads an i16 at Pad offset 110 into
-  `PcbPad.JumperID`; `PcbPadDto` exposes `JUMPERID`. Groups pads as a jumper / 0-ohm link
-  and feeds test-point identification.
 - **🚫 `DrillType`** — resolved as a negative, not a gap. The name is in
   `Advpcb.dll` and `Pad.DrillType := 1` compiles and runs without error, but the saved
   pad is byte-identical to a plain through-hole pad apart from its coordinates. AD24
@@ -108,7 +105,7 @@ unmodelled key survives a read-modify-write. Covered end to end by
 
 Rough value order, highest first:
 
-1. **`model_2d_location`, `JumperID`, per-layer stack arrays** — small and isolated.
+1. **`model_2d_location`, per-layer stack arrays** — small and isolated.
 
 > **Heuristic, corrected.** A missing `Set*` counterpart does *not* mean a property is
 > unauthorable — `SolderMaskExpansionFromHoleEdge` and `BarCodeKind` both lack one and

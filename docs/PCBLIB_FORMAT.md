@@ -408,7 +408,7 @@ extended tail, written by overlaying the modelled fields onto a canonical byte t
 | 90-93 | 4 | Solder mask expansion (i32) | yes |
 | 101 | 1 | Paste mask expansion cache state (`TCacheState`, see below) | yes |
 | 102 | 1 | Solder mask expansion cache state (`TCacheState`, see below) | yes |
-| 110-111 | 2 | Jumper ID (i16) | unmodelled (template) |
+| 110-111 | 2 | Jumper ID (i16; `0` = not in a jumper group) | yes |
 | 114-117 | 4 | V7 layer id (derived from the pad's layer) | yes (write) |
 | 121-124 | 4 | Solder-mask cache (mirrors @90) | unmodelled (template) |
 | 125 | 1 | Solder-mask expansion measured from the hole edge (bool) | yes |

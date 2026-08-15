@@ -1569,6 +1569,24 @@ mod tests {
     }
 
     #[test]
+    fn jumper_id_round_trips() {
+        // Main-block i16 @110-111. Zero is "no jumper" and must leave the template
+        // bytes alone, so the default pad is the control.
+        let mut original = Footprint::new("JUMPER");
+        let mut a = Pad::through_hole("1", 0.0, 0.0, 1.6, 1.6, 0.8);
+        a.jumper_id = 7;
+        original.add_pad(a);
+        original.add_pad(Pad::through_hole("2", 3.0, 0.0, 1.6, 1.6, 0.8));
+
+        let data = writer::encode_data_stream(&original).expect("encode");
+        let mut decoded = Footprint::new("JUMPER");
+        reader::parse_data_stream(&mut decoded, &data, None);
+
+        assert_eq!(decoded.pads[0].jumper_id, 7);
+        assert_eq!(decoded.pads[1].jumper_id, 0);
+    }
+
+    #[test]
     fn testpoint_flags_round_trip_and_imply_locked() {
         // The fabrication test-point bits (0x0080 / 0x0100 in Altium's flag word)
         // must survive encode -> decode. Altium clears the unlocked bit on a pad it

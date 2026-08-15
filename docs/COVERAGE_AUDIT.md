@@ -59,10 +59,18 @@ leads and the fixture follows.
   neither be located by diffing an authored pad nor guessed responsibly. Needs a
   press-fit pad from a real library to locate the byte.
 - **[gap | read]** Text barcode sizing block — we model `kind = BarCode` and a golden
-  covers it, but none of the block's own keys: `BarCodeKind@157`,
-  `BarCodeRenderMode@158`, `BarCodeInverted@159`, `BarCodeFontName@161-224`,
-  `BarCodeShowText@225`, `BarCodeFullWidth/Height@137/141`, `BarCodeXMargin/YMargin@145/149`,
-  `BarCodeMinWidth@153`. A barcode round-trips as a barcode but loses its sizing.
+  covers it, but none of the block's own keys (`BarCodeKind`, `RenderMode`, `Inverted`,
+  `FontName`, `ShowText`, `FullWidth`/`Height`, `XMargin`/`YMargin`, `MinWidth`). A barcode
+  round-trips as a barcode but loses its sizing.
+  **Blocked, and do not implement from the offsets this document used to list.** AD24
+  exposes no `Set*` for any of the ten, so no script can vary them, and the golden's
+  barcode and non-barcode text records carry *identical* values at the candidate offsets —
+  they are template bytes. With no variation to diff against, the mapping cannot be
+  validated, and a guessed offset risks corrupting the neighbouring inverted-rectangle
+  fields (@124/@128/@133), which are verified. Only `BarCodeKind@157` is confirmed: `1` on
+  the golden's Code128 barcode against `0` on a non-barcode text — one sample, not enough
+  to say what other values mean. Needs barcodes authored through the AD24 UI, or a real
+  library that varies them.
 - **[gap | read]** `model_2d_location` (`MODEL.2D.X` / `MODEL.2D.Y`) on ComponentBody —
   `model_2d_rotation` is modelled but the position is not: the reader drops both keys and
   the writer always emits `MODEL.2D.X=0mil|MODEL.2D.Y=0mil`. A body whose model is offset
@@ -106,7 +114,8 @@ unmodelled key survives a read-modify-write. Covered end to end by
 
 Rough value order, highest first:
 
-1. **Barcode sizing block** — ten keys, one primitive, rarely used.
-2. **`model_2d_location`, `JumperID`, per-layer stack arrays** — small and isolated.
-3. **`DrillType`** — blocked on locating its byte; needs a press-fit pad from a real
+1. **`model_2d_location`, `JumperID`, per-layer stack arrays** — small, isolated, and the
+   only items here still actionable.
+2. **`DrillType`** — blocked on locating its byte; needs a press-fit pad from a real
    library.
+3. **Barcode sizing block** — blocked on the same problem, ten times over.

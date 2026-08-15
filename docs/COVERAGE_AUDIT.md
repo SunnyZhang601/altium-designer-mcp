@@ -73,18 +73,12 @@ leads and the fixture follows.
 
 ## 2. SchLib format gaps
 
-All four are Parameter display properties — the outstanding half of the SchLib field-
-completeness work.
-
-- **[gap | read]** `AutoPosition` (`AUTOPOSITION`) — auto-position mode (0=Manual, 1-4 =
-  auto anchor positions). Drives how Altium places the parameter label relative to the
-  component; without it every parameter we write is manually positioned.
-- **[gap | read]** `IsRule` (`ISRULE`) — marks a parameter as carrying a PCB design-rule
-  directive.
-- **[gap | read]** `IsSystemParameter` (`ISSYSTEMPARAMETER`) — distinguishes a system
-  parameter from a user one.
-- **[gap | read]** `TextHorzAnchor` / `TextVertAnchor` (`TEXTHORZANCHOR` /
-  `TEXTVERTANCHOR`) — text-box anchoring, distinct from `Justification`.
+None outstanding. The Parameter display properties (`AUTOPOSITION`, `ISRULE`,
+`ISSYSTEMPARAMETER`, `TEXTHORZANCHOR` / `TEXTVERTANCHOR`) are modelled, read, written and
+exposed. They have **no golden fixture**: AD24 does not expose them on `ISch_Parameter`,
+so they cannot be authored by script, and the golden library does not contain them
+naturally. Coverage is a write-readback round-trip until a hand-authored file provides
+one — a fixture gap, not a modelling gap. See [FIXTURE_COVERAGE.md](FIXTURE_COVERAGE.md).
 
 ## 3. Tool-schema gaps
 
@@ -106,23 +100,18 @@ Verified present, kept here only because fidelity regressions are easy to reintr
 | PcbLib net / polygon / component indices | shipped; net index is [structurally absent from a library](FIXTURE_COVERAGE.md) |
 | `IsNotAccessible` round-trip (SchLib) | shipped |
 
-One genuine gap remains in this group:
-
-- **[gap | read]** Region and ComponentBody parameter blocks are parsed key-by-key with no
-  passthrough for unrecognised keys, so any key Altium writes that we do not model is
-  dropped on a read-modify-write. A passthrough map would make the whole class of
-  unknown-key loss impossible rather than fixing them one at a time.
+Region and ComponentBody already carry an `additional_parameters` passthrough: every key
+the typed model does not consume is captured in read order and re-emitted verbatim, so an
+unmodelled key survives a read-modify-write. Covered end to end by
+`write_pcblib_additional_parameters_roundtrip`.
 
 ## Ordering
 
 Rough value order, highest first:
 
-1. **Region / ComponentBody param passthrough** — closes an open-ended class of silent
-   loss rather than one field, including keys nobody has catalogued yet.
-2. **SchLib Parameter display properties** — four fields, one record, one fixture.
-3. **`DrillLayerPairType`, `DrillType`** — classification metadata for blind/buried and
+1. **`DrillLayerPairType`, `DrillType`** — classification metadata for blind/buried and
    press-fit.
-4. **Via `SolderMaskExpansionFromHoleEdge`** — the Pad half shipped; this is the
+2. **Via `SolderMaskExpansionFromHoleEdge`** — the Pad half shipped; this is the
    remaining byte.
-5. **Barcode sizing block** — ten keys, one primitive, rarely used.
-6. **`model_2d_location`, `JumperID`, per-layer stack arrays** — small and isolated.
+3. **Barcode sizing block** — ten keys, one primitive, rarely used.
+4. **`model_2d_location`, `JumperID`, per-layer stack arrays** — small and isolated.

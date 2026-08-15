@@ -1467,6 +1467,26 @@ impl McpServer {
             .get("is_configurable")
             .and_then(Value::as_bool)
             .unwrap_or(false);
+        let auto_position = json
+            .get("auto_position")
+            .and_then(Value::as_u64)
+            .unwrap_or(0) as u8;
+        let is_rule = json
+            .get("is_rule")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        let is_system_parameter = json
+            .get("is_system_parameter")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        let text_horz_anchor = json
+            .get("text_horz_anchor")
+            .and_then(Value::as_u64)
+            .unwrap_or(0) as u8;
+        let text_vert_anchor = json
+            .get("text_vert_anchor")
+            .and_then(Value::as_u64)
+            .unwrap_or(0) as u8;
         let owner_part_id = json_i32(json, "owner_part_id").unwrap_or(1);
 
         Some(Parameter {
@@ -1485,6 +1505,11 @@ impl McpServer {
             hide_name,
             description,
             is_configurable,
+            auto_position,
+            is_rule,
+            is_system_parameter,
+            text_horz_anchor,
+            text_vert_anchor,
             owner_part_id,
             display_flags: parse_schlib_display_flags(json),
             unique_id,

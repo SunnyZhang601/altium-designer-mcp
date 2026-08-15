@@ -512,6 +512,7 @@ var
     I        : Integer;
     Pad      : IPCB_Pad;
     Cache    : TPadCache;
+    Trk      : IPCB_Track;
 begin
     // CreateNewDocumentFromDocumentKind creates + focuses a blank doc and returns its
     // IServerDocument (Client.OpenNewDocumentOfKind, used in the v0, does not exist).
@@ -745,6 +746,52 @@ begin
 
         // A second, plain SMD pad so the first can be compared against a default.
         AddPadFull(Comp, 40, 0, 0, eRectangular, 60, 40, '2');
+
+        PCBServer.PostProcess;
+    except
+    end;
+
+    // LOCKFLAGS_PCB: the locked / keepout flag word, one of the fields the fixture map
+    // lists as self-round-trip only. Both flags live in the shared common-header flag
+    // word, so a pad and a track between them cover every primitive that carries it.
+    // One field family per run: an unknown identifier aborts the whole script.
+    try
+        Comp := PCBServer.CreatePCBLibComp;
+        Comp.Name := 'LOCKFLAGS_PCB';
+        Lib.RegisterComponent(Comp);
+        PCBServer.PreProcess;
+
+        Pad := PCBServer.PCBObjectFactory(ePadObject, eNoDimension, eCreate_Default);
+        if Pad <> nil then
+        begin
+            Pad.Name     := '1';
+            Pad.X        := MilsToCoord(-40);
+            Pad.Y        := MilsToCoord(0);
+            Pad.TopXSize := MilsToCoord(60);
+            Pad.TopYSize := MilsToCoord(40);
+            Pad.TopShape := eRounded;
+            Pad.Layer    := eTopLayer;
+            Pad.Moveable := False;
+            Comp.AddPCBObject(Pad);
+            PCBServer.SendMessageToRobots(Comp.I_ObjectAddress, c_Broadcast,
+                                          PCBM_BoardRegisteration, Pad.I_ObjectAddress);
+        end;
+
+        // An unlocked pad as the control.
+        AddPadFull(Comp, 40, 0, 0, eRounded, 60, 40, '2');
+
+        Trk := PCBServer.PCBObjectFactory(eTrackObject, eNoDimension, eCreate_Default);
+        if Trk <> nil then
+        begin
+            Trk.X1 := MilsToCoord(-40); Trk.Y1 := MilsToCoord(30);
+            Trk.X2 := MilsToCoord(40);  Trk.Y2 := MilsToCoord(30);
+            Trk.Width := MilsToCoord(6);
+            Trk.Layer := eTopOverlay;
+            Trk.Moveable := False;
+            Comp.AddPCBObject(Trk);
+            PCBServer.SendMessageToRobots(Comp.I_ObjectAddress, c_Broadcast,
+                                          PCBM_BoardRegisteration, Trk.I_ObjectAddress);
+        end;
 
         PCBServer.PostProcess;
     except

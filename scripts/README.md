@@ -12,6 +12,7 @@ oracle in [`tests/integration/`](../tests/integration/).)
 | [`Verify-Libraries.ps1`](Verify-Libraries.ps1) | Launch Altium to confirm a `.PcbLib`/`.SchLib` opens cleanly | **Yes** |
 | [`Generate-Samples.ps1`](Generate-Samples.ps1) | Launch Altium to author the sample libraries | **Yes** |
 | [`Verify-RoundTrip.ps1`](Verify-RoundTrip.ps1) | Write libraries through the MCP server, then check Altium resolves every component name | **Yes** |
+| [`Verify-MaskCacheState.ps1`](Verify-MaskCacheState.ps1) | Write pads carrying each mask-expansion cache state, then show what Altium makes of them | **Yes** |
 | [`Resolve-AltiumExe.ps1`](Resolve-AltiumExe.ps1) | Shared helper: read `ALTIUM_EXE` from the repo-root `.env.local` | — |
 | [`altium/`](altium/) | The DelphiScript automation the launchers run | **Yes** |
 | [`samples/`](samples/) | Altium-authored sample libraries (ground truth for the tests) | No |
@@ -37,6 +38,7 @@ through Altium's `RunScript` CLI. Because it needs the GUI application and a lic
 | Path | Role |
 |------|------|
 | [`altium/verify/`](altium/verify/) | `AltiumVerify.pas` — opens each library and reports PASS/FAIL plus the component names Altium resolved (run by `Verify-Libraries.ps1`) |
+| [`altium/verify/`](altium/verify/) | `AltiumMaskCache.pas` — reports every pad's mask-expansion cache state and re-saves the library (run by `Verify-MaskCacheState.ps1`) |
 | [`altium/generate/`](altium/generate/) | `GenerateSamples.pas` — authors the sample libraries (run by `Generate-Samples.ps1`) |
 
 The `RunScript` launch and the file-based request/response bridge are adapted from
@@ -59,6 +61,28 @@ ground truth the reader and round-trip tests validate against. See
 Hard-won behaviour of Altium, DelphiScript and Windows PowerShell 5.1. Each cost real
 debugging time here; several made a *correct* change look broken, which is the expensive
 kind. Read this before writing or trusting a script in this folder.
+
+### Altium recomputes a rule-driven mask expansion on load
+
+The mask-expansion tri-state is `TCacheState = (eCacheInvalid, eCacheValid,
+eCacheManual)`. Only `eCacheManual` survives a trip through Altium.
+`Verify-MaskCacheState.ps1` hands Altium a library whose three pads differ only in that
+state and shows what comes back:
+
+| written | Altium reports after load | Altium re-saves |
+|---------|---------------------------|-----------------|
+| `none` (0) + 0.0 | valid=1, 40000 (4 mil) | `from_rule`, 4 mil |
+| `from_rule` (1) + 0.0 | valid=1, 40000 (4 mil) | `from_rule`, 4 mil |
+| `manual` (2) + 7 mil | valid=2, 70000 | `manual`, 7 mil |
+
+The first two are indistinguishable afterwards: Altium discards whatever number a
+rule-driven pad carries and computes the expansion from its own rule. A zero expansion
+paired with `eCacheValid` therefore does **not** suppress the mask opening — worth knowing
+before treating a wrong state here as a fabrication risk. It is a fidelity bug, not an
+output one.
+
+The corollary for fixtures: a re-saved library is not byte-comparable to the one handed in
+even when nothing was edited, because opening it resolves caches.
 
 ### Altium's own RTTI answers enum questions without a run
 

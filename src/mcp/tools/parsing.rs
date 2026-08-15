@@ -273,9 +273,9 @@ impl McpServer {
             .map(|s| match s.to_lowercase().as_str() {
                 "manual" => MaskExpansionMode::Manual,
                 "from_rule" => MaskExpansionMode::FromRule,
-                // Anything else, "none" included, defers to the design rule —
-                // the safe direction, since FromRule tells Altium to honour the
-                // stored value verbatim.
+                // Anything else, "none" included, maps to the state a fresh
+                // Altium pad carries, so an unrecognised value produces the
+                // same bytes as saying nothing at all.
                 _ => MaskExpansionMode::None,
             })
             .unwrap_or_default();
@@ -285,9 +285,9 @@ impl McpServer {
             .map(|s| match s.to_lowercase().as_str() {
                 "manual" => MaskExpansionMode::Manual,
                 "from_rule" => MaskExpansionMode::FromRule,
-                // Anything else, "none" included, defers to the design rule —
-                // the safe direction, since FromRule tells Altium to honour the
-                // stored value verbatim.
+                // Anything else, "none" included, maps to the state a fresh
+                // Altium pad carries, so an unrecognised value produces the
+                // same bytes as saying nothing at all.
                 _ => MaskExpansionMode::None,
             })
             .unwrap_or_default();
@@ -950,9 +950,9 @@ impl McpServer {
             via.solder_mask_expansion_mode = match s.to_lowercase().as_str() {
                 "manual" => MaskExpansionMode::Manual,
                 "from_rule" => MaskExpansionMode::FromRule,
-                // Anything else, "none" included, defers to the design rule —
-                // the safe direction, since FromRule tells Altium to honour the
-                // stored value verbatim.
+                // Anything else, "none" included, maps to the state a fresh
+                // Altium pad carries, so an unrecognised value produces the
+                // same bytes as saying nothing at all.
                 _ => MaskExpansionMode::None,
             };
         }

@@ -581,6 +581,50 @@ impl PowerPlaneConnectStyle {
     }
 }
 
+/// How a via's drill span is classified — `SubRecord-1` byte @312.
+///
+/// A through via spans the whole board; the blind/buried kinds mark which end of a
+/// drill-pair sequence the via belongs to. `from_layer` / `to_layer` describe the span
+/// but not this classification, which Altium stores separately.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DrillLayerPairType {
+    /// Spans the full board (Altium's default).
+    #[default]
+    Through,
+    /// First drill pair of a blind/buried sequence.
+    BlindBuriedStart,
+    /// An intermediate drill pair.
+    Mid,
+    /// Final drill pair of the sequence.
+    End,
+}
+
+impl DrillLayerPairType {
+    /// Creates from the Altium byte (`0` = `Through`, `1` = `BlindBuriedStart`,
+    /// `2` = `Mid`, `3` = `End`). An unknown value reads as `Through`.
+    #[must_use]
+    pub const fn from_id(id: u8) -> Self {
+        match id {
+            1 => Self::BlindBuriedStart,
+            2 => Self::Mid,
+            3 => Self::End,
+            _ => Self::Through,
+        }
+    }
+
+    /// Returns the Altium byte.
+    #[must_use]
+    pub const fn to_id(self) -> u8 {
+        match self {
+            Self::Through => 0,
+            Self::BlindBuriedStart => 1,
+            Self::Mid => 2,
+            Self::End => 3,
+        }
+    }
+}
+
 /// A PCB via (vertical interconnect access).
 ///
 /// Vias connect traces between different copper layers. They have a drill hole
@@ -728,6 +772,15 @@ pub struct Via {
     #[serde(default, skip_serializing_if = "PcbFlags::is_empty")]
     pub flags: PcbFlags,
 
+    /// Whether solder-mask expansion is measured from the HOLE edge rather than the
+    /// pad edge — `SubRecord-1` bool @258. Default `false`, matching the template.
+    #[serde(default)]
+    pub solder_mask_expansion_from_hole_edge: bool,
+
+    /// Drill-pair classification — `SubRecord-1` byte @312. Default `Through`.
+    #[serde(default)]
+    pub drill_layer_pair_type: DrillLayerPairType,
+
     /// Unique ID assigned by Altium (8-character alphanumeric string).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unique_id: Option<String>,
@@ -795,6 +848,8 @@ impl Via {
             diameter_stack_mode: ViaStackMode::Simple,
             per_layer_diameters: None,
             flags: PcbFlags::empty(),
+            solder_mask_expansion_from_hole_edge: false,
+            drill_layer_pair_type: DrillLayerPairType::Through,
             unique_id: None,
         }
     }
@@ -834,6 +889,8 @@ impl Via {
             diameter_stack_mode: ViaStackMode::Simple,
             per_layer_diameters: None,
             flags: PcbFlags::empty(),
+            solder_mask_expansion_from_hole_edge: false,
+            drill_layer_pair_type: DrillLayerPairType::Through,
             unique_id: None,
         }
     }

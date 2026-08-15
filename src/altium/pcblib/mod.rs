@@ -46,9 +46,9 @@ mod writer;
 use serde::{Deserialize, Serialize};
 
 pub use primitives::{
-    Arc, ComponentBody, EmbeddedModel, Fill, HoleShape, Layer, MaskExpansionMode, Model3D, Pad,
-    PadShape, PadStackMode, PcbFlags, PowerPlaneConnectStyle, Region, RegionKind, StrokeFont, Text,
-    TextJustification, TextKind, Track, Vertex, Via,
+    Arc, ComponentBody, DrillLayerPairType, EmbeddedModel, Fill, HoleShape, Layer,
+    MaskExpansionMode, Model3D, Pad, PadShape, PadStackMode, PcbFlags, PowerPlaneConnectStyle,
+    Region, RegionKind, StrokeFont, Text, TextJustification, TextKind, Track, Vertex, Via,
 };
 
 use crate::altium::error::{AltiumError, AltiumResult};
@@ -1995,6 +1995,54 @@ mod tests {
         assert!(approx_eq(decoded.vias[2].hole_size, 0.25, 0.001));
         assert_eq!(decoded.vias[2].from_layer, Layer::TopLayer);
         assert_eq!(decoded.vias[2].to_layer, Layer::BottomLayer);
+    }
+
+    #[test]
+    fn via_drill_pair_and_hole_edge_round_trip() {
+        use super::primitives::DrillLayerPairType;
+
+        // SubRecord-1 @258 (mask measured from the hole edge) and @312 (drill-pair
+        // classification). Both are 0 in Altium's template, so a default via must stay
+        // byte-identical while a configured one survives the round trip.
+        let mut original = Footprint::new("VIA_DRILL");
+        let mut configured = Via::new(0.0, 0.0, 0.6, 0.3);
+        configured.solder_mask_expansion_from_hole_edge = true;
+        configured.drill_layer_pair_type = DrillLayerPairType::Mid;
+        original.add_via(configured);
+        original.add_via(Via::new(2.0, 0.0, 0.6, 0.3));
+
+        let data = writer::encode_data_stream(&original).expect("encode");
+        let mut decoded = Footprint::new("VIA_DRILL");
+        reader::parse_data_stream(&mut decoded, &data, None);
+
+        assert_eq!(decoded.vias.len(), 2);
+        assert!(decoded.vias[0].solder_mask_expansion_from_hole_edge);
+        assert_eq!(
+            decoded.vias[0].drill_layer_pair_type,
+            DrillLayerPairType::Mid
+        );
+        assert!(!decoded.vias[1].solder_mask_expansion_from_hole_edge);
+        assert_eq!(
+            decoded.vias[1].drill_layer_pair_type,
+            DrillLayerPairType::Through,
+            "a from-scratch via is a through via"
+        );
+
+        // Every byte value maps back to itself, including the unknown-value fallback.
+        for (id, kind) in [
+            (0, DrillLayerPairType::Through),
+            (1, DrillLayerPairType::BlindBuriedStart),
+            (2, DrillLayerPairType::Mid),
+            (3, DrillLayerPairType::End),
+        ] {
+            assert_eq!(DrillLayerPairType::from_id(id), kind);
+            assert_eq!(kind.to_id(), id);
+        }
+        assert_eq!(
+            DrillLayerPairType::from_id(99),
+            DrillLayerPairType::Through,
+            "an unknown classification reads as a through via"
+        );
     }
 
     #[test]

@@ -6,8 +6,8 @@
 //! writer's output, as `file_io_roundtrip.rs` does).
 
 use altium_designer_mcp::altium::pcblib::{
-    HoleShape, Layer, MaskExpansionMode, PadShape, PadStackMode, PcbFlags, PcbLib, RegionKind,
-    TextKind,
+    DrillLayerPairType, HoleShape, Layer, MaskExpansionMode, PadShape, PadStackMode, PcbFlags,
+    PcbLib, RegionKind, TextKind,
 };
 use std::path::PathBuf;
 
@@ -1238,6 +1238,18 @@ fn samples_pcblib_via_mask_state_is_altium_factory_default() {
             via.paste_mask_expansion.abs() < 1e-9,
             "a via has no paste by default, got {}",
             via.paste_mask_expansion
+        );
+        // @258 / @312 are 0 in Altium's via template. Asserting the decoded defaults
+        // catches a reader that picked the wrong offsets in a 321-byte block, which a
+        // self-round-trip could not.
+        assert!(
+            !via.solder_mask_expansion_from_hole_edge,
+            "via {i} measures mask expansion from the pad edge"
+        );
+        assert_eq!(
+            via.drill_layer_pair_type,
+            DrillLayerPairType::Through,
+            "via {i} is a through via"
         );
     }
 }

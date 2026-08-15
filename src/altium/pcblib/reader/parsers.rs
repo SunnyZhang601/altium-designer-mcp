@@ -550,6 +550,10 @@ pub(super) fn parse_via(data: &[u8], offset: usize) -> ParseResult<Via> {
     // Bottom-face solder-mask expansion @242. Only surfaced when it differs from the
     // front @54, so a template-default via (both faces equal) reads back as `None`
     // and re-emits byte-identically.
+    // @258 bool: measure mask expansion from the hole edge; @312 byte: drill-pair
+    // classification. Both sit past the per-layer diameter table.
+    let solder_mask_expansion_from_hole_edge = block.get(258).is_some_and(|&b| b != 0);
+    let drill_layer_pair_type = DrillLayerPairType::from_id(block.get(312).copied().unwrap_or(0));
     let solder_mask_expansion_back = match (read_i32(block, 242), read_i32(block, 54)) {
         (Some(back), Some(front)) if back != front => Some(to_mm(back)),
         _ => None,
@@ -585,6 +589,8 @@ pub(super) fn parse_via(data: &[u8], offset: usize) -> ParseResult<Via> {
         solder_mask_expansion,
         solder_mask_expansion_mode,
         solder_mask_expansion_back,
+        solder_mask_expansion_from_hole_edge,
+        drill_layer_pair_type,
         hole_positive_tolerance,
         hole_negative_tolerance,
         paste_mask_expansion,

@@ -55,12 +55,9 @@ leads and the fixture follows.
   and feeds test-point identification.
 - **[gap | read]** `DrillType` (0=Simple, 1=Pressfit) — `AltiumSharp` `PcbPad.DrillType`
   separates a plated drilled hole from a press-fit one. Meaningful for connectors.
-- **[gap | read]** `SolderMaskExpansionFromHoleEdge` on **Via** (`SubRecord-1` offset 258)
-  — the Pad equivalent ships (main-block bool @125); the Via byte is still unread.
-- **[gap | read]** `DrillLayerPairType` (Via `SubRecord-1` offset 312) — `AltiumSharp`
-  reads `B(312)` (0=Through, 1=BlindBuriedStart, 2=Mid, 3=End). We infer span from
-  `from_layer` / `to_layer` and have no explicit drill-pair type, so the blind/buried
-  classification is lost.
+  **Blocked:** no byte offset is known for it and AD24 exposes no setter, so it can
+  neither be located by diffing an authored pad nor guessed responsibly. Needs a
+  press-fit pad from a real library to locate the byte.
 - **[gap | read]** Text barcode sizing block — we model `kind = BarCode` and a golden
   covers it, but none of the block's own keys: `BarCodeKind@157`,
   `BarCodeRenderMode@158`, `BarCodeInverted@159`, `BarCodeFontName@161-224`,
@@ -109,9 +106,7 @@ unmodelled key survives a read-modify-write. Covered end to end by
 
 Rough value order, highest first:
 
-1. **`DrillLayerPairType`, `DrillType`** — classification metadata for blind/buried and
-   press-fit.
-2. **Via `SolderMaskExpansionFromHoleEdge`** — the Pad half shipped; this is the
-   remaining byte.
-3. **Barcode sizing block** — ten keys, one primitive, rarely used.
-4. **`model_2d_location`, `JumperID`, per-layer stack arrays** — small and isolated.
+1. **Barcode sizing block** — ten keys, one primitive, rarely used.
+2. **`model_2d_location`, `JumperID`, per-layer stack arrays** — small and isolated.
+3. **`DrillType`** — blocked on locating its byte; needs a press-fit pad from a real
+   library.

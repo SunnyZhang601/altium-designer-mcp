@@ -819,6 +819,8 @@ constant regions are replayed verbatim.
 | 74 | 1 | Diameter stack mode (0=Simple, 1=TopMiddleBottom, 2=FullStack) | yes |
 | 75-202 | 128 | Per-layer diameters (32 × i32; a Simple via repeats its diameter) | yes |
 | 242-245 | 4 | Solder mask expansion, back/bottom face (i32; mirrors the front when unset) | yes |
+| 258 | 1 | Solder-mask expansion measured from the hole edge (bool) | yes |
+| 312 | 1 | Drill-pair classification (0=Through, 1=BlindBuriedStart, 2=Mid, 3=End) | yes |
 | 258 | 1 | Solder-mask-from-hole-edge flag | unmodelled (template) |
 | 259-274 | 16 | Identity GUID A (fresh per via on write) | write-only |
 | 275-290 | 16 | Identity GUID B (fresh per via on write) | write-only |

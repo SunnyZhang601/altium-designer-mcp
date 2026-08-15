@@ -780,6 +780,23 @@ begin
         // An unlocked pad as the control.
         AddPadFull(Comp, 40, 0, 0, eRounded, 60, 40, '2');
 
+        // Pad 3 carries the keepout flag, the other bit of the same word.
+        Pad := PCBServer.PCBObjectFactory(ePadObject, eNoDimension, eCreate_Default);
+        if Pad <> nil then
+        begin
+            Pad.Name     := '3';
+            Pad.X        := MilsToCoord(0);
+            Pad.Y        := MilsToCoord(-30);
+            Pad.TopXSize := MilsToCoord(60);
+            Pad.TopYSize := MilsToCoord(40);
+            Pad.TopShape := eRounded;
+            Pad.Layer    := eTopLayer;
+            Pad.IsKeepout := True;
+            Comp.AddPCBObject(Pad);
+            PCBServer.SendMessageToRobots(Comp.I_ObjectAddress, c_Broadcast,
+                                          PCBM_BoardRegisteration, Pad.I_ObjectAddress);
+        end;
+
         Trk := PCBServer.PCBObjectFactory(eTrackObject, eNoDimension, eCreate_Default);
         if Trk <> nil then
         begin

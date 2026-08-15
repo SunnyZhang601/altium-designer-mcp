@@ -1220,6 +1220,21 @@ fn samples_pcblib_locked_flag() {
         "pad 2 is the unlocked control"
     );
 
+    // KEEPOUT is the other bit of the same word, and must not bleed into LOCKED.
+    let keepout = pad("3");
+    assert!(
+        keepout.flags.contains(PcbFlags::KEEPOUT),
+        "pad 3 is authored as a keepout"
+    );
+    assert!(
+        !keepout.flags.contains(PcbFlags::LOCKED),
+        "keepout must not imply locked"
+    );
+    assert!(
+        !pad("1").flags.contains(PcbFlags::KEEPOUT),
+        "and locked must not imply keepout"
+    );
+
     assert_eq!(fp.tracks.len(), 1, "LOCKFLAGS_PCB has one track");
     assert!(
         fp.tracks[0].flags.contains(PcbFlags::LOCKED),

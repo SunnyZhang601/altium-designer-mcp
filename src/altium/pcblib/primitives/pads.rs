@@ -487,16 +487,19 @@ pub enum ViaStackMode {
 /// *cached* expansion rather than an on/off switch. The stored expansion value
 /// is only authoritative when the state says so:
 ///
-/// - `None` (0, `eCacheInvalid`) — the cached value is stale and Altium
-///   recomputes the expansion from the design rule. This is what a fresh
-///   Altium pad or via carries, so it is also our default.
+/// - `None` (0, `eCacheInvalid`) — the cached value is stale. This is what a
+///   fresh Altium pad or via carries, so it is also our default.
 /// - `FromRule` (1, `eCacheValid`) — the stored value is a rule result Altium
-///   already computed and will honour as-is.
+///   already computed. This is what Altium leaves behind once it has opened a
+///   library and resolved the expansion itself.
 /// - `Manual` (2, `eCacheManual`) — the stored value was specified by hand.
 ///
-/// The distinction matters on write: pairing `FromRule` with a zero expansion
-/// tells Altium the rule genuinely resolved to zero, which suppresses the mask
-/// opening instead of deferring to the rule.
+/// Only `Manual` survives a trip through Altium. `scripts/Verify-MaskCacheState.ps1`
+/// hands Altium a library carrying all three states and shows it recomputing the
+/// rule-driven ones on load: a pad written as `None`/0.0 and a pad written as
+/// `FromRule`/0.0 both come back as `FromRule` with the rule's 4 mil, while the
+/// `Manual` pad keeps its own number. So the state a rule-driven pad is written
+/// with is a fidelity question, not a fabrication-outcome one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MaskExpansionMode {

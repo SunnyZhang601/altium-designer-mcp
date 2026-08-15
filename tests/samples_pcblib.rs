@@ -1200,10 +1200,10 @@ fn samples_pcblib_via_mask_state_is_altium_factory_default() {
     // `TCacheState = (eCacheInvalid, eCacheValid, eCacheManual)`.
     //
     // An Altium-authored via carries byte @66 = 0 (`eCacheInvalid`), meaning the
-    // stored expansion is stale and Altium recomputes it from the design rule.
-    // Our from-scratch via writes the same byte, so this pins the two together:
-    // defaulting to `FromRule` instead would claim the 4 mil below is a rule
-    // result Altium must honour verbatim.
+    // stored expansion is stale. Our from-scratch via writes the same byte, so
+    // this pins the two together. Altium recomputes a rule-driven expansion on
+    // load either way (`scripts/Verify-MaskCacheState.ps1`), so what this
+    // protects is fidelity with a factory via, not the resulting mask.
     let lib = PcbLib::open(sample("footprints.PcbLib")).expect("failed to open footprints.PcbLib");
     let fp = lib.get("VIAS").expect("footprint VIAS not found");
     assert_eq!(fp.vias.len(), 2);

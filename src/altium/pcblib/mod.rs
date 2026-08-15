@@ -1402,6 +1402,70 @@ mod tests {
     }
 
     #[test]
+    fn library_roundtrip_text_longer_than_the_block_1_limit() {
+        // Block 1 of a Text record is a Pascal SHORT string, so a text over 255
+        // bytes cannot be stored inline: Altium truncates block 1 and carries
+        // the full value in /WideStrings, addressed by the index in the
+        // geometry block. A library Altium can author must therefore survive a
+        // write -> read cycle here, rather than the save being refused.
+        //
+        // Two texts, so a mis-addressed index resolves to the wrong entry
+        // instead of coincidentally matching.
+        use std::io::Cursor;
+
+        let long = "A".repeat(260) + "_END";
+        let text_at = |content: &str, y: f64| Text {
+            x: 0.0,
+            y,
+            text: content.to_string(),
+            height: 1.0,
+            layer: Layer::TopOverlay,
+            kind: TextKind::Stroke,
+            rotation: 0.0,
+            stroke_font: None,
+            stroke_width: None,
+            italic: false,
+            bold: false,
+            mirror: false,
+            is_comment: false,
+            is_designator: false,
+            font_name: "Arial".to_string(),
+            justification: TextJustification::default(),
+            is_inverted: false,
+            inverted_border: None,
+            use_inverted_rectangle: false,
+            inverted_rect_width: None,
+            inverted_rect_height: None,
+            inverted_rect_text_offset: None,
+            flags: PcbFlags::default(),
+            net_index: 0xFFFF,
+            polygon_index: 0xFFFF,
+            component_index: -1,
+            unique_id: None,
+        };
+
+        let mut fp = Footprint::new("LONG_TEXT");
+        fp.add_text(text_at(&long, 0.0));
+        fp.add_text(text_at("SHORT", -2.0));
+        let mut lib = PcbLib::new();
+        lib.add(fp);
+
+        let mut buffer = Cursor::new(Vec::new());
+        lib.write(&mut buffer)
+            .expect("a 264-character text must be writable");
+        buffer.set_position(0);
+        let read_back = PcbLib::read(&mut buffer).expect("read back");
+
+        let fp = read_back.get("LONG_TEXT").expect("footprint");
+        let contents: Vec<&str> = fp.text.iter().map(|t| t.text.as_str()).collect();
+        assert_eq!(
+            contents,
+            vec![long.as_str(), "SHORT"],
+            "both texts must survive, the long one in full"
+        );
+    }
+
+    #[test]
     fn binary_roundtrip_common_indices() {
         // A board-context Track and Text carrying a net/component association must
         // survive encode -> decode via the common-header indices (@3 net, @5

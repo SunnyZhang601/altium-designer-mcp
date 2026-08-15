@@ -329,7 +329,7 @@ pub fn encode_data_stream(footprint: &Footprint) -> crate::altium::error::Altium
             wide_index += 1;
             Some(current)
         };
-        encode_text(&mut data, text, index)?;
+        encode_text(&mut data, text, index);
     }
 
     for region in &footprint.regions {
@@ -1057,19 +1057,21 @@ fn encode_arc(data: &mut Vec<u8>, arc: &Arc) {
 /// Text has 2 blocks:
 /// - Block 0: Geometry/metadata (layer, position, height, rotation, font info)
 /// - Block 1: Text content (length-prefixed string)
-fn encode_text(
-    data: &mut Vec<u8>,
-    text: &Text,
-    wide_index: Option<u32>,
-) -> crate::altium::error::AltiumResult<()> {
+fn encode_text(data: &mut Vec<u8>, text: &Text, wide_index: Option<u32>) {
     // Block 0: Geometry
     let geometry = encode_text_geometry(text, wide_index);
     write_block(data, &geometry);
 
-    // Block 1: Text content
-    write_string_block(data, &text.text, "text.text")?;
-
-    Ok(())
+    // Block 1: Text content, a Pascal short string capped at 255 bytes.
+    //
+    // Longer text is truncated here rather than rejected, because the full
+    // value is carried by `/WideStrings` and addressed by the index stamped in
+    // the geometry block above — which is how Altium itself stores it, and the
+    // only way a text that Altium can author survives a read-modify-write.
+    // Windows-1252 is single-byte, so the cut cannot split a character.
+    let encoded = crate::altium::encode_windows1252(&text.text);
+    let truncated = &encoded[..encoded.len().min(255)];
+    crate::altium::framing::write_string_block(data, truncated);
 }
 
 /// Canonical 252-byte text SubRecord-1 (offsets 0-251), ported from

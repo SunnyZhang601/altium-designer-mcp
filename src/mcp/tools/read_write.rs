@@ -882,6 +882,12 @@ impl McpServer {
                     .fold(f64::NEG_INFINITY, f64::max);
                 let y = if top.is_finite() { top + 0.6 } else { 0.0 };
                 footprint.add_text(Text {
+                    barcode_full_width: None,
+                    barcode_full_height: None,
+                    barcode_x_margin: None,
+                    barcode_y_margin: None,
+                    barcode_kind: 0,
+                    barcode_font_name: String::new(),
                     x: 0.0,
                     y,
                     text: ".Designator".to_string(),

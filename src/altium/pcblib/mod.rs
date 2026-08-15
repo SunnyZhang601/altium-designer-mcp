@@ -877,6 +877,12 @@ mod tests {
 
         // Add text with different rotations
         original.add_text(Text {
+            barcode_full_width: None,
+            barcode_full_height: None,
+            barcode_x_margin: None,
+            barcode_y_margin: None,
+            barcode_kind: 0,
+            barcode_font_name: String::new(),
             x: 0.0,
             y: 1.0,
             text: ".Designator".to_string(),
@@ -906,6 +912,12 @@ mod tests {
             unique_id: None,
         });
         original.add_text(Text {
+            barcode_full_width: None,
+            barcode_full_height: None,
+            barcode_x_margin: None,
+            barcode_y_margin: None,
+            barcode_kind: 0,
+            barcode_font_name: String::new(),
             x: 1.5,
             y: 0.5,
             text: "TEST".to_string(),
@@ -963,6 +975,12 @@ mod tests {
         // round-trip rather than inheriting the template's 4-mil stroke.
         let mut original = Footprint::new("TEXT_STROKE");
         original.add_text(Text {
+            barcode_full_width: None,
+            barcode_full_height: None,
+            barcode_x_margin: None,
+            barcode_y_margin: None,
+            barcode_kind: 0,
+            barcode_font_name: String::new(),
             x: 0.0,
             y: 0.0,
             text: "W".to_string(),
@@ -1008,6 +1026,12 @@ mod tests {
         // A TrueType italic text must round-trip italic@45 and derive baseFontType@43=1.
         let mut original = Footprint::new("TT_ITALIC");
         original.add_text(Text {
+            barcode_full_width: None,
+            barcode_full_height: None,
+            barcode_x_margin: None,
+            barcode_y_margin: None,
+            barcode_kind: 0,
+            barcode_font_name: String::new(),
             x: 0.0,
             y: 0.0,
             text: "String".to_string(),
@@ -1053,6 +1077,12 @@ mod tests {
         // PR-10 offsets (mirror@35, bold@44, font-name@46-109, justification@132).
         let geom = writer::encode_text_geometry(
             &Text {
+                barcode_full_width: None,
+                barcode_full_height: None,
+                barcode_x_margin: None,
+                barcode_y_margin: None,
+                barcode_kind: 0,
+                barcode_font_name: String::new(),
                 x: 0.0,
                 y: 0.0,
                 text: "X".into(),
@@ -1118,6 +1148,12 @@ mod tests {
         // mirror, bold, font_name, a non-default justification, kind, italic.
         let mut original = Footprint::new("TEXT_PR10");
         original.add_text(Text {
+            barcode_full_width: None,
+            barcode_full_height: None,
+            barcode_x_margin: None,
+            barcode_y_margin: None,
+            barcode_kind: 0,
+            barcode_font_name: String::new(),
             x: 0.0,
             y: 0.0,
             text: "Fancy".to_string(),
@@ -1171,6 +1207,12 @@ mod tests {
         // survive encode -> decode; a plain text keeps both false.
         let mut original = Footprint::new("TEXT_FLAGS");
         let mut text = Text {
+            barcode_full_width: None,
+            barcode_full_height: None,
+            barcode_x_margin: None,
+            barcode_y_margin: None,
+            barcode_kind: 0,
+            barcode_font_name: String::new(),
             x: 0.0,
             y: 0.0,
             text: ".Designator".to_string(),
@@ -1303,6 +1345,12 @@ mod tests {
         // InvertedRectTextOffset@133 (offsets verified against AltiumSharp ReadText).
         let mut original = Footprint::new("TEXT_INVRECT");
         original.add_text(Text {
+            barcode_full_width: None,
+            barcode_full_height: None,
+            barcode_x_margin: None,
+            barcode_y_margin: None,
+            barcode_kind: 0,
+            barcode_font_name: String::new(),
             x: 0.0,
             y: 0.0,
             text: "KO".to_string(),
@@ -1363,6 +1411,12 @@ mod tests {
         // a locked / tented text round-trips its flags.
         let mut original = Footprint::new("TEXT_FLAGS");
         original.add_text(Text {
+            barcode_full_width: None,
+            barcode_full_height: None,
+            barcode_x_margin: None,
+            barcode_y_margin: None,
+            barcode_kind: 0,
+            barcode_font_name: String::new(),
             x: 0.0,
             y: 0.0,
             text: "LOCKED".to_string(),
@@ -1415,6 +1469,12 @@ mod tests {
 
         let long = "A".repeat(260) + "_END";
         let text_at = |content: &str, y: f64| Text {
+            barcode_full_width: None,
+            barcode_full_height: None,
+            barcode_x_margin: None,
+            barcode_y_margin: None,
+            barcode_kind: 0,
+            barcode_font_name: String::new(),
             x: 0.0,
             y,
             text: content.to_string(),
@@ -1535,6 +1595,12 @@ mod tests {
         original.add_track(track);
 
         original.add_text(Text {
+            barcode_full_width: None,
+            barcode_full_height: None,
+            barcode_x_margin: None,
+            barcode_y_margin: None,
+            barcode_kind: 0,
+            barcode_font_name: String::new(),
             x: 0.0,
             y: 1.0,
             text: "NET".to_string(),

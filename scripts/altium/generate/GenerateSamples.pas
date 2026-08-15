@@ -449,6 +449,38 @@ begin
                                   PCBM_BoardRegisteration, Txt.I_ObjectAddress);
 end;
 
+{ A second barcode whose every sizing field differs from AddTextBarcode's, so
+  diffing the two records isolates each field's offset by its authored value.
+  All ten BarCode* names are present in Advpcb.dll (the native Delphi engine),
+  which is the check that matters — a name found only in the Altium.*.dll .NET
+  assemblies (TextJustification, for one) does NOT resolve in DelphiScript. }
+procedure AddTextBarcode2(Comp : IPCB_LibComponent; X : Integer; Y : Integer;
+                          Content : String);
+var Txt : IPCB_Text;
+begin
+    Txt := PCBServer.PCBObjectFactory(eTextObject, eNoDimension, eCreate_Default);
+    if Txt = nil then Exit;
+    Txt.XLocation := MilsToCoord(X);
+    Txt.YLocation := MilsToCoord(Y);
+    Txt.Layer     := eTopOverlay;
+    Txt.Size      := MilsToCoord(60);
+    Txt.Rotation  := 0.0;
+    Txt.Text      := Content;
+    Txt.TextKind          := eText_BarCode;
+    Txt.BarCodeKind       := eBarCode128;
+    Txt.BarCodeFullWidth  := MilsToCoord(600);
+    Txt.BarCodeFullHeight := MilsToCoord(150);
+    Txt.BarCodeXMargin    := MilsToCoord(30);
+    Txt.BarCodeYMargin    := MilsToCoord(40);
+    Txt.BarCodeMinWidth   := MilsToCoord(5);
+    Txt.BarCodeInverted   := True;
+    Txt.BarCodeShowText   := True;
+    Txt.BarCodeFontName   := 'Courier New';
+    Comp.AddPCBObject(Txt);
+    PCBServer.SendMessageToRobots(Comp.I_ObjectAddress, c_Broadcast,
+                                  PCBM_BoardRegisteration, Txt.I_ObjectAddress);
+end;
+
 { Inverted (knockout) TrueType text in an inverted rectangle. Names VERIFIED from
   the AD24 IDE dump: Inverted, UseInvertedRectangle, InvertedTTTextBorder,
   TTFOffsetFromInvertedRect. }
@@ -1113,6 +1145,7 @@ begin
         Lib.RegisterComponent(Comp);
         PCBServer.PreProcess;
         AddTextBarcode(Comp, 0, 100, 'BC128');
+        AddTextBarcode2(Comp, 0, -150, 'BC2');
         AddTextInverted(Comp, 0, -100, 'INV');
         PCBServer.PostProcess;
     except

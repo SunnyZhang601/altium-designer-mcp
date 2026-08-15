@@ -942,6 +942,37 @@ pub(super) fn parse_text(
         extract_text_from_block(geometry_block, wide_strings)
     };
 
+    // Barcode block. Offsets verified by authoring two barcodes whose sizing
+    // differs and diffing the records: @137/@141 carried the authored 400/600 mil
+    // widths and 100/150 mil heights, @145/@149 the 20/30 and 20/40 mil margins,
+    // @157 the symbology, and @161 the font name as UTF-16LE. Only surfaced for a
+    // barcode, so a plain text keeps replaying the template bytes untouched.
+    let is_barcode = kind == TextKind::BarCode;
+    let barcode_coord = |o: usize| {
+        if is_barcode {
+            read_i32(geometry_block, o).map(to_mm)
+        } else {
+            None
+        }
+    };
+    let barcode_full_width = barcode_coord(137);
+    let barcode_full_height = barcode_coord(141);
+    let barcode_margin_x = barcode_coord(145);
+    let barcode_margin_y = barcode_coord(149);
+    let barcode_kind = geometry_block.get(157).copied().unwrap_or(0);
+    // UTF-16LE and null-padded, unlike every other string in this record.
+    let barcode_font_name = if is_barcode {
+        let raw = geometry_block.get(161..225).unwrap_or_default();
+        let units: Vec<u16> = raw
+            .chunks_exact(2)
+            .map(|c| u16::from_le_bytes([c[0], c[1]]))
+            .take_while(|&u| u != 0)
+            .collect();
+        String::from_utf16_lossy(&units)
+    } else {
+        String::new()
+    };
+
     let text = Text {
         x,
         y,
@@ -970,6 +1001,12 @@ pub(super) fn parse_text(
         polygon_index,
         component_index,
         unique_id: None,
+        barcode_full_width,
+        barcode_full_height,
+        barcode_x_margin: barcode_margin_x,
+        barcode_y_margin: barcode_margin_y,
+        barcode_kind,
+        barcode_font_name,
     };
 
     Ok((text, current))

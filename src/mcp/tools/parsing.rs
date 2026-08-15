@@ -758,6 +758,21 @@ impl McpServer {
             polygon_index: json_polygon_index(json),
             component_index: json_component_index(json),
             unique_id: json_unique_id(json),
+            barcode_full_width: json_f64(json, "barcode_full_width"),
+            barcode_full_height: json_f64(json, "barcode_full_height"),
+            barcode_x_margin: json_f64(json, "barcode_x_margin"),
+            barcode_y_margin: json_f64(json, "barcode_y_margin"),
+            barcode_kind: u8::try_from(
+                json.get("barcode_kind")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0),
+            )
+            .unwrap_or(0),
+            barcode_font_name: json
+                .get("barcode_font_name")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
         })
     }
 

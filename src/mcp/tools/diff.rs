@@ -583,6 +583,12 @@ mod tests {
 
         fn pcb_text() -> Text {
             Text {
+                barcode_full_width: None,
+                barcode_full_height: None,
+                barcode_x_margin: None,
+                barcode_y_margin: None,
+                barcode_kind: 0,
+                barcode_font_name: String::new(),
                 x: 0.0,
                 y: 0.6,
                 text: "R".to_string(),

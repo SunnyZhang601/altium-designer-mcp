@@ -58,19 +58,14 @@ leads and the fixture follows.
   **Blocked:** no byte offset is known for it and AD24 exposes no setter, so it can
   neither be located by diffing an authored pad nor guessed responsibly. Needs a
   press-fit pad from a real library to locate the byte.
-- **[gap | read]** Text barcode sizing block — we model `kind = BarCode` and a golden
-  covers it, but none of the block's own keys (`BarCodeKind`, `RenderMode`, `Inverted`,
-  `FontName`, `ShowText`, `FullWidth`/`Height`, `XMargin`/`YMargin`, `MinWidth`). A barcode
-  round-trips as a barcode but loses its sizing.
-  **Blocked, and do not implement from the offsets this document used to list.** AD24
-  exposes no `Set*` for any of the ten, so no script can vary them, and the golden's
-  barcode and non-barcode text records carry *identical* values at the candidate offsets —
-  they are template bytes. With no variation to diff against, the mapping cannot be
-  validated, and a guessed offset risks corrupting the neighbouring inverted-rectangle
-  fields (@124/@128/@133), which are verified. Only `BarCodeKind@157` is confirmed: `1` on
-  the golden's Code128 barcode against `0` on a non-barcode text — one sample, not enough
-  to say what other values mean. Needs barcodes authored through the AD24 UI, or a real
-  library that varies them.
+- **[gap | read]** Text barcode `MinWidth`, `Inverted`, `ShowText` and `RenderMode` —
+  the sizing block's other six keys ship (`FullWidth`@137, `FullHeight`@141,
+  `XMargin`@145, `YMargin`@149, `Kind`@157, `FontName`@161-224 as UTF-16LE), located by
+  authoring two barcodes with differing sizing and diffing the records. These four did
+  not move a byte that maps cleanly: `@153` reads 39604/88235 against an authored 5 mil,
+  so Altium computes it, and the booleans produced no isolated flip. They need a barcode
+  varying only one of them at a time.
+
 - **[gap | read]** `model_2d_location` (`MODEL.2D.X` / `MODEL.2D.Y`) on ComponentBody —
   `model_2d_rotation` is modelled but the position is not: the reader drops both keys and
   the writer always emits `MODEL.2D.X=0mil|MODEL.2D.Y=0mil`. A body whose model is offset
@@ -114,8 +109,15 @@ unmodelled key survives a read-modify-write. Covered end to end by
 
 Rough value order, highest first:
 
-1. **`model_2d_location`, `JumperID`, per-layer stack arrays** — small, isolated, and the
-   only items here still actionable.
-2. **`DrillType`** — blocked on locating its byte; needs a press-fit pad from a real
-   library.
-3. **Barcode sizing block** — blocked on the same problem, ten times over.
+1. **`model_2d_location`, `JumperID`, per-layer stack arrays** — small and isolated.
+2. **Barcode `MinWidth` / `Inverted` / `ShowText` / `RenderMode`** — one more authoring
+   run, varying one field at a time.
+3. **`DrillType`** — `DrillType` does appear in `Advpcb.dll`, so it may well be
+   settable; retest before assuming it needs an external file.
+
+> **Heuristic, corrected.** A missing `Set*` counterpart does *not* mean a property is
+> unauthorable — `SolderMaskExpansionFromHoleEdge` and `BarCodeKind` both lack one and
+> both set fine. What holds is whether the name appears in **`Advpcb.dll`**, the native
+> Delphi engine, at all. Names found only in the `Altium.*.dll` .NET assemblies do not
+> resolve in DelphiScript: `TextJustification` is one, and assigning it fails the whole
+> script compile with "Undeclared identifier".

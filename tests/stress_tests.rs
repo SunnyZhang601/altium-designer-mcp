@@ -541,6 +541,12 @@ fn test_text_special_strings() {
 
     // Standard designator reference
     let text1 = Text {
+        barcode_full_width: None,
+        barcode_full_height: None,
+        barcode_x_margin: None,
+        barcode_y_margin: None,
+        barcode_kind: 0,
+        barcode_font_name: String::new(),
         x: 0.0,
         y: 0.0,
         text: ".Designator".to_string(),
@@ -573,6 +579,12 @@ fn test_text_special_strings() {
 
     // Comment reference
     let text2 = Text {
+        barcode_full_width: None,
+        barcode_full_height: None,
+        barcode_x_margin: None,
+        barcode_y_margin: None,
+        barcode_kind: 0,
+        barcode_font_name: String::new(),
         x: 0.0,
         y: -2.0,
         text: ".Comment".to_string(),

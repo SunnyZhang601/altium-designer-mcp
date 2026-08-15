@@ -1566,8 +1566,8 @@ impl McpServer {
             .unwrap_or(false);
         let auto_position = json
             .get("auto_position")
-            .and_then(Value::as_u64)
-            .unwrap_or(0) as u8;
+            .and_then(Value::as_bool)
+            .unwrap_or(true);
         let is_rule = json
             .get("is_rule")
             .and_then(Value::as_bool)

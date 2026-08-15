@@ -217,6 +217,10 @@ impl TextFrame {
     }
 }
 
+const fn default_true_param() -> bool {
+    true
+}
+
 const fn default_font_id() -> u8 {
     1
 }
@@ -314,11 +318,13 @@ pub struct Parameter {
     /// Omit-when-default: emitted only when `true`. Default `false`.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub is_configurable: bool,
-    /// Auto-position mode (`AUTOPOSITION`): `0` = manually placed, `1`-`4` select an
-    /// anchor Altium positions the label against relative to the component. Omit-when-
-    /// default: emitted only when non-zero. Default `0`.
-    #[serde(default, skip_serializing_if = "is_zero_u8")]
-    pub auto_position: u8,
+    /// Whether Altium auto-positions the parameter label relative to the component.
+    ///
+    /// Stored inverted and omit-when-default as `NotAutoPosition=T`: an authored
+    /// library omits the key while auto-positioning is ON and writes it only when the
+    /// user turns it off. Default `true`.
+    #[serde(default = "default_true_param", skip_serializing_if = "Clone::clone")]
+    pub auto_position: bool,
     /// Whether the parameter carries a PCB design-rule directive (`ISRULE`).
     /// Omit-when-default: emitted only when `true`. Default `false`.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -369,7 +375,7 @@ impl Parameter {
             hide_name: false,
             description: String::new(),
             is_configurable: false,
-            auto_position: 0,
+            auto_position: true,
             is_rule: false,
             is_system_parameter: false,
             text_horz_anchor: 0,

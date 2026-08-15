@@ -1053,7 +1053,7 @@ impl McpServer {
                                                 "hide_name": { "type": "boolean", "description": "Whether the parameter name is hidden (only the value shown). Default: false" },
                                                 "description": { "type": "string", "description": "Parameter description text. Default: empty" },
                                                 "is_configurable": { "type": "boolean", "description": "Whether the parameter is variant-configurable. Default: false" },
-                                                "auto_position": { "type": "integer", "description": "Auto-position mode: 0 = manually placed, 1-4 select an anchor Altium positions the label against relative to the component. Default: 0" },
+                                                "auto_position": { "type": "boolean", "description": "Whether Altium auto-positions the parameter label relative to the component. Stored inverted on the wire (NotAutoPosition=T) and only when turned off. Default: true" },
                                                 "is_rule": { "type": "boolean", "description": "Whether the parameter carries a PCB design-rule directive. Default: false" },
                                                 "is_system_parameter": { "type": "boolean", "description": "Whether this is a system parameter rather than a user one. Default: false" },
                                                 "text_horz_anchor": { "type": "integer", "description": "Horizontal text-box anchor, distinct from justification. Default: 0" },

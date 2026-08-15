@@ -279,7 +279,7 @@ cargo test module_name::
 | `docs/PCBLIB_FORMAT.md` | `.PcbLib` binary format reference |
 | `docs/SCHLIB_FORMAT.md` | `.SchLib` binary format reference |
 | `docs/FIXTURE_COVERAGE.md` | Golden-fixture coverage map for the Altium-authored samples |
-| `docs/COVERAGE_AUDIT.md` | Point-in-time feature-coverage audit snapshot and roadmap |
+| `docs/COVERAGE_AUDIT.md` | Verified worklist of Altium features not yet fully supported |
 | Rustdoc comments | API documentation |
 
 ### Updating Documentation

@@ -16,8 +16,26 @@ impl SchLib {
         let mut cfb = crate::altium::create_ole(writer)?;
 
         let symbols: Vec<&Symbol> = self.symbols.values().collect();
+
+        // A name outside Windows-1252 becomes the storage name in Altium's own
+        // form: its UTF-8 bytes carried one char per byte. That keeps the storage
+        // name and the FileHeader's `LibRef{i}` consistent, because the header is
+        // a Windows-1252 block and encoding this form back yields exactly those
+        // UTF-8 bytes — which is what Altium's library browser reads. Writing the
+        // real Unicode string instead leaves `LibRef{i}` as `?` per character.
+        // A Windows-1252 name is passed through untouched.
+        let storage_names: Vec<String> = symbols
+            .iter()
+            .map(|s| {
+                if crate::altium::requires_utf8(&s.name) {
+                    crate::altium::encode_utf8_param_value(&s.name)
+                } else {
+                    s.name.clone()
+                }
+            })
+            .collect();
         // OLE-safe storage names (handles long names + collisions).
-        let ole_names = crate::altium::generate_ole_names(symbols.iter().map(|s| s.name.as_str()));
+        let ole_names = crate::altium::generate_ole_names(storage_names.iter().map(String::as_str));
 
         // FileHeader stream.
         crate::altium::write_stream(

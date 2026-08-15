@@ -26,9 +26,18 @@ const
 
 // Escapes a string for embedding in JSON (paths contain backslashes).
 function JsonEscape(const S : String) : String;
+var
+    i, C : Integer;
 begin
-    Result := StringReplace(S, '\', '\\', REPLACEALL);
-    Result := StringReplace(Result, '"', '\"', REPLACEALL);
+    Result := '';
+    for i := 1 to Length(S) do
+    begin
+        C := Ord(S[i]);
+        if (C > 126) or (C < 32) then Result := Result + '\u' + IntToHex(C, 4)
+        else if S[i] = '\' then Result := Result + '\\'
+        else if S[i] = '"' then Result := Result + '\"'
+        else Result := Result + S[i];
+    end;
 end;
 
 

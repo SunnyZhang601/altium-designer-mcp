@@ -287,17 +287,19 @@ fn encode_component_header(symbol: &Symbol) -> String {
 ///
 /// A pure-Windows-1252 value emits the plain `<key>=<value>` — byte-identical to
 /// the pre-UTF-8 output, so the common case (and everything in the golden library)
-/// is unchanged. A value with non-Windows-1252 characters (Cyrillic, CJK, Greek
-/// `Ω`, …) would otherwise be silently corrupted to `?` by the record's
-/// Windows-1252 encoder; instead it is emitted as `%UTF8%<key>=<utf8-bytes>` so
-/// the true value survives, matching Altium / `AltiumSharp`. Only one of the two
-/// keys is ever written (never both), mirroring `AltiumSharp`'s writer.
+/// is unchanged.
+///
+/// A value with non-Windows-1252 characters (Cyrillic, CJK, Greek `Ω`, …) would be
+/// corrupted to `?` by the record's Windows-1252 encoder, so it is written **twice**,
+/// as Altium does: the plain `<key>` carrying the value's raw UTF-8 bytes, and a
+/// `%UTF8%<key>` companion. Altium reads the plain key, so omitting it leaves the
+/// name `?`-mangled in Altium even though our own reader recovers it; the companion
+/// is what `AltiumSharp` and older readers look for. Both are the same bytes on the
+/// wire, since the record is encoded as Windows-1252.
 fn text_field(key: &str, value: &str) -> String {
     if crate::altium::requires_utf8(value) {
-        format!(
-            "%UTF8%{key}={}",
-            crate::altium::encode_utf8_param_value(value)
-        )
+        let bytes = crate::altium::encode_utf8_param_value(value);
+        format!("{key}={bytes}|%UTF8%{key}={bytes}")
     } else {
         format!("{key}={value}")
     }
@@ -2440,24 +2442,26 @@ mod tests {
     }
 
     #[test]
-    fn non_win1252_text_emits_only_utf8_key() {
-        // Greek Ω (U+03A9) is NOT in Windows-1252. The writer must emit the value
-        // behind `%UTF8%Text` (never a lossy plain `Text=10k?`), matching Altium.
-        let mut p = Parameter::new("Value", "10k\u{03A9}"); // "10kΩ"
+    fn non_win1252_text_emits_both_keys_carrying_utf8_bytes() {
+        // Greek omega (U+03A9) is NOT in Windows-1252. Altium writes such a value
+        // twice — the plain key holding its raw UTF-8 bytes, plus a `%UTF8%`
+        // companion — and reads the plain one, so emitting only the companion
+        // leaves the value `?`-mangled in Altium.
+        let mut p = Parameter::new("Value", "10k\u{03A9}");
         p.unique_id = Some("ABCD1234".to_string());
         let s = encode_parameter(&p, 1);
-        assert!(s.contains("|%UTF8%Text="), "emit %UTF8%Text key: {s}");
-        // Exactly one Text key, and no lossy plain `Text=...?`.
-        assert!(
-            !s.contains("|Text="),
-            "must not also emit a lossy plain Text: {s}"
-        );
-        // The stored value is the UTF-8 byte sequence mapped one-char-per-byte.
+
+        // Both keys, carrying the same UTF-8 bytes mapped one char per byte.
         let expected = crate::altium::encode_utf8_param_value("10k\u{03A9}");
         assert!(
-            s.contains(&format!("|%UTF8%Text={expected}|")),
-            "stored UTF-8 form: {s}"
+            s.contains(&format!("|Text={expected}|")),
+            "plain Text must carry the UTF-8 bytes: {s}"
         );
+        assert!(
+            s.contains(&format!("|%UTF8%Text={expected}|")),
+            "%UTF8%Text companion: {s}"
+        );
+        assert!(!s.contains("10k?"), "no `?`-mangled value anywhere: {s}");
     }
 
     #[test]

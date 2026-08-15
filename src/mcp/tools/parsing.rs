@@ -364,6 +364,51 @@ impl McpServer {
             .and_then(Value::as_bool)
             .unwrap_or(false);
 
+        // Per-layer pad stack. The model has carried these all along; without them
+        // in the schema a caller could never author anything but a Simple pad.
+        let stack_mode = match json
+            .get("stack_mode")
+            .and_then(Value::as_str)
+            .map(str::to_lowercase)
+            .as_deref()
+        {
+            Some("top_middle_bottom") => PadStackMode::TopMiddleBottom,
+            Some("full_stack") => PadStackMode::FullStack,
+            _ => PadStackMode::Simple,
+        };
+        let pairs = |field: &str| {
+            json.get(field).and_then(Value::as_array).map(|a| {
+                a.iter()
+                    .map(|v| {
+                        let get = |k: &str| v.get(k).and_then(Value::as_f64).unwrap_or(0.0);
+                        (get("width") + get("x"), get("height") + get("y"))
+                    })
+                    .collect::<Vec<_>>()
+            })
+        };
+        let per_layer_sizes = pairs("per_layer_sizes");
+        let per_layer_offsets = pairs("per_layer_offsets");
+        let per_layer_shapes = json
+            .get("per_layer_shapes")
+            .and_then(Value::as_array)
+            .map(|a| {
+                a.iter()
+                    .map(|v| {
+                        v.as_str()
+                            .and_then(Self::parse_pad_shape)
+                            .unwrap_or(crate::altium::pcblib::PadShape::Round)
+                    })
+                    .collect::<Vec<_>>()
+            });
+        let per_layer_corner_radii = json
+            .get("per_layer_corner_radii")
+            .and_then(Value::as_array)
+            .map(|a| {
+                a.iter()
+                    .map(|v| u8::try_from(v.as_u64().unwrap_or(0)).unwrap_or(0))
+                    .collect::<Vec<_>>()
+            });
+
         Ok(Pad {
             designator: designator.to_string(),
             x,
@@ -394,11 +439,11 @@ impl McpServer {
             power_plane_relief_expansion,
             power_plane_clearance,
             corner_radius_percent,
-            stack_mode: PadStackMode::Simple,
-            per_layer_sizes: None,
-            per_layer_shapes: None,
-            per_layer_corner_radii: None,
-            per_layer_offsets: None,
+            stack_mode,
+            per_layer_sizes,
+            per_layer_shapes,
+            per_layer_corner_radii,
+            per_layer_offsets,
             net_index: json_net_index(json),
             polygon_index: json_polygon_index(json),
             component_index: json_component_index(json),

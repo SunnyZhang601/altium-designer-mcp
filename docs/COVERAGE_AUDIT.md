@@ -78,11 +78,7 @@ one — a fixture gap, not a modelling gap. See [FIXTURE_COVERAGE.md](FIXTURE_CO
 
 ## 3. Tool-schema gaps
 
-Modelled and round-tripped, but not reachable through `write_pcblib`:
-
-- **[gap | tool]** Pad per-layer stack arrays — `stack_mode` is in the schema, but
-  `per_layer_sizes` / `per_layer_shapes` / `per_layer_corner_radii` / `per_layer_offsets`
-  are not, so a non-Simple stack can be requested and then not described.
+None outstanding.
 
 ## 4. Round-trip fidelity
 
@@ -105,7 +101,7 @@ unmodelled key survives a read-modify-write. Covered end to end by
 
 Rough value order, highest first:
 
-1. **`model_2d_location`, per-layer stack arrays** — small and isolated.
+1. **`model_2d_location`** — the last one.
 
 > **Heuristic, corrected.** A missing `Set*` counterpart does *not* mean a property is
 > unauthorable — `SolderMaskExpansionFromHoleEdge` and `BarCodeKind` both lack one and

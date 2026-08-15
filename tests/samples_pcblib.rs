@@ -1241,3 +1241,52 @@ fn samples_pcblib_locked_flag() {
         "the track is authored locked too"
     );
 }
+
+#[test]
+fn samples_pcblib_drill_tolerances() {
+    // Positive / negative drill tolerance (extended-tail i32 @162/@166), authored
+    // by Altium as +3 mil / -2 mil. The other pads in the footprint are the
+    // control: an absent tolerance must read as None, not as a zero, because the
+    // writer distinguishes the two and a zero would be written back as an
+    // explicit tolerance.
+    let lib = PcbLib::open(sample("footprints.PcbLib")).expect("failed to open footprints.PcbLib");
+    let fp = lib
+        .get("LOCKFLAGS_PCB")
+        .expect("footprint LOCKFLAGS_PCB not found");
+
+    let pad = |d: &str| {
+        fp.pads
+            .iter()
+            .find(|p| p.designator == d)
+            .unwrap_or_else(|| panic!("pad {d} not found"))
+    };
+
+    let toleranced = pad("4");
+    assert!(
+        approx_eq(
+            toleranced.hole_positive_tolerance.expect("+tolerance"),
+            0.0762,
+            1e-4
+        ),
+        "+3 mil, got {:?}",
+        toleranced.hole_positive_tolerance
+    );
+    assert!(
+        approx_eq(
+            toleranced.hole_negative_tolerance.expect("-tolerance"),
+            0.0508,
+            1e-4
+        ),
+        "-2 mil, got {:?}",
+        toleranced.hole_negative_tolerance
+    );
+
+    for d in ["1", "2", "3"] {
+        assert_eq!(
+            pad(d).hole_positive_tolerance,
+            None,
+            "pad {d} has no authored tolerance"
+        );
+        assert_eq!(pad(d).hole_negative_tolerance, None, "pad {d}");
+    }
+}

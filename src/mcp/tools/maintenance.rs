@@ -1731,6 +1731,8 @@ mod tests {
                 barcode_y_margin: None,
                 barcode_kind: 0,
                 barcode_font_name: String::new(),
+                barcode_inverted: false,
+                barcode_show_text: false,
                 x: 0.0,
                 y: 1.0,
                 text: "REF".to_string(),

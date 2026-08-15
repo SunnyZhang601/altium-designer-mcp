@@ -1226,6 +1226,12 @@ pub fn encode_text_geometry(text: &Text, wide_index: Option<u32>) -> Vec<u8> {
     if text.barcode_kind != 0 {
         block[157] = text.barcode_kind;
     }
+    if text.barcode_inverted {
+        block[159] = 1;
+    }
+    if text.barcode_show_text {
+        block[225] = 1;
+    }
     // UTF-16LE, null-padded into the fixed 64-byte field at @161-224.
     if !text.barcode_font_name.is_empty() {
         let mut buf = [0u8; 64];
@@ -2126,6 +2132,8 @@ mod tests {
             barcode_y_margin: None,
             barcode_kind: 0,
             barcode_font_name: String::new(),
+            barcode_inverted: false,
+            barcode_show_text: false,
             x: 0.0,
             y: 0.0,
             text: "C1".to_string(),
@@ -2215,6 +2223,8 @@ mod tests {
             barcode_y_margin: None,
             barcode_kind: 0,
             barcode_font_name: String::new(),
+            barcode_inverted: false,
+            barcode_show_text: false,
             x: 0.0,
             y: 0.0,
             text: "X".to_string(),
@@ -2285,6 +2295,8 @@ mod tests {
             barcode_y_margin: None,
             barcode_kind: 0,
             barcode_font_name: String::new(),
+            barcode_inverted: false,
+            barcode_show_text: false,
             x: 0.0,
             y: 0.0,
             text: "X".to_string(),
@@ -3135,6 +3147,8 @@ mod tests {
             barcode_y_margin: None,
             barcode_kind: 0,
             barcode_font_name: String::new(),
+            barcode_inverted: false,
+            barcode_show_text: false,
             x: 0.0,
             y: 0.0,
             text: s.to_string(),

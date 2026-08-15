@@ -1550,6 +1550,8 @@ mod tests {
             barcode_y_margin: None,
             barcode_kind: 0,
             barcode_font_name: String::new(),
+            barcode_inverted: false,
+            barcode_show_text: false,
             x,
             y,
             text: content.to_string(),

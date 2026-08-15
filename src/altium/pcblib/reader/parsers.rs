@@ -960,6 +960,8 @@ pub(super) fn parse_text(
     let barcode_margin_x = barcode_coord(145);
     let barcode_margin_y = barcode_coord(149);
     let barcode_kind = geometry_block.get(157).copied().unwrap_or(0);
+    let barcode_inverted = is_barcode && geometry_block.get(159).is_some_and(|&b| b != 0);
+    let barcode_show_text = is_barcode && geometry_block.get(225).is_some_and(|&b| b != 0);
     // UTF-16LE and null-padded, unlike every other string in this record.
     let barcode_font_name = if is_barcode {
         let raw = geometry_block.get(161..225).unwrap_or_default();
@@ -1007,6 +1009,8 @@ pub(super) fn parse_text(
         barcode_y_margin: barcode_margin_y,
         barcode_kind,
         barcode_font_name,
+        barcode_inverted,
+        barcode_show_text,
     };
 
     Ok((text, current))

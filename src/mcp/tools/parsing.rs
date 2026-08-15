@@ -657,6 +657,9 @@ impl McpServer {
     }
 
     /// Parses text from JSON.
+    // A flat JSON-to-field mapping: long because Text carries a lot of optional
+    // properties, not because it branches.
+    #[allow(clippy::too_many_lines)]
     pub(crate) fn parse_text(json: &Value) -> Option<crate::altium::pcblib::Text> {
         use crate::altium::pcblib::{Layer, StrokeFont, Text, TextJustification, TextKind};
 
@@ -773,6 +776,14 @@ impl McpServer {
                 .and_then(Value::as_str)
                 .unwrap_or_default()
                 .to_string(),
+            barcode_inverted: json
+                .get("barcode_inverted")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            barcode_show_text: json
+                .get("barcode_show_text")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
         })
     }
 

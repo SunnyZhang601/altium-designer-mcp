@@ -59,13 +59,11 @@ leads and the fixture follows.
   keeps the press-fit/simple classification somewhere other than the library record, so
   no external file is needed after all — there is nothing to read.
 
-- **[gap | read]** Text barcode `MinWidth`, `Inverted`, `ShowText` and `RenderMode` —
-  the sizing block's other six keys ship (`FullWidth`@137, `FullHeight`@141,
-  `XMargin`@145, `YMargin`@149, `Kind`@157, `FontName`@161-224 as UTF-16LE), located by
-  authoring two barcodes with differing sizing and diffing the records. These four did
-  not move a byte that maps cleanly: `@153` reads 39604/88235 against an authored 5 mil,
-  so Altium computes it, and the booleans produced no isolated flip. They need a barcode
-  varying only one of them at a time.
+- **🚫 Text barcode `MinWidth` and `RenderMode`** — the other eight keys ship.
+  `MinWidth`@153 reads 39604/88235 against an authored 5 mil, so Altium computes it from
+  the content and width rather than storing the request. A barcode varying only
+  `RenderMode` moved no byte except @115, which reads 4/3/2/1 across the barcodes in
+  creation order — an ordinal, not the property. Neither is recoverable by diffing.
 
 - **[gap | read]** `model_2d_location` (`MODEL.2D.X` / `MODEL.2D.Y`) on ComponentBody —
   `model_2d_rotation` is modelled but the position is not: the reader drops both keys and
@@ -111,8 +109,6 @@ unmodelled key survives a read-modify-write. Covered end to end by
 Rough value order, highest first:
 
 1. **`model_2d_location`, `JumperID`, per-layer stack arrays** — small and isolated.
-2. **Barcode `MinWidth` / `Inverted` / `ShowText` / `RenderMode`** — one more authoring
-   run, varying one field at a time.
 
 > **Heuristic, corrected.** A missing `Set*` counterpart does *not* mean a property is
 > unauthorable — `SolderMaskExpansionFromHoleEdge` and `BarCodeKind` both lack one and

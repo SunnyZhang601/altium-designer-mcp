@@ -246,6 +246,14 @@ pub struct Text {
     /// stored UTF-16LE and null-padded, unlike the record's other strings.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub barcode_font_name: String,
+    /// Whether the barcode renders inverted (light bars on dark) — geometry byte
+    /// @159. Only meaningful for a barcode.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub barcode_inverted: bool,
+    /// Whether the human-readable line is drawn under the bars — geometry byte
+    /// @225. Altium defaults this on for a new barcode.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub barcode_show_text: bool,
     /// Primitive flags (locked, keepout, etc.).
     #[serde(default, skip_serializing_if = "PcbFlags::is_empty")]
     pub flags: PcbFlags,

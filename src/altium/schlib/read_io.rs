@@ -23,8 +23,44 @@ impl SchLib {
         // Read FileHeader to get component list
         let header = read_file_header(&mut cfb)?;
 
-        // Read each component
-        for comp_name in header.component_names {
+        // Components are discovered by walking the storages that actually hold a
+        // `Data` stream, with the FileHeader's LibRef list used only for ordering
+        // — the same approach the PcbLib reader takes.
+        //
+        // The header cannot be trusted for lookup: it is a Windows-1252 parameter
+        // block, while a CFB storage name is UTF-16, so for a name outside that
+        // code page the two carry different bytes and no header entry matches any
+        // storage. Altium writes the name's raw UTF-8 bytes into the header and
+        // widens those same bytes through the machine's ANSI code page for the
+        // storage name, so the mapping also depends on the locale that authored
+        // the file. Enumerating storages sidesteps all of it.
+        let storages: Vec<String> = cfb
+            .walk()
+            .filter(cfb::Entry::is_storage)
+            .filter_map(|e| {
+                let path = e.path().to_path_buf();
+                let name = path.file_name()?.to_string_lossy().to_string();
+                (!name.is_empty()).then_some(name)
+            })
+            .filter(|name| cfb.is_stream(format!("/{name}/Data")))
+            .collect();
+
+        // Header order first (so `list_components` keeps the library's own
+        // ordering), then any storage the header does not mention.
+        let mut ordered: Vec<String> = header
+            .component_names
+            .iter()
+            .filter(|n| storages.contains(n))
+            .cloned()
+            .collect();
+        let extras: Vec<String> = storages
+            .iter()
+            .filter(|n| !ordered.contains(n))
+            .cloned()
+            .collect();
+        ordered.extend(extras);
+
+        for comp_name in ordered {
             let stream_path = format!("{comp_name}/Data");
 
             let mut stream = match cfb.open_stream(&stream_path) {

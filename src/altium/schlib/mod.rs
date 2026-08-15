@@ -1679,4 +1679,32 @@ mod tests {
         assert_eq!(p.value, "значение", "parameter value");
         assert_eq!(p.description, format!("{cyrillic}-подпись"));
     }
+
+    #[test]
+    fn library_roundtrip_symbol_names_in_any_script() {
+        // A symbol name outside Windows-1252 must survive a write -> read cycle.
+        // Both halves matter: the name is promoted so it is not `?`-mangled, and
+        // components are located by walking storages, because the FileHeader's
+        // LibRef list is a Windows-1252 block while a CFB storage name is UTF-16
+        // — for such a name the two cannot agree, and trusting the list drops the
+        // symbol entirely.
+        for name in ["Резистор", "電阻", "Ωmega", "Ελλάδα", "מעגל"] {
+            let mut sym = Symbol::new(name);
+            sym.description = format!("{name} description");
+
+            let mut lib = SchLib::new();
+            lib.add(sym);
+            let mut buf = Cursor::new(Vec::new());
+            lib.write(&mut buf).expect("write");
+            buf.set_position(0);
+            let read_back = SchLib::read(buf).expect("read");
+
+            assert_eq!(read_back.len(), 1, "{name}: symbol must not be dropped");
+            let s = read_back
+                .get(name)
+                .unwrap_or_else(|| panic!("{name}: not found, got {:?}", read_back.names()));
+            assert_eq!(s.name, name);
+            assert_eq!(s.description, format!("{name} description"));
+        }
+    }
 }

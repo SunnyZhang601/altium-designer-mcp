@@ -489,6 +489,54 @@ mod tests {
     }
 
     #[test]
+    fn parameter_display_properties_round_trip() {
+        // AUTOPOSITION / ISRULE / ISSYSTEMPARAMETER / TEXTHORZANCHOR / TEXTVERTANCHOR.
+        // Written in memory and read back, because no golden carries them: AD24 does
+        // not expose these on ISch_Parameter, so they cannot be authored by script.
+        let mut symbol = Symbol::new("PARAMPROPS");
+        let mut p = Parameter::new("Rule", "Width");
+        p.auto_position = 3;
+        p.is_rule = true;
+        p.is_system_parameter = true;
+        p.text_horz_anchor = 2;
+        p.text_vert_anchor = 1;
+        symbol.add_parameter(p);
+        symbol.add_parameter(Parameter::new("Value", "10k"));
+
+        let mut lib = SchLib::new();
+        lib.add(symbol);
+        let mut buffer = Cursor::new(Vec::new());
+        lib.write(&mut buffer).expect("write");
+        buffer.set_position(0);
+        let read_lib = SchLib::read(buffer).expect("read");
+
+        let sym = read_lib.get("PARAMPROPS").expect("symbol");
+        let rule = sym
+            .parameters
+            .iter()
+            .find(|q| q.name == "Rule")
+            .expect("Rule parameter");
+        assert_eq!(rule.auto_position, 3);
+        assert!(rule.is_rule);
+        assert!(rule.is_system_parameter);
+        assert_eq!(rule.text_horz_anchor, 2);
+        assert_eq!(rule.text_vert_anchor, 1);
+
+        // The second parameter is the control: a reader that set these
+        // unconditionally, or leaked them between records, fails here.
+        let value = sym
+            .parameters
+            .iter()
+            .find(|q| q.name == "Value")
+            .expect("Value parameter");
+        assert_eq!(value.auto_position, 0);
+        assert!(!value.is_rule);
+        assert!(!value.is_system_parameter);
+        assert_eq!(value.text_horz_anchor, 0);
+        assert_eq!(value.text_vert_anchor, 0);
+    }
+
+    #[test]
     fn roundtrip_simple_symbol() {
         // Create a simple symbol
         let mut symbol = Symbol::new("RESISTOR");

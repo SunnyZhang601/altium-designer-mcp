@@ -87,7 +87,7 @@ distinction stays visible: this is not an authoring gap waiting on an Altium run
 | Image | ✅ authored (`IMAGESYM`: bounding box, `logo.bmp`, KeepAspect, non-embedded); ✅ embedded image bytes in the `/Storage` stream (`EMBIMGSYM`, exact-asserted against the committed `embed.bmp`) | show_border non-default, display flags |
 | Bezier | ✅ authored (`BEZIERSYM`, four control points exact-asserted) | non-default colour/width, display flags |
 | Label | plain labels; ✅ justification variants + rotation (`JUSTIFY`) | mirror, display flags |
-| Parameter | Value etc. | justification, orientation, is_mirrored, autoposition, is_configurable, is_rule/is_system, area colour |
+| Parameter | Value etc. | justification, orientation, is_mirrored, is_configurable, area colour; 🔒 autoposition / is_rule / is_system_parameter / text anchors — modelled and round-tripped, but AD24 does not expose them on `ISch_Parameter` so no script can author them, and the golden does not contain them naturally |
 
 ### Cross-cutting (both formats)
 

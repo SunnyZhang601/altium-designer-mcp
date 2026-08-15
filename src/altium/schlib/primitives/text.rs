@@ -314,6 +314,29 @@ pub struct Parameter {
     /// Omit-when-default: emitted only when `true`. Default `false`.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub is_configurable: bool,
+    /// Auto-position mode (`AUTOPOSITION`): `0` = manually placed, `1`-`4` select an
+    /// anchor Altium positions the label against relative to the component. Omit-when-
+    /// default: emitted only when non-zero. Default `0`.
+    #[serde(default, skip_serializing_if = "is_zero_u8")]
+    pub auto_position: u8,
+    /// Whether the parameter carries a PCB design-rule directive (`ISRULE`).
+    /// Omit-when-default: emitted only when `true`. Default `false`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub is_rule: bool,
+    /// Whether this is a system parameter rather than a user one
+    /// (`ISSYSTEMPARAMETER`). Omit-when-default: emitted only when `true`.
+    /// Default `false`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub is_system_parameter: bool,
+    /// Horizontal text-box anchor (`TEXTHORZANCHOR`), distinct from
+    /// [`Self::justification`]. Omit-when-default: emitted only when non-zero.
+    /// Default `0`.
+    #[serde(default, skip_serializing_if = "is_zero_u8")]
+    pub text_horz_anchor: u8,
+    /// Vertical text-box anchor (`TEXTVERTANCHOR`). Omit-when-default: emitted only
+    /// when non-zero. Default `0`.
+    #[serde(default, skip_serializing_if = "is_zero_u8")]
+    pub text_vert_anchor: u8,
     /// Owner part ID.
     #[serde(default = "default_owner_part")]
     pub owner_part_id: i32,
@@ -346,6 +369,11 @@ impl Parameter {
             hide_name: false,
             description: String::new(),
             is_configurable: false,
+            auto_position: 0,
+            is_rule: false,
+            is_system_parameter: false,
+            text_horz_anchor: 0,
+            text_vert_anchor: 0,
             owner_part_id: 1,
             display_flags: ShapeDisplayFlags::default(),
             unique_id: None,

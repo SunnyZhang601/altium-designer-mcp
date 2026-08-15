@@ -601,6 +601,21 @@ fn encode_parameter(param: &Parameter, index: usize) -> String {
     if param.is_configurable {
         parts.push("IsConfigurable=T".to_string());
     }
+    if param.auto_position != 0 {
+        parts.push(format!("AutoPosition={}", param.auto_position));
+    }
+    if param.is_rule {
+        parts.push("IsRule=T".to_string());
+    }
+    if param.is_system_parameter {
+        parts.push("IsSystemParameter=T".to_string());
+    }
+    if param.text_horz_anchor != 0 {
+        parts.push(format!("TextHorzAnchor={}", param.text_horz_anchor));
+    }
+    if param.text_vert_anchor != 0 {
+        parts.push(format!("TextVertAnchor={}", param.text_vert_anchor));
+    }
     if !param.description.is_empty() {
         parts.push(text_field("Description", &param.description));
     }
@@ -2011,6 +2026,27 @@ mod tests {
             s.contains("|UniqueID=ABCD1234"),
             "preserve read UniqueID: {s}"
         );
+
+        // Display properties: emitted only when non-default, and each with the
+        // Altium key spelling the reader matches case-insensitively.
+        let mut d = Parameter::new("Rule", "Width");
+        assert!(!encode_parameter(&d, 1).contains("AutoPosition"));
+        assert!(!encode_parameter(&d, 1).contains("IsRule"));
+        d.auto_position = 3;
+        d.is_rule = true;
+        d.is_system_parameter = true;
+        d.text_horz_anchor = 2;
+        d.text_vert_anchor = 1;
+        let ds = encode_parameter(&d, 1);
+        for key in [
+            "|AutoPosition=3",
+            "|IsRule=T",
+            "|IsSystemParameter=T",
+            "|TextHorzAnchor=2",
+            "|TextVertAnchor=1",
+        ] {
+            assert!(ds.contains(key), "emit {key}: {ds}");
+        }
 
         // Non-default EE-meaningful fields are each emitted with the Altium key.
         p.orientation = 2;

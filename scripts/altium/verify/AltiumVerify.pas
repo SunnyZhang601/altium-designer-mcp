@@ -31,11 +31,70 @@ begin
     Result := StringReplace(Result, '"', '\"', REPLACEALL);
 end;
 
+
+{ Returns the currently-open library's component names as a JSON array. Altium
+  resolves these itself, so they are ground truth for what it actually parsed —
+  "opened" alone does not prove a component is reachable or that its name
+  survived. Returns [] for a kind with no reachable library. }
+function ComponentNames(const Kind : String) : String;
+var
+    PcbLib  : IPCB_Library;
+    SchLib  : ISch_Lib;
+    SchIter : ISch_Iterator;
+    SchComp : ISch_Component;
+    PcbComp : IPCB_LibComponent;
+    PcbIter : IPCB_LibraryIterator;
+    First   : Boolean;
+begin
+    Result := '[';
+    First  := True;
+    try
+        if Kind = 'PCBLIB' then
+        begin
+            PcbLib := PCBServer.GetCurrentPCBLibrary;
+            if PcbLib <> nil then
+            begin
+                PcbIter := PcbLib.LibraryIterator_Create;
+                PcbIter.SetState_FilterAll;
+                PcbComp := PcbIter.FirstPCBObject;
+                while PcbComp <> nil do
+                begin
+                    if not First then Result := Result + ',';
+                    Result := Result + '"' + JsonEscape(PcbComp.Name) + '"';
+                    First := False;
+                    PcbComp := PcbIter.NextPCBObject;
+                end;
+                PcbLib.LibraryIterator_Destroy(PcbIter);
+            end;
+        end
+        else if Kind = 'SCHLIB' then
+        begin
+            SchLib := SchServer.GetCurrentSchDocument;
+            if SchLib <> nil then
+            begin
+                SchIter := SchLib.SchLibIterator_Create;
+                SchIter.AddFilter_ObjectSet(MkSet(eSchComponent));
+                SchComp := SchIter.FirstSchObject;
+                while SchComp <> nil do
+                begin
+                    if not First then Result := Result + ',';
+                    Result := Result + '"' + JsonEscape(SchComp.LibReference) + '"';
+                    First := False;
+                    SchComp := SchIter.NextSchObject;
+                end;
+                SchLib.SchIterator_Destroy(SchIter);
+            end;
+        end;
+    except
+    end;
+    Result := Result + ']';
+end;
+
 procedure Run;
 var
     RequestFile, ResponseFile : String;
     Requests, Response : TStringList;
-    Json, Path, Ext, Kind, Detail : String;
+    Json, Path, Ext, Kind, Detail, Names : String;
     i, Emitted : Integer;
     Doc : IServerDocument;
     Opened : Boolean;
@@ -68,6 +127,7 @@ begin
             else                         Kind := '';
 
             Opened := False;
+            Names  := '[]';
             Detail := '';
 
             if not FileExists(Path) then
@@ -83,6 +143,7 @@ begin
                         Client.ShowDocument(Doc);
                         Opened := True;
                         Detail := 'opened';
+                        Names := ComponentNames(Kind);
                         // Leave the document open so it stays visible for inspection
                         // (e.g. to check a footprint's 3D body).
                     end
@@ -97,7 +158,11 @@ begin
             if Emitted > 0 then Json := Json + ',';
             Json := Json + '{"file":"' + JsonEscape(Path) + '","kind":"' + Kind + '","opened":';
             if Opened then Json := Json + 'true' else Json := Json + 'false';
-            Json := Json + ',"detail":"' + JsonEscape(Detail) + '"}';
+            Json := Json + ',"detail":"' + JsonEscape(Detail) + '"';
+            // The component names Altium itself resolved. "Opened" only proves the
+            // file parses; a name check proves the components are reachable and
+            // their text survived, which is what a round-trip claim needs.
+            Json := Json + ',"components":' + Names + '}';
             Inc(Emitted);
         end;
         Json := Json + ']';

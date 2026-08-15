@@ -98,6 +98,11 @@ foreach ($r in @($results)) {
     }
 }
 
+# Emit the parsed results so a caller can assert on more than PASS/FAIL — the
+# per-file `components` array is what Verify-RoundTrip.ps1 compares against.
+# Progress above goes through Write-Host, so this is the only pipeline output.
+@($results)
+
 if ($allOk) {
     Write-Host "`nAll libraries opened in Altium." -ForegroundColor Green
 } else {

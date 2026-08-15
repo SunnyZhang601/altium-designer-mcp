@@ -11,6 +11,7 @@ oracle in [`tests/integration/`](../tests/integration/).)
 |------|------------|---------------|
 | [`Verify-Libraries.ps1`](Verify-Libraries.ps1) | Launch Altium to confirm a `.PcbLib`/`.SchLib` opens cleanly | **Yes** |
 | [`Generate-Samples.ps1`](Generate-Samples.ps1) | Launch Altium to author the sample libraries | **Yes** |
+| [`Verify-RoundTrip.ps1`](Verify-RoundTrip.ps1) | Write libraries through the MCP server, then check Altium resolves every component name | **Yes** |
 | [`Resolve-AltiumExe.ps1`](Resolve-AltiumExe.ps1) | Shared helper: read `ALTIUM_EXE` from the repo-root `.env.local` | — |
 | [`altium/`](altium/) | The DelphiScript automation the launchers run | **Yes** |
 | [`samples/`](samples/) | Altium-authored sample libraries (ground truth for the tests) | No |
@@ -35,7 +36,7 @@ through Altium's `RunScript` CLI. Because it needs the GUI application and a lic
 
 | Path | Role |
 |------|------|
-| [`altium/verify/`](altium/verify/) | `AltiumVerify.pas` — opens each library and reports PASS/FAIL (run by `Verify-Libraries.ps1`) |
+| [`altium/verify/`](altium/verify/) | `AltiumVerify.pas` — opens each library and reports PASS/FAIL plus the component names Altium resolved (run by `Verify-Libraries.ps1`) |
 | [`altium/generate/`](altium/generate/) | `GenerateSamples.pas` — authors the sample libraries (run by `Generate-Samples.ps1`) |
 
 The `RunScript` launch and the file-based request/response bridge are adapted from

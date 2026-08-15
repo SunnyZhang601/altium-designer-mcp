@@ -1,7 +1,7 @@
 # Sample libraries
 
 Altium-authored reference libraries — the ground truth for the reader and round-trip
-tests. **Generated on-site, never hand-edited:** run `scripts\Generate-Samples.ps1`,
+tests. **Generated on-site, not hand-edited** (one exception, in `manual/` — see below): run `scripts\Generate-Samples.ps1`,
 which drives a real Altium Designer (via `altium\generate\GenerateSamples.pas`) to
 author the libraries, then moves them here to be committed.
 
@@ -10,6 +10,49 @@ so CI can read them without Altium. Regenerate and re-commit whenever the author
 
 > Building these is iterative — generate, read back with the Rust tests, extend the
 > primitive set, regenerate. Coverage grows component by component.
+
+## `manual/` — hand-authored, do NOT regenerate
+
+`Generate-Samples.ps1` cannot produce everything: a few properties exist only in Altium's
+UI and are not exposed on the scripting interfaces, so no DelphiScript can author them.
+Those live in `manual/`, made by hand and committed as-is.
+
+**`Generate-Samples.ps1` never touches this folder** — it only copies its own outputs over
+the two top-level libraries. Equally, nothing regenerates these files: if one is deleted,
+it has to be rebuilt by hand from the recipe below.
+
+### `manual/parameters.SchLib`
+
+One component, `PARAMPROPS`, carrying three `RECORD=41` parameters that between them cover
+the parameter properties the generated golden cannot reach:
+
+| Parameter | Carries | Why it is here |
+|-----------|---------|----------------|
+| `TestParam` = `123` | `Justification=7`, `NotAutoPosition=T` | the generated golden omits both, because Altium omits a property left at its default |
+| `Rule` | `Text=UNIONINDEX=0¦RULEKIND=Width¦…`, `Description`, `IsHidden=T` | a PCB design-rule directive parameter — proves a rule is identified by `Name=Rule` plus that payload, **not** by an `IsRule` flag |
+| `Comment` = `*` | the default set only | the control: it shows which keys Altium omits when nothing is changed |
+
+**To rebuild it:**
+
+1. **File → New → Library → Schematic Library**, save as `parameters.SchLib`.
+2. Rename the component to `PARAMPROPS` and draw anything (a rectangle and one pin);
+   the graphics are irrelevant.
+3. Add a parameter `TestParam` = `123`, **visible**. In its Properties:
+   - **untick Autoposition** — ticked is the default and Altium then writes nothing;
+   - set **Justification** to top-centre (the up arrow), which stores `Justification=7`.
+4. Add a second parameter via the parameter list's **Add → Rule**, choose a
+   *Max-Min Width* rule, leave the widths at 10 mil, and click **OK** (not Cancel — a
+   cancelled dialog writes nothing).
+5. Save, and copy the file here.
+
+**To check it before committing** — prints every key Altium actually wrote per parameter:
+
+```powershell
+python -c "import olefile,re,sys;f=olefile.OleFileIO(sys.argv[1]);d=b''.join(f.openstream('/'.join(e)).read() for e in f.listdir() if e[-1]=='Data');r=[x for x in re.split(rb'(?=\|RECORD=)',d) if b'RECORD=41' in x];[print('---',sorted(set(k.decode() for k in re.findall(rb'\|([A-Za-z0-9._%]+)=',x)))) for x in r]" scripts\samples\manual\parameters.SchLib
+```
+
+`NotAutoPosition` and `Justification` must both appear on `TestParam`, or step 3 did not
+take.
 
 ## Contents
 

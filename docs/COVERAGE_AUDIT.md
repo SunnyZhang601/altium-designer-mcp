@@ -13,11 +13,11 @@
 Nothing in the format layer. No field an Altium library can store is currently known to be
 lost on read or unreachable on write.
 
-One fixture gap remains, tracked in [FIXTURE_COVERAGE.md](FIXTURE_COVERAGE.md): the SchLib
-Parameter display properties (`AUTOPOSITION`, `ISRULE`, `ISSYSTEMPARAMETER`,
-`TEXTHORZANCHOR` / `TEXTVERTANCHOR`) are modelled and round-tripped, but AD24 does not
-expose them on `ISch_Parameter`, so no script can author a golden for them. Moving them
-from round-trip coverage to fixture coverage needs a hand-authored file.
+The SchLib Parameter display properties are settled: `NotAutoPosition` and
+`Justification` are covered by a hand-authored fixture
+(`scripts/samples/manual/parameters.SchLib` — see that folder's README to rebuild it).
+`IsRule`, `IsSystemParameter` and `TextHorzAnchor`/`TextVertAnchor` are listed among the
+negatives below.
 
 ## How to re-verify before trusting this
 
@@ -64,6 +64,9 @@ authoring it and reading the saved bytes back.
 | Barcode `RenderMode` | moves no byte; `@115` is a creation-order ordinal, not the property |
 | PCB text justification | `TextJustification` does not exist on `IPCB_Text` |
 | Net index (any primitive) | a `PcbLib` has no net table, so it is always `0xFFFF` |
+| SchLib `IsRule` | AD24 marks a rule by `Name=Rule` plus a `RULEKIND=…` payload in `Text`, not by a flag |
+| SchLib `IsSystemParameter` | absent even on `Comment`; not written into a library |
+| SchLib `TextHorzAnchor` / `TextVertAnchor` | absent from every parameter record in an authored library |
 
 > **Deciding whether a property is settable at all.** Check whether the name appears in
 > **`Advpcb.dll`** (PCB) or `AdvSch.dll` (schematic) — the native Delphi engines. A missing

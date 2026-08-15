@@ -1390,3 +1390,51 @@ fn samples_schlib_unicode_symbol_name_and_description() {
     assert_eq!(sym.description, "описание Ω", "Greek omega survives too");
     assert_eq!(sym.rectangles.len(), 1, "its body shape is read normally");
 }
+
+#[test]
+fn samples_schlib_manual_parameter_properties() {
+    // Hand-authored fixture (scripts/samples/manual/parameters.SchLib) — AD24 exposes
+    // neither of these on ISch_Parameter, so no DelphiScript can author them and the
+    // generated golden cannot carry them. See that folder's README to rebuild it.
+    //
+    // NotAutoPosition is stored inverted and omit-when-default: Altium writes the key
+    // only when the user turns auto-positioning OFF. This fixture is what proved that,
+    // and that the key is not the `AUTOPOSITION` the docs had led us to expect.
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("scripts")
+        .join("samples")
+        .join("manual")
+        .join("parameters.SchLib");
+    let lib = SchLib::open(&path).expect("failed to open manual/parameters.SchLib");
+    let sym = lib.get("PARAMPROPS").expect("symbol PARAMPROPS not found");
+
+    let param = |n: &str| {
+        sym.parameters
+            .iter()
+            .find(|p| p.name == n)
+            .unwrap_or_else(|| panic!("parameter {n} not found"))
+    };
+    let test_param = param("TestParam");
+    assert!(
+        !test_param.auto_position,
+        "TestParam was authored with auto-positioning turned off"
+    );
+    assert_eq!(test_param.justification, 7, "top-centre");
+
+    // The control: an untouched parameter omits the key, which must read as ON rather
+    // than defaulting to off — the inversion is easy to get backwards.
+    assert!(
+        param("Comment").auto_position,
+        "an untouched parameter auto-positions"
+    );
+
+    // A rule parameter is identified by its name and payload, not by a flag: AD24
+    // writes no IsRule key into a library.
+    let rule = param("Rule");
+    assert!(
+        rule.value.contains("RULEKIND=Width"),
+        "value: {}",
+        rule.value
+    );
+    assert!(rule.hidden, "the rule parameter is hidden");
+}

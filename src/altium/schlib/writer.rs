@@ -601,8 +601,8 @@ fn encode_parameter(param: &Parameter, index: usize) -> String {
     if param.is_configurable {
         parts.push("IsConfigurable=T".to_string());
     }
-    if param.auto_position != 0 {
-        parts.push(format!("AutoPosition={}", param.auto_position));
+    if !param.auto_position {
+        parts.push("NotAutoPosition=T".to_string());
     }
     if param.is_rule {
         parts.push("IsRule=T".to_string());
@@ -2030,16 +2030,16 @@ mod tests {
         // Display properties: emitted only when non-default, and each with the
         // Altium key spelling the reader matches case-insensitively.
         let mut d = Parameter::new("Rule", "Width");
-        assert!(!encode_parameter(&d, 1).contains("AutoPosition"));
+        assert!(!encode_parameter(&d, 1).contains("NotAutoPosition"));
         assert!(!encode_parameter(&d, 1).contains("IsRule"));
-        d.auto_position = 3;
+        d.auto_position = false;
         d.is_rule = true;
         d.is_system_parameter = true;
         d.text_horz_anchor = 2;
         d.text_vert_anchor = 1;
         let ds = encode_parameter(&d, 1);
         for key in [
-            "|AutoPosition=3",
+            "|NotAutoPosition=T",
             "|IsRule=T",
             "|IsSystemParameter=T",
             "|TextHorzAnchor=2",

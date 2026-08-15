@@ -495,7 +495,7 @@ mod tests {
         // not expose these on ISch_Parameter, so they cannot be authored by script.
         let mut symbol = Symbol::new("PARAMPROPS");
         let mut p = Parameter::new("Rule", "Width");
-        p.auto_position = 3;
+        p.auto_position = false;
         p.is_rule = true;
         p.is_system_parameter = true;
         p.text_horz_anchor = 2;
@@ -516,7 +516,10 @@ mod tests {
             .iter()
             .find(|q| q.name == "Rule")
             .expect("Rule parameter");
-        assert_eq!(rule.auto_position, 3);
+        assert!(
+            !rule.auto_position,
+            "authored with auto-positioning turned off"
+        );
         assert!(rule.is_rule);
         assert!(rule.is_system_parameter);
         assert_eq!(rule.text_horz_anchor, 2);
@@ -529,7 +532,7 @@ mod tests {
             .iter()
             .find(|q| q.name == "Value")
             .expect("Value parameter");
-        assert_eq!(value.auto_position, 0);
+        assert!(value.auto_position, "an untouched parameter auto-positions");
         assert!(!value.is_rule);
         assert!(!value.is_system_parameter);
         assert_eq!(value.text_horz_anchor, 0);

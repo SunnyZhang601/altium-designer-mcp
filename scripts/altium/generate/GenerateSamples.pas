@@ -510,6 +510,8 @@ var
     Doc      : IServerDocument;
     LongText : String;
     I        : Integer;
+    Pad      : IPCB_Pad;
+    Cache    : TPadCache;
 begin
     // CreateNewDocumentFromDocumentKind creates + focuses a blank doc and returns its
     // IServerDocument (Client.OpenNewDocumentOfKind, used in the v0, does not exist).
@@ -696,6 +698,54 @@ begin
         PCBServer.PreProcess;
         AddPadFull(Comp, -25, 0, 0, eRounded, 60, 40, '1');
         AddPadFull(Comp,  25, 0, 0, eRounded, 60, 40, '2');
+        PCBServer.PostProcess;
+    except
+    end;
+
+    // PADMASK: manual paste / solder-mask expansion on a pad — one of the fields the
+    // fixture map lists as exercised only by a self-round-trip.
+    //
+    // These are NOT direct properties. They live behind the pad's cache record, and
+    // the enum is eCacheManual (there is no eMaskExpansion_* identifier). Only names
+    // verified against shipping AD24 scripts are used here, because DelphiScript
+    // resolves identifiers at COMPILE time: one unknown name aborts the entire
+    // script, and a try/except around the assignment does not help.
+    //
+    // Thermal-relief and power-plane setters stay out permanently — see the Pad row
+    // in docs/FIXTURE_COVERAGE.md; they crash AD24's scripting DLL.
+    try
+        Comp := PCBServer.CreatePCBLibComp;
+        Comp.Name := 'PADMASK';
+        Lib.RegisterComponent(Comp);
+        PCBServer.PreProcess;
+
+        Pad := PCBServer.PCBObjectFactory(ePadObject, eNoDimension, eCreate_Default);
+        if Pad <> nil then
+        begin
+            Pad.Name     := '1';
+            Pad.X        := MilsToCoord(-40);
+            Pad.Y        := MilsToCoord(0);
+            Pad.TopXSize := MilsToCoord(70);
+            Pad.TopYSize := MilsToCoord(70);
+            Pad.TopShape := eRounded;
+            Pad.HoleSize := MilsToCoord(30);
+            Pad.Layer    := eMultiLayer;
+
+            Cache := Pad.GetState_Cache;
+            Cache.PasteMaskExpansionValid  := eCacheManual;
+            Cache.PasteMaskExpansion       := MilsToCoord(3);
+            Cache.SolderMaskExpansionValid := eCacheManual;
+            Cache.SolderMaskExpansion      := MilsToCoord(7);
+            Pad.SetState_Cache             := Cache;
+
+            Comp.AddPCBObject(Pad);
+            PCBServer.SendMessageToRobots(Comp.I_ObjectAddress, c_Broadcast,
+                                          PCBM_BoardRegisteration, Pad.I_ObjectAddress);
+        end;
+
+        // A second, plain SMD pad so the first can be compared against a default.
+        AddPadFull(Comp, 40, 0, 0, eRectangular, 60, 40, '2');
+
         PCBServer.PostProcess;
     except
     end;

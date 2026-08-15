@@ -6,7 +6,7 @@
 //! writer's output, as `file_io_roundtrip.rs` does).
 
 use altium_designer_mcp::altium::pcblib::{
-    HoleShape, Layer, PadShape, PadStackMode, PcbLib, RegionKind, TextKind,
+    HoleShape, Layer, MaskExpansionMode, PadShape, PadStackMode, PcbLib, RegionKind, TextKind,
 };
 use std::path::PathBuf;
 
@@ -45,7 +45,7 @@ fn samples_pcblib_pad_shapes() {
     // thermal-relief/power-plane setters crash AD24's scripting engine on a fresh
     // library pad in every sequence tried (batch 4b final bisect); see
     // GenerateSamples.pas.
-    assert_eq!(lib.len(), 19, "expected exactly nineteen footprints");
+    assert_eq!(lib.len(), 20, "expected exactly twenty footprints");
     let names = lib.names();
     for expected in [
         "PAD_SHAPES",
@@ -65,6 +65,7 @@ fn samples_pcblib_pad_shapes() {
         "TEXT_SPECIAL",
         "TEXT_LONG",
         "Резистор_0402",
+        "PADMASK",
         "MULTILAYER",
         "EMBSTEP",
     ] {
@@ -969,7 +970,7 @@ fn samples_pcblib_embstep() {
     let body = &fp.component_bodies[0];
 
     assert_eq!(
-        body.model_id, "{BBFA9069-4D85-47CB-B6DC-B2B93A98158C}",
+        body.model_id, "{881BA391-C4D4-4598-9F42-5097EC11E811}",
         "the body references the embedded model's GUID"
     );
     assert_eq!(body.model_name, "minimal.step", "MODEL.NAME");
@@ -1132,4 +1133,50 @@ fn samples_pcblib_golden_survives_a_read_modify_write() {
         .find(|t| t.text.len() > 255)
         .expect("the 264-character text keeps its full length");
     assert_eq!(long.text, "A".repeat(260) + "_END");
+}
+
+#[test]
+fn samples_pcblib_padmask_expansions() {
+    // Manual paste / solder-mask expansion, authored by Altium.
+    //
+    // These live behind the pad's cache record rather than as direct scripting
+    // properties, so until now they were only ever exercised by a self-round-trip
+    // — our writer and reader agreeing with each other proves nothing about the
+    // on-disk values. Pad 2 is the control: an untouched pad keeps the rule-driven
+    // default, so a reader that hard-coded Manual would fail here.
+    let lib = PcbLib::open(sample("footprints.PcbLib")).expect("failed to open footprints.PcbLib");
+    let fp = lib.get("PADMASK").expect("footprint PADMASK not found");
+
+    let pad = |d: &str| {
+        fp.pads
+            .iter()
+            .find(|p| p.designator == d)
+            .unwrap_or_else(|| panic!("pad {d} not found"))
+    };
+
+    // Authored as 7 mil solder / 3 mil paste.
+    let manual = pad("1");
+    assert_eq!(manual.solder_mask_expansion_mode, MaskExpansionMode::Manual);
+    assert_eq!(manual.paste_mask_expansion_mode, MaskExpansionMode::Manual);
+    assert!(
+        approx_eq(manual.solder_mask_expansion.expect("solder"), 0.1778, 1e-4),
+        "solder mask 7 mil, got {:?}",
+        manual.solder_mask_expansion
+    );
+    assert!(
+        approx_eq(manual.paste_mask_expansion.expect("paste"), 0.0762, 1e-4),
+        "paste mask 3 mil, got {:?}",
+        manual.paste_mask_expansion
+    );
+
+    let default_pad = pad("2");
+    assert_eq!(
+        default_pad.solder_mask_expansion_mode,
+        MaskExpansionMode::None,
+        "an untouched pad stays rule-driven"
+    );
+    assert_eq!(
+        default_pad.paste_mask_expansion_mode,
+        MaskExpansionMode::None
+    );
 }

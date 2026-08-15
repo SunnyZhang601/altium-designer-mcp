@@ -1466,6 +1466,38 @@ mod tests {
     }
 
     #[test]
+    fn testpoint_flags_round_trip_and_imply_locked() {
+        // The fabrication test-point bits (0x0080 / 0x0100 in Altium's flag word)
+        // must survive encode -> decode. Altium clears the unlocked bit on a pad it
+        // marks as a test point, so the writer does the same and the pad decodes as
+        // LOCKED as well — matching what the golden's authored pads carry.
+        let mut original = Footprint::new("TP_FLAGS");
+        let mut top = Pad::smd("1", 0.0, 0.0, 1.0, 1.0);
+        top.flags = PcbFlags::TESTPOINT_TOP;
+        original.add_pad(top);
+        let mut bottom = Pad::smd("2", 2.0, 0.0, 1.0, 1.0);
+        bottom.flags = PcbFlags::TESTPOINT_BOTTOM;
+        original.add_pad(bottom);
+        original.add_pad(Pad::smd("3", 4.0, 0.0, 1.0, 1.0));
+
+        let data = writer::encode_data_stream(&original).expect("encode");
+        let mut decoded = Footprint::new("TP_FLAGS");
+        reader::parse_data_stream(&mut decoded, &data, None);
+
+        assert_eq!(decoded.pads.len(), 3);
+        assert!(decoded.pads[0].flags.contains(PcbFlags::TESTPOINT_TOP));
+        assert!(decoded.pads[0].flags.contains(PcbFlags::LOCKED));
+        assert!(!decoded.pads[0].flags.contains(PcbFlags::TESTPOINT_BOTTOM));
+        assert!(decoded.pads[1].flags.contains(PcbFlags::TESTPOINT_BOTTOM));
+        assert!(decoded.pads[1].flags.contains(PcbFlags::LOCKED));
+        assert!(!decoded.pads[1].flags.contains(PcbFlags::TESTPOINT_TOP));
+        assert!(
+            decoded.pads[2].flags.is_empty(),
+            "the untouched pad stays unflagged"
+        );
+    }
+
+    #[test]
     fn binary_roundtrip_common_indices() {
         // A board-context Track and Text carrying a net/component association must
         // survive encode -> decode via the common-header indices (@3 net, @5

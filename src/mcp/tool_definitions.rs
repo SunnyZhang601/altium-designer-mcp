@@ -265,7 +265,7 @@ impl McpServer {
                                                 "unique_id": { "type": "string", "description": "8-char Altium unique ID; preserved on read-modify-write, auto-generated if omitted" },
                                                 "identity_guid": { "type": "string", "description": "Per-pad identity GUID (braced string, e.g. \"{A5172B29-...}\"); preserved verbatim on read-modify-write, freshly generated if omitted" },
                                                 "identity_guid_b": { "type": "string", "description": "Pad-stack/footprint-scoped identity GUID (braced string); preserved verbatim on read-modify-write, freshly generated if omitted" },
-                                                "flags": { "type": ["string", "integer"], "description": "Primitive flags (optional). Accepts the name string read_pcblib emits (e.g. \"LOCKED\" or \"LOCKED | KEEPOUT\") or a raw bitmask integer (1=locked, 2=polygon, 4=keepout, 8=tenting-top, 16=tenting-bottom). Default: none" }
+                                                "flags": { "type": ["string", "integer"], "description": "Primitive flags (optional). Accepts the name string read_pcblib emits (e.g. \"LOCKED\" or \"LOCKED | KEEPOUT\") or a raw bitmask integer (1=locked, 2=polygon, 4=keepout, 8=tenting-top, 16=tenting-bottom, 32=testpoint-top, 64=testpoint-bottom). Default: none" }
                                             },
                                             "required": ["designator", "x", "y", "width", "height"]
                                         }
@@ -288,7 +288,7 @@ impl McpServer {
                                                 "polygon_index": { "type": "integer", "description": "Polygon index (common header; 65535 = none). Normally omitted; preserved on a read-modify-write. Default: 65535" },
                                                 "component_index": { "type": "integer", "description": "Component index into the board component list (common header; -1 = free primitive). Normally omitted; preserved on a read-modify-write. Default: -1" },
                                                 "unique_id": { "type": "string", "description": "8-char Altium unique ID; preserved on read-modify-write, auto-generated if omitted" },
-                                                "flags": { "type": ["string", "integer"], "description": "Primitive flags (optional). Accepts the name string read_pcblib emits (e.g. \"LOCKED\" or \"LOCKED | KEEPOUT\") or a raw bitmask integer (1=locked, 2=polygon, 4=keepout, 8=tenting-top, 16=tenting-bottom). Default: none" }
+                                                "flags": { "type": ["string", "integer"], "description": "Primitive flags (optional). Accepts the name string read_pcblib emits (e.g. \"LOCKED\" or \"LOCKED | KEEPOUT\") or a raw bitmask integer (1=locked, 2=polygon, 4=keepout, 8=tenting-top, 16=tenting-bottom, 32=testpoint-top, 64=testpoint-bottom). Default: none" }
                                             },
                                             "required": ["x1", "y1", "x2", "y2", "width", "layer"]
                                         }
@@ -328,7 +328,7 @@ impl McpServer {
                                                 "hole_positive_tolerance": { "type": "number", "description": "Positive drill tolerance in mm (optional; omit to leave unset)" },
                                                 "hole_negative_tolerance": { "type": "number", "description": "Negative drill tolerance in mm (optional; omit to leave unset)" },
                                                 "unique_id": { "type": "string", "description": "8-char Altium unique ID; preserved on read-modify-write, auto-generated if omitted" },
-                                                "flags": { "type": ["string", "integer"], "description": "Primitive flags (optional). Accepts the name string read_pcblib emits (e.g. \"TENTING_TOP\" or \"LOCKED | KEEPOUT\") or a raw bitmask integer (1=locked, 2=polygon, 4=keepout, 8=tenting-top, 16=tenting-bottom). Tenting covers the via with solder mask. Default: none" }
+                                                "flags": { "type": ["string", "integer"], "description": "Primitive flags (optional). Accepts the name string read_pcblib emits (e.g. \"TENTING_TOP\" or \"LOCKED | KEEPOUT\") or a raw bitmask integer (1=locked, 2=polygon, 4=keepout, 8=tenting-top, 16=tenting-bottom, 32=testpoint-top, 64=testpoint-bottom). Tenting covers the via with solder mask. Default: none" }
                                             },
                                             "required": ["x", "y", "diameter", "hole_size"]
                                         }
@@ -351,7 +351,7 @@ impl McpServer {
                                                 "polygon_index": { "type": "integer", "description": "Polygon index (common header; 65535 = none). Normally omitted; preserved on a read-modify-write. Default: 65535" },
                                                 "component_index": { "type": "integer", "description": "Component index into the board component list (common header; -1 = free primitive). Normally omitted; preserved on a read-modify-write. Default: -1" },
                                                 "unique_id": { "type": "string", "description": "8-char Altium unique ID; preserved on read-modify-write, auto-generated if omitted" },
-                                                "flags": { "type": ["string", "integer"], "description": "Primitive flags (optional). Accepts the name string read_pcblib emits (e.g. \"LOCKED\" or \"LOCKED | KEEPOUT\") or a raw bitmask integer (1=locked, 2=polygon, 4=keepout, 8=tenting-top, 16=tenting-bottom). Default: none" }
+                                                "flags": { "type": ["string", "integer"], "description": "Primitive flags (optional). Accepts the name string read_pcblib emits (e.g. \"LOCKED\" or \"LOCKED | KEEPOUT\") or a raw bitmask integer (1=locked, 2=polygon, 4=keepout, 8=tenting-top, 16=tenting-bottom, 32=testpoint-top, 64=testpoint-bottom). Default: none" }
                                             },
                                             "required": ["x1", "y1", "x2", "y2"]
                                         }
@@ -375,7 +375,7 @@ impl McpServer {
                                                 "polygon_index": { "type": "integer", "description": "Polygon index (common header; 65535 = none). Normally omitted; preserved on a read-modify-write. Default: 65535" },
                                                 "component_index": { "type": "integer", "description": "Component index into the board component list (common header; -1 = free primitive). Normally omitted; preserved on a read-modify-write. Default: -1" },
                                                 "unique_id": { "type": "string", "description": "8-char Altium unique ID; preserved on read-modify-write, auto-generated if omitted" },
-                                                "flags": { "type": ["string", "integer"], "description": "Primitive flags (optional). Accepts the name string read_pcblib emits (e.g. \"LOCKED\" or \"LOCKED | KEEPOUT\") or a raw bitmask integer (1=locked, 2=polygon, 4=keepout, 8=tenting-top, 16=tenting-bottom). Default: none" }
+                                                "flags": { "type": ["string", "integer"], "description": "Primitive flags (optional). Accepts the name string read_pcblib emits (e.g. \"LOCKED\" or \"LOCKED | KEEPOUT\") or a raw bitmask integer (1=locked, 2=polygon, 4=keepout, 8=tenting-top, 16=tenting-bottom, 32=testpoint-top, 64=testpoint-bottom). Default: none" }
                                             },
                                             "required": ["x", "y", "radius", "start_angle", "end_angle", "width", "layer"]
                                         }
@@ -423,7 +423,7 @@ impl McpServer {
                                                 },
                                                 "unique_id": { "type": "string", "description": "Unique ID (optional, 8-char alphanumeric). Default: none" },
                                                 "additional_parameters": { "type": "array", "description": "Unmodelled region parameter keys captured verbatim on read (e.g. board-region keys like LAYER, KEEPOUT, ISBOARDCUTOUT). Each entry is a [key, value] string pair. Round-tripped so a read-modify-write does not drop keys the tool does not model. Normally omitted; supply only the pairs read_pcblib returned.", "items": { "type": "array", "items": { "type": "string" }, "minItems": 2, "maxItems": 2 } },
-                                                "flags": { "type": ["string", "integer"], "description": "Primitive flags (optional). Accepts the name string read_pcblib emits (e.g. \"LOCKED\" or \"LOCKED | KEEPOUT\") or a raw bitmask integer (1=locked, 2=polygon, 4=keepout, 8=tenting-top, 16=tenting-bottom). Default: none" }
+                                                "flags": { "type": ["string", "integer"], "description": "Primitive flags (optional). Accepts the name string read_pcblib emits (e.g. \"LOCKED\" or \"LOCKED | KEEPOUT\") or a raw bitmask integer (1=locked, 2=polygon, 4=keepout, 8=tenting-top, 16=tenting-bottom, 32=testpoint-top, 64=testpoint-bottom). Default: none" }
                                             },
                                             "required": ["vertices", "layer"]
                                         }
@@ -460,7 +460,7 @@ impl McpServer {
                                                 "polygon_index": { "type": "integer", "description": "Polygon index (common header; 65535 = none). Normally omitted; preserved on a read-modify-write. Default: 65535" },
                                                 "component_index": { "type": "integer", "description": "Component index into the board component list (common header; -1 = free primitive). Normally omitted; preserved on a read-modify-write. Default: -1" },
                                                 "unique_id": { "type": "string", "description": "8-char Altium unique ID; preserved on read-modify-write, auto-generated if omitted" },
-                                                "flags": { "type": ["string", "integer"], "description": "Primitive flags (optional). Accepts the name string read_pcblib emits (e.g. \"LOCKED\" or \"LOCKED | KEEPOUT\") or a raw bitmask integer (1=locked, 2=polygon, 4=keepout, 8=tenting-top, 16=tenting-bottom). Default: none" }
+                                                "flags": { "type": ["string", "integer"], "description": "Primitive flags (optional). Accepts the name string read_pcblib emits (e.g. \"LOCKED\" or \"LOCKED | KEEPOUT\") or a raw bitmask integer (1=locked, 2=polygon, 4=keepout, 8=tenting-top, 16=tenting-bottom, 32=testpoint-top, 64=testpoint-bottom). Default: none" }
                                             },
                                             "required": ["x", "y", "text", "height", "layer"]
                                         }

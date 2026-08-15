@@ -73,6 +73,11 @@ bitflags! {
         const TENTING_TOP = 0x0008;
         /// Bottom solder mask tenting enabled (covers the pad/via).
         const TENTING_BOTTOM = 0x0010;
+        /// Fabrication test point on the top layer. Altium locks a primitive it
+        /// marks as a test point, so this normally reads alongside `LOCKED`.
+        const TESTPOINT_TOP = 0x0020;
+        /// Fabrication test point on the bottom layer, likewise locked by Altium.
+        const TESTPOINT_BOTTOM = 0x0040;
     }
 }
 

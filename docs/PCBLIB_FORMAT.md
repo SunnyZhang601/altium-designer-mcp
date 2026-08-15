@@ -339,14 +339,25 @@ fill byte-identically.
 | `0x0008` | Saved | Set on a saved primitive |
 | `0x0020` | TentingTop | Solder-mask tented on top |
 | `0x0040` | TentingBottom | Solder-mask tented on bottom |
+| `0x0080` | TestPointTop | Fabrication test point, top |
+| `0x0100` | TestPointBottom | Fabrication test point, bottom |
 | `0x0200` | Keepout | Keep-out primitive |
 
 A normal saved primitive therefore carries `0x000C` (Saved + Unlocked), not `0x0000`; a keepout
 primitive carries `0x020C`.
 
+Altium **clears the Unlocked bit** on a primitive it marks as a fabrication test point, so a
+test-point pad carries `0x0088` or `0x0108` and reads as locked as well. The writer reproduces
+that rather than emitting a combination Altium never writes. This is Altium's behaviour, not a
+decode artefact — see issue #334, and the golden's `LOCKFLAGS_PCB` pads 5-6.
+
+The **assembly** test-point flags have no bit here: `IsAssyTestPoint_Top` / `_Bottom` author
+without error in AD24 but a saved `PcbLib` pad comes back as a plain `0x000C`, so they are not
+stored per-primitive in a library.
+
 > **Note:** These are the literal bits on disk. The crate also exposes an internal abstract
-> `PcbFlags` enum (`LOCKED` / `KEEPOUT` / `TENTING_TOP` / `TENTING_BOTTOM`, with its own distinct
-> values) for the public API; the reader/writer translate between the two. Do not confuse the
+> `PcbFlags` enum (`LOCKED` / `KEEPOUT` / `TENTING_TOP` / `TENTING_BOTTOM` / `TESTPOINT_TOP` /
+> `TESTPOINT_BOTTOM`, with its own distinct values) for the public API; the reader/writer translate between the two. Do not confuse the
 > abstract enum's values with the on-wire bits above.
 
 ## Primitive Formats

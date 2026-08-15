@@ -222,7 +222,7 @@ const fn pad_shape_to_id(shape: PadShape) -> u8 {
 // `PcbFlags` bit layout — shared with the reader via `super::flags`.
 use super::flags::{
     ALT_FLAG_KEEPOUT, ALT_FLAG_SAVED, ALT_FLAG_TENTING_BOTTOM, ALT_FLAG_TENTING_TOP,
-    ALT_FLAG_UNLOCKED,
+    ALT_FLAG_TESTPOINT_BOTTOM, ALT_FLAG_TESTPOINT_TOP, ALT_FLAG_UNLOCKED,
 };
 
 /// Encodes our internal `PcbFlags` into Altium's on-disk flag word.
@@ -243,6 +243,16 @@ const fn encode_altium_flags(flags: PcbFlags) -> u16 {
     }
     if flags.contains(PcbFlags::KEEPOUT) {
         f |= ALT_FLAG_KEEPOUT;
+    }
+    // Altium clears the unlocked bit on a primitive it marks as a test point, so
+    // mirror that rather than emitting a combination Altium never writes.
+    if flags.contains(PcbFlags::TESTPOINT_TOP) {
+        f |= ALT_FLAG_TESTPOINT_TOP;
+        f &= !ALT_FLAG_UNLOCKED;
+    }
+    if flags.contains(PcbFlags::TESTPOINT_BOTTOM) {
+        f |= ALT_FLAG_TESTPOINT_BOTTOM;
+        f &= !ALT_FLAG_UNLOCKED;
     }
     f
 }

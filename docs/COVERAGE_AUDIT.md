@@ -55,10 +55,6 @@ leads and the fixture follows.
   and feeds test-point identification.
 - **[gap | read]** `DrillType` (0=Simple, 1=Pressfit) — `AltiumSharp` `PcbPad.DrillType`
   separates a plated drilled hole from a press-fit one. Meaningful for connectors.
-- **[gap | read]** `IsTestPointTop` / `IsTestPointBottom` / `IsAssyTestpointTop` /
-  `IsAssyTestpointBottom` — our `PcbFlags` models `LOCKED` / `POLYGON` / `KEEPOUT` /
-  `TENTING_TOP` / `TENTING_BOTTOM` only, so the fabrication and assembly test-point flags
-  are dropped.
 - **[gap | read]** Fabrication flags: `IsBackdrill`, `TearDrop`, `UserRouted`,
   `IsCounterHole`, `IsPreRoute` — the rest of the same flag family, equally unmodelled.
 - **[gap | read]** `SolderMaskExpansionFromHoleEdge` (+ `…WithRule`) on Pad, and the same
@@ -125,7 +121,8 @@ One genuine gap remains in this group:
 
 Rough value order, highest first:
 
-1. **Test-point and fabrication flags** — the only group here a fabricator reads directly.
+1. **Fabrication flags** (backdrill, teardrop, user-routed, counter-hole, pre-route) — the
+   only group here a fabricator reads directly. Test points shipped; these share the word.
 2. **`SolderMaskExpansionFromHoleEdge`** — changes mask geometry on through-hole pads.
 3. **Region / ComponentBody param passthrough** — closes an open-ended class rather than
    one field.

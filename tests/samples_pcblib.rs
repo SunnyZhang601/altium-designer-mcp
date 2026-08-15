@@ -6,7 +6,8 @@
 //! writer's output, as `file_io_roundtrip.rs` does).
 
 use altium_designer_mcp::altium::pcblib::{
-    HoleShape, Layer, MaskExpansionMode, PadShape, PadStackMode, PcbLib, RegionKind, TextKind,
+    HoleShape, Layer, MaskExpansionMode, PadShape, PadStackMode, PcbFlags, PcbLib, RegionKind,
+    TextKind,
 };
 use std::path::PathBuf;
 
@@ -45,7 +46,7 @@ fn samples_pcblib_pad_shapes() {
     // thermal-relief/power-plane setters crash AD24's scripting engine on a fresh
     // library pad in every sequence tried (batch 4b final bisect); see
     // GenerateSamples.pas.
-    assert_eq!(lib.len(), 20, "expected exactly twenty footprints");
+    assert_eq!(lib.len(), 21, "expected exactly twenty-one footprints");
     let names = lib.names();
     for expected in [
         "PAD_SHAPES",
@@ -66,6 +67,7 @@ fn samples_pcblib_pad_shapes() {
         "TEXT_LONG",
         "Резистор_0402",
         "PADMASK",
+        "LOCKFLAGS_PCB",
         "MULTILAYER",
         "EMBSTEP",
     ] {
@@ -969,9 +971,20 @@ fn samples_pcblib_embstep() {
     assert_eq!(fp.component_bodies.len(), 1, "EMBSTEP has 1 component body");
     let body = &fp.component_bodies[0];
 
-    assert_eq!(
-        body.model_id, "{881BA391-C4D4-4598-9F42-5097EC11E811}",
-        "the body references the embedded model's GUID"
+    // Altium mints a fresh model GUID every time the samples are authored, so the
+    // link is asserted rather than the literal: the body must reference a model the
+    // library actually carries, in Altium's brace-wrapped GUID form. Pinning the
+    // value would break on every regeneration for no added coverage.
+    assert!(
+        body.model_id.starts_with('{') && body.model_id.ends_with('}') && body.model_id.len() == 38,
+        "model_id is a brace-wrapped GUID, got {:?}",
+        body.model_id
+    );
+    assert!(
+        lib.models()
+            .any(|m| m.id.eq_ignore_ascii_case(&body.model_id)),
+        "the body must reference one of the library's embedded models, got {:?}",
+        body.model_id
     );
     assert_eq!(body.model_name, "minimal.step", "MODEL.NAME");
     assert!(body.embedded, "MODEL.EMBED=TRUE reads as embedded");
@@ -1178,5 +1191,38 @@ fn samples_pcblib_padmask_expansions() {
     assert_eq!(
         default_pad.paste_mask_expansion_mode,
         MaskExpansionMode::None
+    );
+}
+
+#[test]
+fn samples_pcblib_locked_flag() {
+    // The LOCKED bit of the shared common-header flag word, authored by Altium
+    // (`Moveable := False`). A pad and a track cover the two record shapes that
+    // carry it; the unlocked pad is the control, so a reader that sets LOCKED
+    // unconditionally fails here rather than passing.
+    let lib = PcbLib::open(sample("footprints.PcbLib")).expect("failed to open footprints.PcbLib");
+    let fp = lib
+        .get("LOCKFLAGS_PCB")
+        .expect("footprint LOCKFLAGS_PCB not found");
+
+    let pad = |d: &str| {
+        fp.pads
+            .iter()
+            .find(|p| p.designator == d)
+            .unwrap_or_else(|| panic!("pad {d} not found"))
+    };
+    assert!(
+        pad("1").flags.contains(PcbFlags::LOCKED),
+        "pad 1 is authored locked"
+    );
+    assert!(
+        !pad("2").flags.contains(PcbFlags::LOCKED),
+        "pad 2 is the unlocked control"
+    );
+
+    assert_eq!(fp.tracks.len(), 1, "LOCKFLAGS_PCB has one track");
+    assert!(
+        fp.tracks[0].flags.contains(PcbFlags::LOCKED),
+        "the track is authored locked too"
     );
 }

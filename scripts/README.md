@@ -60,6 +60,26 @@ Hard-won behaviour of Altium, DelphiScript and Windows PowerShell 5.1. Each cost
 debugging time here; several made a *correct* change look broken, which is the expensive
 kind. Read this before writing or trusting a script in this folder.
 
+### Altium's own RTTI answers enum questions without a run
+
+Delphi compiles enumeration names into RTTI, so the shipped binaries carry the exact
+identifiers and their ordinals. Scanning them resolves a naming or ordinal question in
+seconds, with no Altium launch and no risk of a bad identifier aborting a script:
+
+```python
+b = open(r'C:\Program Files\Altium\AD24\System\Advpcb.dll', 'rb').read()
+i = b.find(b'eCacheInvalid')
+print(b[i-40:i+70])   # .TCacheState....eCacheInvalid.eCacheValid.eCacheManual.RT_PCB
+```
+
+That one lookup established `TCacheState = (eCacheInvalid, eCacheValid, eCacheManual)`
+— ordinals 0/1/2 — which is the tri-state behind pad and via mask expansion. Names appear
+consecutively in declaration order, so the position in the list *is* the stored byte.
+
+`Advpcb.dll` (PCB engine) and `AdvSch.dll` (schematic engine) hold the editor enums;
+`ScriptingSystem.dll` holds the scripting wrappers. Use this before guessing an identifier
+or inferring a default from observed bytes alone.
+
 ### DelphiScript truncates any codepoint above 255
 
 `Chr(N)` for `N > 255` wraps modulo 256, so `Chr(937)` (Greek `Ω`) yields byte 169 (`©`)

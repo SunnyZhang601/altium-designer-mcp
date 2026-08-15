@@ -239,13 +239,13 @@ impl McpServer {
                                                 "solder_mask_expansion_mode": {
                                                     "type": "string",
                                                     "enum": ["none", "from_rule", "manual"],
-                                                    "description": "Solder mask expansion mode. Default: from_rule"
+                                                    "description": "Solder mask expansion mode. 'none' (the default) leaves the cached value stale so Altium takes the expansion from the design rule; 'from_rule' tells Altium the stored value is a rule result to honour as-is; 'manual' uses the stored value as hand-specified."
                                                 },
                                                 "paste_mask_expansion": { "type": "number", "description": "Paste (stencil) mask expansion in mm (optional; omit to use the rule default)" },
                                                 "paste_mask_expansion_mode": {
                                                     "type": "string",
                                                     "enum": ["none", "from_rule", "manual"],
-                                                    "description": "Paste mask expansion mode. Default: from_rule"
+                                                    "description": "Paste mask expansion mode. 'none' (the default) leaves the cached value stale so Altium takes the expansion from the design rule; 'from_rule' tells Altium the stored value is a rule result to honour as-is; 'manual' uses the stored value as hand-specified."
                                                 },
                                                 "corner_radius_percent": { "type": "integer", "description": "Rounded-rectangle corner radius as a percentage of the shorter side (0-100). Default: 0" },
                                                 "rotation": { "type": "number", "description": "Pad rotation in degrees. Default: 0" },
@@ -309,7 +309,7 @@ impl McpServer {
                                                 "solder_mask_expansion_mode": {
                                                     "type": "string",
                                                     "enum": ["none", "from_rule", "manual"],
-                                                    "description": "Solder mask expansion mode. Default: from_rule"
+                                                    "description": "Solder mask expansion mode. 'none' (the default) leaves the cached value stale so Altium takes the expansion from the design rule; 'from_rule' tells Altium the stored value is a rule result to honour as-is; 'manual' uses the stored value as hand-specified."
                                                 },
                                                 "thermal_relief_gap": { "type": "number", "description": "Thermal relief air-gap width in mm. Default: 0.254 (10 mil)" },
                                                 "thermal_relief_conductors": { "type": "integer", "description": "Number of thermal relief conductors. Default: 4" },

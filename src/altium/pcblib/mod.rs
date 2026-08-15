@@ -1946,12 +1946,13 @@ mod tests {
     fn via_solder_mask_mode_round_trips() {
         use super::primitives::MaskExpansionMode;
 
-        // A fresh via defaults to FromRule (Altium's default, byte 66 = 1) — not the
-        // old `manual=false` which wrote 0 (None). A Manual via must round-trip.
+        // A fresh via carries None (byte 66 = 0, `eCacheInvalid`), matching what Altium
+        // writes for a factory via: the cached expansion is stale, so Altium takes the
+        // value from the design rule. A Manual via must round-trip.
         let mut original = Footprint::new("VIA_MASK_MODE");
         assert_eq!(
             Via::new(0.0, 0.0, 0.6, 0.3).solder_mask_expansion_mode,
-            MaskExpansionMode::FromRule
+            MaskExpansionMode::None
         );
         original.add_via(Via::new(0.0, 0.0, 0.6, 0.3));
         let mut manual = Via::new(1.0, 1.0, 0.6, 0.3);
@@ -1965,7 +1966,7 @@ mod tests {
         assert_eq!(decoded.vias.len(), 2);
         assert_eq!(
             decoded.vias[0].solder_mask_expansion_mode,
-            MaskExpansionMode::FromRule
+            MaskExpansionMode::None
         );
         assert_eq!(
             decoded.vias[1].solder_mask_expansion_mode,
@@ -2132,14 +2133,12 @@ mod tests {
     fn pad_mask_expansion_mode_round_trips() {
         use super::primitives::MaskExpansionMode;
 
-        // A fresh pad defaults to FromRule (Altium's default, bytes 101/102 = 1) — not
-        // the old `manual=false` which wrote 0 (None). A Manual pad must round-trip.
+        // A fresh pad carries None (bytes 101/102 = 0, `eCacheInvalid`), matching what
+        // Altium writes for a factory pad: the cached expansion is stale, so Altium
+        // takes the value from the design rule. A Manual pad must round-trip.
         let fresh = Pad::smd("1", 0.0, 0.0, 1.0, 1.0);
-        assert_eq!(fresh.paste_mask_expansion_mode, MaskExpansionMode::FromRule);
-        assert_eq!(
-            fresh.solder_mask_expansion_mode,
-            MaskExpansionMode::FromRule
-        );
+        assert_eq!(fresh.paste_mask_expansion_mode, MaskExpansionMode::None);
+        assert_eq!(fresh.solder_mask_expansion_mode, MaskExpansionMode::None);
 
         let mut original = Footprint::new("PAD_MASK_MODE");
         original.add_pad(Pad::smd("1", 0.0, 0.0, 1.0, 1.0));
@@ -2155,11 +2154,11 @@ mod tests {
         assert_eq!(decoded.pads.len(), 2);
         assert_eq!(
             decoded.pads[0].paste_mask_expansion_mode,
-            MaskExpansionMode::FromRule
+            MaskExpansionMode::None
         );
         assert_eq!(
             decoded.pads[0].solder_mask_expansion_mode,
-            MaskExpansionMode::FromRule
+            MaskExpansionMode::None
         );
         assert_eq!(
             decoded.pads[1].paste_mask_expansion_mode,

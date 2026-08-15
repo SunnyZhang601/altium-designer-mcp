@@ -262,14 +262,14 @@ fn encode_component_header(symbol: &Symbol) -> String {
     let parts = vec![
         "RECORD=1".to_string(),
         format!("LibReference={}", symbol.name),
-        format!("ComponentDescription={}", symbol.description),
+        text_field("ComponentDescription", &symbol.description),
         format!("PartCount={}", symbol.part_count + 1), // Altium uses part_count + 1
         format!("DisplayModeCount={}", symbol.display_mode_count),
         "IndexInSheet=-1".to_string(),
         "OwnerPartId=-1".to_string(),
         format!("CurrentPartId={}", symbol.current_part_id),
         "LibraryPath=*".to_string(),
-        format!("SourceLibraryName={}", symbol.source_library_name),
+        text_field("SourceLibraryName", &symbol.source_library_name),
         "SheetPartFileName=*".to_string(),
         format!("TargetFileName={}", symbol.target_file_name),
         format!("AllPinCount={}", symbol.pins.len()),
@@ -583,7 +583,7 @@ fn encode_parameter(param: &Parameter, index: usize) -> String {
     if !param.value.is_empty() {
         parts.push(text_field("Text", &param.value));
     }
-    parts.push(format!("Name={}", param.name));
+    parts.push(text_field("Name", &param.name));
     if param.read_only_state != 0 {
         parts.push(format!("ReadOnlyState={}", param.read_only_state));
     }
@@ -600,7 +600,7 @@ fn encode_parameter(param: &Parameter, index: usize) -> String {
         parts.push("IsConfigurable=T".to_string());
     }
     if !param.description.is_empty() {
-        parts.push(format!("Description={}", param.description));
+        parts.push(text_field("Description", &param.description));
     }
     parts.push(format!(
         "UniqueID={}",
@@ -873,7 +873,7 @@ fn encode_image(image: &Image, index: usize) -> String {
         parts.push("EmbedImage=T".to_string());
     }
     if !image.file_name.is_empty() {
-        parts.push(format!("FileName={}", image.file_name));
+        parts.push(text_field("FileName", &image.file_name));
     }
     parts.push(format!(
         "UniqueID={}",

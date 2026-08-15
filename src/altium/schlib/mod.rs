@@ -1642,4 +1642,41 @@ mod tests {
         let p = &s.parameters[0];
         assert!(approx(p.x, -20.5) && approx(p.y, 30.25));
     }
+
+    #[test]
+    fn library_roundtrip_non_windows_1252_text_fields() {
+        // Records are stored as Windows-1252, so any field holding text outside
+        // that code page must be emitted under a `%UTF8%<Key>` key and read back
+        // through it. A field that skips the promotion comes back as `?` per
+        // character, which is silent data loss on a value the user typed.
+        //
+        // `Text`-keyed fields (a parameter's value, a symbol's designator) are
+        // covered alongside the ones keyed by their own name, so the two paths
+        // are asserted together.
+        let cyrillic = "Опис";
+        let mut sym = Symbol::new("UNICODE_FIELDS");
+        sym.description = format!("{cyrillic}-описание");
+        sym.designator = "U?".to_string();
+        sym.source_library_name = format!("{cyrillic}.SchLib");
+
+        let mut param = Parameter::new(cyrillic, "значение");
+        param.description = format!("{cyrillic}-подпись");
+        sym.add_parameter(param);
+
+        let mut lib = SchLib::new();
+        lib.add(sym);
+        let mut buf = Cursor::new(Vec::new());
+        lib.write(&mut buf).expect("write");
+        buf.set_position(0);
+        let read_back = SchLib::read(buf).expect("read");
+        let s = read_back.get("UNICODE_FIELDS").expect("symbol present");
+
+        assert_eq!(s.description, format!("{cyrillic}-описание"));
+        assert_eq!(s.source_library_name, format!("{cyrillic}.SchLib"));
+
+        let p = &s.parameters[0];
+        assert_eq!(p.name, cyrillic, "parameter name");
+        assert_eq!(p.value, "значение", "parameter value");
+        assert_eq!(p.description, format!("{cyrillic}-подпись"));
+    }
 }

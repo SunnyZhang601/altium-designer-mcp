@@ -1102,3 +1102,33 @@ fn samples_pcblib_text_special() {
         "INV text offset was not authored (zero on disk reads back None)"
     );
 }
+
+#[test]
+fn samples_pcblib_golden_survives_a_read_modify_write() {
+    // The whole library is read from the Altium-authored golden and written
+    // back through our writer, in memory. A footprint Altium can author must be
+    // saveable: TEXT_LONG's 264-character string exceeds the 255-byte Pascal
+    // short string in block 1, so the writer has to truncate that block and let
+    // /WideStrings carry the full value, exactly as Altium does.
+    use std::io::Cursor;
+
+    let mut lib = PcbLib::open(sample("footprints.PcbLib")).expect("failed to open golden");
+    let before = lib.len();
+
+    let mut buffer = Cursor::new(Vec::new());
+    lib.write(&mut buffer)
+        .expect("the golden library must be writable");
+    buffer.set_position(0);
+    let round_tripped = PcbLib::read(&mut buffer).expect("read back");
+
+    assert_eq!(round_tripped.len(), before, "no footprint lost");
+
+    let long = round_tripped
+        .get("TEXT_LONG")
+        .expect("TEXT_LONG survives")
+        .text
+        .iter()
+        .find(|t| t.text.len() > 255)
+        .expect("the 264-character text keeps its full length");
+    assert_eq!(long.text, "A".repeat(260) + "_END");
+}

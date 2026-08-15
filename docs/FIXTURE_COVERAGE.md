@@ -40,19 +40,35 @@ field. The fix is always to enrich them (see the workflow below).
 ## Coverage map
 
 Legend: ✅ authored + asserted · ❌ not exercised (self-round-trip only) · 🚫 documented
-negative (Altium does not persist it — do not retry).
+negative (Altium does not persist it — do not retry) · 🔒 structurally absent from a
+library (see below — no fixture is possible, and none is needed).
+
+### Structurally absent: the net index
+
+`net_index` (common header @3) indexes a **board's** net list. A `PcbLib` has no net
+table — the golden's 24 top-level OLE entries are `FileHeader`, `FileVersionInfo`,
+`Library` and the footprint storages, with nothing for the index to point at — so every
+primitive in every library reads the `0xFFFF` "no net" sentinel. All 33 pads, tracks and
+vias in the golden do.
+
+No golden can therefore exercise a non-sentinel value, and none needs to: the reader does
+not branch on it beyond the short-header fallback, which a well-formed file never takes.
+Both paths are covered by `common_indices_decode_values_sentinels_and_short_headers` (real
+values, the sentinel, and every truncation point) and by `binary_roundtrip_common_indices`
+for the board-context encode/decode. The rows below are marked 🔒 rather than ❌ so the
+distinction stays visible: this is not an authoring gap waiting on an Altium run.
 
 ### PcbLib (`footprints.PcbLib`)
 
 | Primitive | Exercised today | Not exercised (❌) |
 |-----------|-----------------|--------------------|
 | Pad | shape (round/rect/oct/rrect), TH holes (round/square/slot), local stack, rotation, negative/far coords, ✅ manual paste/solder-mask expansion (`PADMASK`, authored via the pad cache), ✅ locked + keepout flags, ✅ drill tolerances (`LOCKFLAGS_PCB`) | testpoint flags, slot geometry on SMD, jumper id, locked/keepout flags; 🚫 corner-radius `CRPercentage` (crashes on a fresh Simple pad — needs correct pad-stack init first); 🚫 **FINAL** thermal-relief / power-plane setters (`PowerPlaneConnectStyle` / `ReliefConductorWidth` / `ReliefEntries` / `ReliefAirGap` / `PowerPlaneClearance` crash AD24's ScriptingSystem.DLL with a native access violation in **every** scripted sequence tried — pre- and post-registration, with and without the `GetState_Cache` block; batch 4a + 4b bisects. `PAD_THERMAL` cannot be authored by script in AD24 and stays disabled in the `.pas`) |
-| Via | simple TH, two pad/hole sizes | thermal-relief, power-plane, net index, paste-mask expansion, GUID; 🚫 tenting flags (`IsTenting_Top`/`_Bottom` author fine but AD24 does not persist them on a library via — the saved flag word is empty and the reader decodes those bits correctly elsewhere) |
-| Track | silk box + copper track, two widths, two layers; ✅ multi-layer spread (`MULTILAYER`: six tracks on Mechanical 2 / Mid-Layer 5 / Drill Guide / Drill Drawing / Internal Plane 1 / Keep-Out — real golden coverage for `layer_from_id`'s exotic arms; ID 58 reads as the documented `TopAssembly` alias, `samples_pcblib_multilayer`) | locked/keepout flags, net index |
-| Arc | full circle + quarter arc | fill/area colour, locked/keepout, net index |
+| Via | simple TH, two pad/hole sizes | thermal-relief, power-plane, paste-mask expansion, GUID; 🔒 net index; 🚫 tenting flags (`IsTenting_Top`/`_Bottom` author fine but AD24 does not persist them on a library via — the saved flag word is empty and the reader decodes those bits correctly elsewhere) |
+| Track | silk box + copper track, two widths, two layers; ✅ multi-layer spread (`MULTILAYER`: six tracks on Mechanical 2 / Mid-Layer 5 / Drill Guide / Drill Drawing / Internal Plane 1 / Keep-Out — real golden coverage for `layer_from_id`'s exotic arms; ID 58 reads as the documented `TopAssembly` alias, `samples_pcblib_multilayer`) | locked/keepout flags; 🔒 net index |
+| Arc | full circle + quarter arc | fill/area colour, locked/keepout; 🔒 net index |
 | Region | copper box + mechanical box; ✅ board-cutout representation (`ISBOARDCUTOUT=TRUE` + `KEEPOUT=TRUE`, relocated to the keep-out layer — `samples_pcblib_region_cutout`) | named region, net, arc-resolution/cavity/subpoly/union params |
-| Fill | axis-aligned + 45°-rotated copper | locked/keepout, net index |
-| Text | stroke text, Win-1252 chars, vertical (90°); ✅ TrueType `font_name`='Arial' + bold + italic + mirror (`TEXT_STYLE`); ✅ kind=BarCode (`TEXT_SPECIAL` 'BC128'); ✅ inverted (knockout) text + inverted-rect descriptor (`TEXT_SPECIAL` 'INV': `is_inverted`, `use_inverted_rectangle`, `inverted_border`=10 mil, auto-computed rect width/height exact-asserted) | justification, stroke_font variants, barcode sizing block (not modelled), char_set, union_index, net/component index, flags |
+| Fill | axis-aligned + 45°-rotated copper | locked/keepout; 🔒 net index |
+| Text | stroke text, Win-1252 chars, vertical (90°); ✅ TrueType `font_name`='Arial' + bold + italic + mirror (`TEXT_STYLE`); ✅ kind=BarCode (`TEXT_SPECIAL` 'BC128'); ✅ inverted (knockout) text + inverted-rect descriptor (`TEXT_SPECIAL` 'INV': `is_inverted`, `use_inverted_rectangle`, `inverted_border`=10 mil, auto-computed rect width/height exact-asserted) | justification, stroke_font variants, barcode sizing block (not modelled), char_set, union_index, component index, flags; 🔒 net index |
 | ComponentBody | one extruded box (Mechanical); ✅ embedded STEP model (`EMBSTEP`: `MODELID`/`MODEL.CHECKSUM`/`MODEL.NAME` on the body + zlib model stream in `/Library/Models/0`, decompressed `ISO-10303-21` bytes exact-asserted — `samples_pcblib_embstep`) | cavity height, model 2D location/rotation, non-default colour/opacity, raw-outline precision |
 
 ### SchLib (`symbols.SchLib`)

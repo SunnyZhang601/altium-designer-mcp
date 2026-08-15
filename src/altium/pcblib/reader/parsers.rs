@@ -1682,6 +1682,34 @@ mod tests {
     /// Millimetre comparison tolerance — coordinates are quantised to 1 nm.
     const EPS: f64 = 1e-9;
 
+    #[test]
+    fn common_indices_decode_values_sentinels_and_short_headers() {
+        // Real associations at @3/@5/@7 survive as themselves.
+        let mut header = vec![0u8; 9];
+        header[3..5].copy_from_slice(&7u16.to_le_bytes());
+        header[5..7].copy_from_slice(&9u16.to_le_bytes());
+        header[7..9].copy_from_slice(&4u16.to_le_bytes());
+        assert_eq!(read_common_indices(&header), (7, 9, 4));
+
+        // The `0xFFFF` sentinel is "none": the indices keep it, the component
+        // index maps to `-1` because that is its from-scratch default.
+        assert_eq!(read_common_indices(&[0xFF; 9]), (0xFFFF, 0xFFFF, -1));
+
+        // A header too short for a field falls back to the same "none" default
+        // rather than panicking, at every truncation point.
+        for len in 0..9 {
+            assert_eq!(
+                read_common_indices(&vec![0u8; len]),
+                match len {
+                    0..=4 => (0xFFFF, 0xFFFF, -1),
+                    5..=6 => (0, 0xFFFF, -1),
+                    _ => (0, 0, -1),
+                },
+                "truncated to {len} bytes"
+            );
+        }
+    }
+
     /// Wraps `payload` in the `[u32 len][payload]` framing every `PcbLib` record
     /// block uses, so a test can hand-build a record without the writer.
     /// A Pascal short string as the text content block holds it:

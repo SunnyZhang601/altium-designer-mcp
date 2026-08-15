@@ -880,6 +880,48 @@ fn write_pcblib_component_body_fields_roundtrip() {
 }
 
 #[test]
+fn write_pcblib_per_layer_pad_stack_roundtrip() {
+    // The pad stack is modelled and round-trips through the file, but until now none
+    // of it was reachable from write_pcblib: the schema had no entries and the parser
+    // hard-coded Simple/None, so a caller could not author anything but a simple pad.
+    let mut h = Harness::start();
+    let lib = h.lib_path();
+    let footprint = json!({
+        "name": "PAD_STACK_RT",
+        "pads": [{
+            "designator": "1", "x": 0.0, "y": 0.0, "width": 1.0, "height": 1.0,
+            "hole_size": 0.5,
+            "stack_mode": "top_middle_bottom",
+            "per_layer_sizes": [
+                { "width": 1.6, "height": 1.2 },
+                { "width": 1.4, "height": 1.0 },
+                { "width": 1.8, "height": 1.4 },
+            ],
+            "per_layer_shapes": ["round", "rectangular", "octagonal"],
+        }],
+    });
+    let write = h.call_tool(
+        "write_pcblib",
+        json!({ "filepath": lib, "footprints": [footprint], "append": false }),
+    );
+    assert!(
+        !is_err(&write),
+        "write_pcblib (pad stack) succeeded: {write}"
+    );
+
+    let read = h.call_tool("read_pcblib", json!({ "filepath": lib }));
+    let fp = find_by(arr(&read, "footprints"), "name", "PAD_STACK_RT").expect("present");
+    let pad = &arr(fp, "pads")[0];
+    assert_eq!(
+        pad.get("stack_mode").and_then(serde_json::Value::as_str),
+        Some("top_middle_bottom"),
+        "stack mode survives the round trip: {pad}"
+    );
+    let sizes = arr(pad, "per_layer_sizes");
+    assert_eq!(sizes.len(), 3, "three per-layer entries: {pad}");
+}
+
+#[test]
 fn write_pcblib_additional_parameters_roundtrip() {
     let mut h = Harness::start();
     let lib = h.lib_path();

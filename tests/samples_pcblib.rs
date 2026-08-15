@@ -1348,6 +1348,62 @@ fn samples_pcblib_locked_flag() {
 }
 
 #[test]
+fn samples_pcblib_testpoint_flags() {
+    // Issue #334: a pad authored with only IsTestPoint_Top read back as LOCKED and
+    // reported nothing for the flag that was set. Both halves are explained here.
+    //
+    // The LOCKED was real — Altium clears a primitive's unlocked bit when it marks
+    // it as a test point, confirmed against the raw flag word (0x0088 top / 0x0108
+    // bottom, against a control pad's 0x000C). The silence was ours: PcbFlags did
+    // not model the test-point bits at all, so they were dropped on read.
+    let lib = PcbLib::open(sample("footprints.PcbLib")).expect("failed to open footprints.PcbLib");
+    let fp = lib
+        .get("LOCKFLAGS_PCB")
+        .expect("footprint LOCKFLAGS_PCB not found");
+    let pad = |d: &str| {
+        fp.pads
+            .iter()
+            .find(|p| p.designator == d)
+            .unwrap_or_else(|| panic!("pad {d} not found"))
+    };
+    // Fabrication test points (issue #334). Altium clears the primitive's unlocked
+    // bit when it marks a test point, so these read LOCKED as well — that is
+    // Altium's own behaviour, verified against the raw flag word (0x0088 / 0x0108
+    // against a control pad's 0x000C), not a decode defect.
+    let tp_top = pad("5");
+    assert!(
+        tp_top.flags.contains(PcbFlags::TESTPOINT_TOP),
+        "pad 5 is a top-side fabrication test point"
+    );
+    assert!(
+        !tp_top.flags.contains(PcbFlags::TESTPOINT_BOTTOM),
+        "and not a bottom-side one"
+    );
+    assert!(
+        tp_top.flags.contains(PcbFlags::LOCKED),
+        "Altium locks a pad it marks as a test point"
+    );
+    let tp_bottom = pad("6");
+    assert!(
+        tp_bottom.flags.contains(PcbFlags::TESTPOINT_BOTTOM),
+        "pad 6 is a bottom-side fabrication test point"
+    );
+    assert!(
+        !tp_bottom.flags.contains(PcbFlags::TESTPOINT_TOP),
+        "and not a top-side one"
+    );
+    // The control pads prove the bits are not set unconditionally.
+    for d in ["1", "2", "3", "4"] {
+        let p = pad(d);
+        assert!(
+            !p.flags
+                .intersects(PcbFlags::TESTPOINT_TOP | PcbFlags::TESTPOINT_BOTTOM),
+            "pad {d} carries no test-point flag"
+        );
+    }
+}
+
+#[test]
 fn samples_pcblib_drill_tolerances() {
     // Positive / negative drill tolerance (extended-tail i32 @162/@166), authored
     // by Altium as +3 mil / -2 mil. The other pads in the footprint are the

@@ -318,7 +318,8 @@ fn read_string_from_block(block: &[u8]) -> String {
 
 // Flag bits shared with the writer via `super::flags`.
 use super::flags::{
-    ALT_FLAG_KEEPOUT, ALT_FLAG_TENTING_BOTTOM, ALT_FLAG_TENTING_TOP, ALT_FLAG_UNLOCKED,
+    ALT_FLAG_KEEPOUT, ALT_FLAG_TENTING_BOTTOM, ALT_FLAG_TENTING_TOP, ALT_FLAG_TESTPOINT_BOTTOM,
+    ALT_FLAG_TESTPOINT_TOP, ALT_FLAG_UNLOCKED,
 };
 
 /// Reads PCB flags from the common header bytes 1-2.
@@ -341,6 +342,12 @@ fn read_flags(data: &[u8]) -> PcbFlags {
     }
     if bits & ALT_FLAG_TENTING_BOTTOM != 0 {
         flags |= PcbFlags::TENTING_BOTTOM;
+    }
+    if bits & ALT_FLAG_TESTPOINT_TOP != 0 {
+        flags |= PcbFlags::TESTPOINT_TOP;
+    }
+    if bits & ALT_FLAG_TESTPOINT_BOTTOM != 0 {
+        flags |= PcbFlags::TESTPOINT_BOTTOM;
     }
     if bits & ALT_FLAG_KEEPOUT != 0 {
         flags |= PcbFlags::KEEPOUT;

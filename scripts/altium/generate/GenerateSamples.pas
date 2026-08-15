@@ -834,6 +834,56 @@ begin
                                           PCBM_BoardRegisteration, Trk.I_ObjectAddress);
         end;
 
+        // Pads 5-8: the fabrication and assembly test-point flags, one per pad so each
+        // bit of the shared flag word can be read off in isolation. The AD24 spelling
+        // is IsTestPoint_Top / IsAssyTestPoint_Top (capital P), confirmed against the
+        // Advpcb.dll RTTI alongside their SetIsTestPoint_* setters.
+        //
+        // Marking a pad as a test point also clears its unlocked bit, so these pads
+        // read back locked as well. That is Altium's own behaviour, not a decode
+        // defect — see issue #334.
+        //
+        // DOCUMENTED NEGATIVE (do not retry): the ASSEMBLY test-point flags are not
+        // persisted in a PcbLib. IsAssyTestPoint_Top / _Bottom are valid AD24
+        // identifiers and author without error, but the saved pad's flag word comes
+        // back as a plain 0x000C — no bit set, unlocked still set — where the
+        // fabrication flags above give 0x0080 / 0x0100. Those pads were removed
+        // again: a fixture that asserts nothing is not coverage.
+
+        Pad := PCBServer.PCBObjectFactory(ePadObject, eNoDimension, eCreate_Default);
+        if Pad <> nil then
+        begin
+            Pad.Name     := '5';
+            Pad.X        := MilsToCoord(0);
+            Pad.Y        := MilsToCoord(60);
+            Pad.TopXSize := MilsToCoord(60);
+            Pad.TopYSize := MilsToCoord(60);
+            Pad.TopShape := eRounded;
+            Pad.HoleSize := MilsToCoord(30);
+            Pad.Layer    := eMultiLayer;
+            Pad.IsTestPoint_Top := True;
+            Comp.AddPCBObject(Pad);
+            PCBServer.SendMessageToRobots(Comp.I_ObjectAddress, c_Broadcast,
+                                          PCBM_BoardRegisteration, Pad.I_ObjectAddress);
+        end;
+
+        Pad := PCBServer.PCBObjectFactory(ePadObject, eNoDimension, eCreate_Default);
+        if Pad <> nil then
+        begin
+            Pad.Name     := '6';
+            Pad.X        := MilsToCoord(0);
+            Pad.Y        := MilsToCoord(75);
+            Pad.TopXSize := MilsToCoord(60);
+            Pad.TopYSize := MilsToCoord(60);
+            Pad.TopShape := eRounded;
+            Pad.HoleSize := MilsToCoord(30);
+            Pad.Layer    := eMultiLayer;
+            Pad.IsTestPoint_Bottom := True;
+            Comp.AddPCBObject(Pad);
+            PCBServer.SendMessageToRobots(Comp.I_ObjectAddress, c_Broadcast,
+                                          PCBM_BoardRegisteration, Pad.I_ObjectAddress);
+        end;
+
         // A keepout track, the second bit of the same word on the same primitive.
         Trk := PCBServer.PCBObjectFactory(eTrackObject, eNoDimension, eCreate_Default);
         if Trk <> nil then

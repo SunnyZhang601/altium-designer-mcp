@@ -423,7 +423,11 @@ impl PcbLib {
         storage_path: &std::path::Path,
         name: &str,
     ) -> AltiumResult<Footprint> {
-        let mut footprint = Footprint::new(name);
+        // The storage name carries a non-Latin name as UTF-8 bytes; recover it so
+        // the footprint is keyed by its true name. The Data stream's own name block
+        // overwrites this when present.
+        let mut footprint =
+            Footprint::new(crate::altium::from_wire_text(name).unwrap_or_else(|| name.to_string()));
 
         // This component's out-of-line text, read here rather than library-wide
         // because that is where Altium puts it.
@@ -497,11 +501,14 @@ impl PcbLib {
         // limited to 31 characters; DESCRIPTION is free text.
         if let Some(pattern) = params.get("pattern") {
             if !pattern.is_empty() {
-                footprint.name.clone_from(pattern);
+                // PATTERN carries a non-Latin name as raw UTF-8 bytes.
+                footprint.name =
+                    crate::altium::from_wire_text(pattern).unwrap_or_else(|| pattern.clone());
             }
         }
         if let Some(description) = params.get("description") {
-            footprint.description.clone_from(description);
+            footprint.description =
+                crate::altium::from_wire_text(description).unwrap_or_else(|| description.clone());
         }
     }
 

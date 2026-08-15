@@ -45,7 +45,7 @@ fn samples_pcblib_pad_shapes() {
     // thermal-relief/power-plane setters crash AD24's scripting engine on a fresh
     // library pad in every sequence tried (batch 4b final bisect); see
     // GenerateSamples.pas.
-    assert_eq!(lib.len(), 18, "expected exactly eighteen footprints");
+    assert_eq!(lib.len(), 19, "expected exactly nineteen footprints");
     let names = lib.names();
     for expected in [
         "PAD_SHAPES",
@@ -64,6 +64,7 @@ fn samples_pcblib_pad_shapes() {
         "REGION_CUTOUT",
         "TEXT_SPECIAL",
         "TEXT_LONG",
+        "Резистор_0402",
         "MULTILAYER",
         "EMBSTEP",
     ] {
@@ -968,7 +969,7 @@ fn samples_pcblib_embstep() {
     let body = &fp.component_bodies[0];
 
     assert_eq!(
-        body.model_id, "{EB21A301-A7A5-4910-AEC8-00EF1DF4DB64}",
+        body.model_id, "{BBFA9069-4D85-47CB-B6DC-B2B93A98158C}",
         "the body references the embedded model's GUID"
     );
     assert_eq!(body.model_name, "minimal.step", "MODEL.NAME");

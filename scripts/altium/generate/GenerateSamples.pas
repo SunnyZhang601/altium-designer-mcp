@@ -684,6 +684,22 @@ begin
     except
     end;
 
+    // UNINAME: a footprint whose NAME is outside Windows-1252 (issue #327). The
+    // SchLib side of this is UNINAME's symbol counterpart; both are ground truth for
+    // which encoding Altium uses for the storage name, the Library/Data component
+    // list and the component's own name block. Literal, because Chr(N) truncates
+    // modulo 256 (see TEXT_LONG).
+    try
+        Comp := PCBServer.CreatePCBLibComp;
+        Comp.Name := 'Резистор_0402';
+        Lib.RegisterComponent(Comp);
+        PCBServer.PreProcess;
+        AddPadFull(Comp, -25, 0, 0, eRounded, 60, 40, '1');
+        AddPadFull(Comp,  25, 0, 0, eRounded, 60, 40, '2');
+        PCBServer.PostProcess;
+    except
+    end;
+
     // EDGE: boundary-case pads — a 45-deg rotated rectangle, a negative-coord pad, a far-out pad.
     try
         Comp := PCBServer.CreatePCBLibComp;

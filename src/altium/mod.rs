@@ -130,6 +130,37 @@ pub fn decode_utf8_param_value(value: &str) -> String {
     String::from_utf8_lossy(&bytes).into_owned()
 }
 
+/// Converts a value to the form Altium stores it in on the wire.
+///
+/// A Windows-1252 value is returned unchanged. Anything else becomes its UTF-8
+/// bytes carried one char per byte, so that encoding the record as Windows-1252
+/// emits exactly those bytes — which is how Altium stores a non-Latin name in a
+/// component's name block, its `PATTERN`, the library component list and the CFB
+/// storage name alike.
+#[must_use]
+pub fn to_wire_text(value: &str) -> String {
+    if requires_utf8(value) {
+        encode_utf8_param_value(value)
+    } else {
+        value.to_string()
+    }
+}
+
+/// Recovers a value stored as raw UTF-8 bytes inside a Windows-1252 record.
+///
+/// Returns `None` when `raw` is plain ASCII (nothing to recover) or when its
+/// bytes are not valid UTF-8, in which case it is a genuine Windows-1252 value
+/// and must be taken verbatim. Inverse of [`to_wire_text`].
+#[must_use]
+pub fn from_wire_text(raw: &str) -> Option<String> {
+    if raw.is_ascii() {
+        return None;
+    }
+    // Every char came from a Windows-1252 decode, so re-encoding is exact.
+    let bytes = encode_windows1252(raw);
+    std::str::from_utf8(&bytes).ok().map(str::to_string)
+}
+
 /// Generates a safe OLE storage name for a component.
 ///
 /// OLE Compound File names are limited to 31 characters. This function:

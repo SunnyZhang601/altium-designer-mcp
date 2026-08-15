@@ -513,6 +513,7 @@ var
     Pad      : IPCB_Pad;
     Cache    : TPadCache;
     Trk      : IPCB_Track;
+    Via      : IPCB_Via;
 begin
     // CreateNewDocumentFromDocumentKind creates + focuses a blank doc and returns its
     // IServerDocument (Client.OpenNewDocumentOfKind, used in the v0, does not exist).
@@ -834,6 +835,14 @@ begin
         PCBServer.PostProcess;
     except
     end;
+
+    // DOCUMENTED NEGATIVE (do not retry): via tenting is not persisted in a PcbLib.
+    // IsTenting_Top / IsTenting_Bottom are valid AD24 identifiers — a VIAFLAGS
+    // footprint setting both compiles and authors the via — but the saved library
+    // carries no tenting bits, and the via reads back with an empty flag word. The
+    // reader decodes ALT_FLAG_TENTING_TOP/BOTTOM correctly (a text round-trip test
+    // covers it), so this is Altium's behaviour: tenting on a library via is not
+    // stored per-primitive. Nothing to assert, so no fixture was added.
 
     // EDGE: boundary-case pads — a 45-deg rotated rectangle, a negative-coord pad, a far-out pad.
     try

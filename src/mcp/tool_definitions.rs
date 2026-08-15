@@ -313,6 +313,8 @@ impl McpServer {
                                                     "description": "Solder mask expansion mode. 'none' (the default) leaves the cached value stale so Altium takes the expansion from the design rule; 'from_rule' tells Altium the stored value is a rule result to honour as-is; 'manual' uses the stored value as hand-specified."
                                                 },
                                                 "thermal_relief_gap": { "type": "number", "description": "Thermal relief air-gap width in mm. Default: 0.254 (10 mil)" },
+                                                "solder_mask_expansion_from_hole_edge": { "type": "boolean", "description": "Measure solder-mask expansion from the HOLE edge instead of the pad edge. Default: false" },
+                                                "drill_layer_pair_type": { "type": "string", "enum": ["through", "blind_buried_start", "mid", "end"], "description": "Drill-pair classification. \"through\" (default) spans the whole board; the others mark a via's place in a blind/buried drill-pair sequence." },
                                                 "thermal_relief_conductors": { "type": "integer", "description": "Number of thermal relief conductors. Default: 4" },
                                                 "thermal_relief_width": { "type": "number", "description": "Thermal relief conductor width in mm. Default: 0.254 (10 mil)" },
                                                 "power_plane_connect_style": {

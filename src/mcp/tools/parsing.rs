@@ -888,7 +888,9 @@ impl McpServer {
     /// [`crate::altium::pcblib::Via::new`] does when absent.
     #[allow(clippy::too_many_lines)] // Via has many optional fields requiring individual parsing
     pub(crate) fn parse_via(json: &Value) -> Result<crate::altium::pcblib::Via, String> {
-        use crate::altium::pcblib::{Layer, MaskExpansionMode, PowerPlaneConnectStyle, Via};
+        use crate::altium::pcblib::{
+            DrillLayerPairType, Layer, MaskExpansionMode, PowerPlaneConnectStyle, Via,
+        };
 
         let x = json
             .get("x")
@@ -948,6 +950,20 @@ impl McpServer {
 
         if let Some(v) = json.get("solder_mask_expansion").and_then(Value::as_f64) {
             via.solder_mask_expansion = v;
+        }
+        if let Some(b) = json
+            .get("solder_mask_expansion_from_hole_edge")
+            .and_then(Value::as_bool)
+        {
+            via.solder_mask_expansion_from_hole_edge = b;
+        }
+        if let Some(s) = json.get("drill_layer_pair_type").and_then(Value::as_str) {
+            via.drill_layer_pair_type = match s.to_lowercase().as_str() {
+                "blind_buried_start" => DrillLayerPairType::BlindBuriedStart,
+                "mid" => DrillLayerPairType::Mid,
+                "end" => DrillLayerPairType::End,
+                _ => DrillLayerPairType::Through,
+            };
         }
         if let Some(s) = json
             .get("solder_mask_expansion_mode")

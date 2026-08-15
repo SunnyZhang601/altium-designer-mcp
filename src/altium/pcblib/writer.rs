@@ -866,6 +866,11 @@ fn encode_via(data: &mut Vec<u8>, via: &Via) {
     // Solder mask expansion @54, its mode @66, diameter stack mode @74.
     block[54..58].copy_from_slice(&from_mm(via.solder_mask_expansion).to_le_bytes());
     block[66] = via.solder_mask_expansion_mode.to_id();
+
+    // @258 mask-from-hole-edge bool and @312 drill-pair classification. Both are 0 in
+    // the template, so a default via stays byte-identical.
+    block[258] = u8::from(via.solder_mask_expansion_from_hole_edge);
+    block[312] = via.drill_layer_pair_type.to_id();
     block[74] = via_stack_mode_to_id(via.diameter_stack_mode);
 
     // Bottom-face solder-mask expansion @242. `None` mirrors the front face, so a

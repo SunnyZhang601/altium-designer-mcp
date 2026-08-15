@@ -146,6 +146,14 @@ fn pcblib_file_roundtrip_all_primitives() {
 
     // Text
     let text = Text {
+        barcode_full_width: None,
+        barcode_full_height: None,
+        barcode_x_margin: None,
+        barcode_y_margin: None,
+        barcode_kind: 0,
+        barcode_font_name: String::new(),
+        barcode_inverted: false,
+        barcode_show_text: false,
         x: 0.0,
         y: -2.0,
         text: ".Designator".to_string(),
@@ -873,6 +881,14 @@ fn pcblib_roundtrip_preserves_numeric_silkscreen_text() {
     let file_path = temp_dir.path().join("numeric_text.PcbLib");
 
     let numeric_text = |content: &str, y: f64| Text {
+        barcode_full_width: None,
+        barcode_full_height: None,
+        barcode_x_margin: None,
+        barcode_y_margin: None,
+        barcode_kind: 0,
+        barcode_font_name: String::new(),
+        barcode_inverted: false,
+        barcode_show_text: false,
         x: 0.0,
         y,
         text: content.to_string(),

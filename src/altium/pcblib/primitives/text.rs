@@ -47,6 +47,11 @@ pub use crate::altium::TextJustification;
 
 /// Default text-box justification for a from-scratch `PcbLib` text: `BottomLeft`,
 /// which the writer encodes to the template's `0x03` byte at geometry offset 132.
+#[allow(clippy::trivially_copy_pass_by_ref)] // serde requires &T
+const fn is_zero_barcode_kind(v: &u8) -> bool {
+    *v == 0
+}
+
 const fn default_justification() -> TextJustification {
     TextJustification::BottomLeft
 }
@@ -204,6 +209,51 @@ pub struct Text {
         serialize_with = "crate::altium::serde_round::option::serialize"
     )]
     pub inverted_rect_text_offset: Option<f64>,
+    /// Barcode overall width in mm — geometry offset 137. Only meaningful when
+    /// [`Self::kind`] is `BarCode`; `None` replays the template bytes.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "crate::altium::serde_round::option"
+    )]
+    pub barcode_full_width: Option<f64>,
+    /// Barcode overall height in mm — geometry offset 141.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "crate::altium::serde_round::option"
+    )]
+    pub barcode_full_height: Option<f64>,
+    /// Barcode horizontal quiet-zone margin in mm — geometry offset 145.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "crate::altium::serde_round::option"
+    )]
+    pub barcode_x_margin: Option<f64>,
+    /// Barcode vertical quiet-zone margin in mm — geometry offset 149.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "crate::altium::serde_round::option"
+    )]
+    pub barcode_y_margin: Option<f64>,
+    /// Barcode symbology — geometry byte @157. `0` on a non-barcode text, `1` for
+    /// Code128, the only symbology AD24 names in its scripting enum.
+    #[serde(default, skip_serializing_if = "is_zero_barcode_kind")]
+    pub barcode_kind: u8,
+    /// Font for the barcode's human-readable line — geometry offsets 161-224,
+    /// stored UTF-16LE and null-padded, unlike the record's other strings.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub barcode_font_name: String,
+    /// Whether the barcode renders inverted (light bars on dark) — geometry byte
+    /// @159. Only meaningful for a barcode.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub barcode_inverted: bool,
+    /// Whether the human-readable line is drawn under the bars — geometry byte
+    /// @225. Altium defaults this on for a new barcode.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub barcode_show_text: bool,
     /// Primitive flags (locked, keepout, etc.).
     #[serde(default, skip_serializing_if = "PcbFlags::is_empty")]
     pub flags: PcbFlags,

@@ -1056,7 +1056,7 @@ fn samples_pcblib_text_special() {
     // text-box descriptor (offsets 110-133), beyond a
     // self-round-trip. Matched by content; on-disk order is not
     // guaranteed.
-    assert_eq!(fp.text.len(), 2, "TEXT_SPECIAL has two text items");
+    assert_eq!(fp.text.len(), 5, "TEXT_SPECIAL has five text items");
     let by_content = |content: &str| {
         fp.text
             .iter()
@@ -1116,6 +1116,62 @@ fn samples_pcblib_text_special() {
         inv.inverted_rect_text_offset, None,
         "INV text offset was not authored (zero on disk reads back None)"
     );
+
+    // Barcode sizing block. Two barcodes were authored with every field different,
+    // and each offset identified by the authored value appearing there: @137/@141
+    // the 400x100 and 600x150 mil sizes, @145/@149 the margins, @157 the symbology,
+    // @161 the font as UTF-16LE. BC2 is what pins them; BC128 is the control for
+    // the margins it never set.
+    let bc2 = by_content("BC2");
+    assert_eq!(bc2.kind, TextKind::BarCode);
+    assert_eq!(bc2.barcode_kind, 1, "Code128");
+    assert!(approx_eq(
+        bc2.barcode_full_width.expect("width"),
+        15.24,
+        1e-3
+    ));
+    assert!(approx_eq(
+        bc2.barcode_full_height.expect("height"),
+        3.81,
+        1e-3
+    ));
+    assert!(approx_eq(
+        bc2.barcode_x_margin.expect("x margin"),
+        0.762,
+        1e-3
+    ));
+    assert!(approx_eq(
+        bc2.barcode_y_margin.expect("y margin"),
+        1.016,
+        1e-3
+    ));
+    assert_eq!(bc2.barcode_font_name, "Courier New");
+    assert!(bc2.barcode_inverted, "BC2 is authored inverted");
+    assert!(bc2.barcode_show_text, "and with its readable line shown");
+
+    // BC3 and BC4 differ from BC2 in exactly one field each, which is what pins
+    // @159 and @225 to the right flag rather than to each other.
+    let bc3 = by_content("BC3");
+    assert!(!bc3.barcode_inverted, "BC3 turns Inverted off");
+    assert!(bc3.barcode_show_text, "and leaves ShowText alone");
+    let bc4 = by_content("BC4");
+    assert!(bc4.barcode_inverted, "BC4 leaves Inverted alone");
+    assert!(!bc4.barcode_show_text, "and turns ShowText off");
+
+    let bc1 = by_content("BC128");
+    assert!(approx_eq(
+        bc1.barcode_full_width.expect("width"),
+        10.16,
+        1e-3
+    ));
+    assert_eq!(bc1.barcode_font_name, "Arial", "the default barcode font");
+
+    // A non-barcode text carries none of it, so the block cannot be read
+    // unconditionally out of the template bytes every text record has.
+    let inv = by_content("INV");
+    assert_eq!(inv.barcode_kind, 0);
+    assert!(inv.barcode_full_width.is_none());
+    assert!(inv.barcode_font_name.is_empty());
 }
 
 #[test]

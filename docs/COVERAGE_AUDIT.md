@@ -53,24 +53,18 @@ leads and the fixture follows.
 - **[gap | read]** `JumperID` — `AltiumSharp` reads an i16 at Pad offset 110 into
   `PcbPad.JumperID`; `PcbPadDto` exposes `JUMPERID`. Groups pads as a jumper / 0-ohm link
   and feeds test-point identification.
-- **[gap | read]** `DrillType` (0=Simple, 1=Pressfit) — `AltiumSharp` `PcbPad.DrillType`
-  separates a plated drilled hole from a press-fit one. Meaningful for connectors.
-  **Blocked:** no byte offset is known for it and AD24 exposes no setter, so it can
-  neither be located by diffing an authored pad nor guessed responsibly. Needs a
-  press-fit pad from a real library to locate the byte.
-- **[gap | read]** Text barcode sizing block — we model `kind = BarCode` and a golden
-  covers it, but none of the block's own keys (`BarCodeKind`, `RenderMode`, `Inverted`,
-  `FontName`, `ShowText`, `FullWidth`/`Height`, `XMargin`/`YMargin`, `MinWidth`). A barcode
-  round-trips as a barcode but loses its sizing.
-  **Blocked, and do not implement from the offsets this document used to list.** AD24
-  exposes no `Set*` for any of the ten, so no script can vary them, and the golden's
-  barcode and non-barcode text records carry *identical* values at the candidate offsets —
-  they are template bytes. With no variation to diff against, the mapping cannot be
-  validated, and a guessed offset risks corrupting the neighbouring inverted-rectangle
-  fields (@124/@128/@133), which are verified. Only `BarCodeKind@157` is confirmed: `1` on
-  the golden's Code128 barcode against `0` on a non-barcode text — one sample, not enough
-  to say what other values mean. Needs barcodes authored through the AD24 UI, or a real
-  library that varies them.
+- **🚫 `DrillType`** — resolved as a negative, not a gap. The name is in
+  `Advpcb.dll` and `Pad.DrillType := 1` compiles and runs without error, but the saved
+  pad is byte-identical to a plain through-hole pad apart from its coordinates. AD24
+  keeps the press-fit/simple classification somewhere other than the library record, so
+  no external file is needed after all — there is nothing to read.
+
+- **🚫 Text barcode `MinWidth` and `RenderMode`** — the other eight keys ship.
+  `MinWidth`@153 reads 39604/88235 against an authored 5 mil, so Altium computes it from
+  the content and width rather than storing the request. A barcode varying only
+  `RenderMode` moved no byte except @115, which reads 4/3/2/1 across the barcodes in
+  creation order — an ordinal, not the property. Neither is recoverable by diffing.
+
 - **[gap | read]** `model_2d_location` (`MODEL.2D.X` / `MODEL.2D.Y`) on ComponentBody —
   `model_2d_rotation` is modelled but the position is not: the reader drops both keys and
   the writer always emits `MODEL.2D.X=0mil|MODEL.2D.Y=0mil`. A body whose model is offset
@@ -114,8 +108,11 @@ unmodelled key survives a read-modify-write. Covered end to end by
 
 Rough value order, highest first:
 
-1. **`model_2d_location`, `JumperID`, per-layer stack arrays** — small, isolated, and the
-   only items here still actionable.
-2. **`DrillType`** — blocked on locating its byte; needs a press-fit pad from a real
-   library.
-3. **Barcode sizing block** — blocked on the same problem, ten times over.
+1. **`model_2d_location`, `JumperID`, per-layer stack arrays** — small and isolated.
+
+> **Heuristic, corrected.** A missing `Set*` counterpart does *not* mean a property is
+> unauthorable — `SolderMaskExpansionFromHoleEdge` and `BarCodeKind` both lack one and
+> both set fine. What holds is whether the name appears in **`Advpcb.dll`**, the native
+> Delphi engine, at all. Names found only in the `Altium.*.dll` .NET assemblies do not
+> resolve in DelphiScript: `TextJustification` is one, and assigning it fails the whole
+> script compile with "Undeclared identifier".

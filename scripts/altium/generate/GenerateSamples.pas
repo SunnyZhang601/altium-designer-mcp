@@ -449,6 +449,76 @@ begin
                                   PCBM_BoardRegisteration, Txt.I_ObjectAddress);
 end;
 
+{ A second barcode whose every sizing field differs from AddTextBarcode's, so
+  diffing the two records isolates each field's offset by its authored value.
+  All ten BarCode* names are present in Advpcb.dll (the native Delphi engine),
+  which is the check that matters — a name found only in the Altium.*.dll .NET
+  assemblies (TextJustification, for one) does NOT resolve in DelphiScript. }
+procedure AddTextBarcode2(Comp : IPCB_LibComponent; X : Integer; Y : Integer;
+                          Content : String);
+var Txt : IPCB_Text;
+begin
+    Txt := PCBServer.PCBObjectFactory(eTextObject, eNoDimension, eCreate_Default);
+    if Txt = nil then Exit;
+    Txt.XLocation := MilsToCoord(X);
+    Txt.YLocation := MilsToCoord(Y);
+    Txt.Layer     := eTopOverlay;
+    Txt.Size      := MilsToCoord(60);
+    Txt.Rotation  := 0.0;
+    Txt.Text      := Content;
+    Txt.TextKind          := eText_BarCode;
+    Txt.BarCodeKind       := eBarCode128;
+    Txt.BarCodeFullWidth  := MilsToCoord(600);
+    Txt.BarCodeFullHeight := MilsToCoord(150);
+    Txt.BarCodeXMargin    := MilsToCoord(30);
+    Txt.BarCodeYMargin    := MilsToCoord(40);
+    Txt.BarCodeMinWidth   := MilsToCoord(5);
+    Txt.BarCodeInverted   := True;
+    Txt.BarCodeShowText   := True;
+    Txt.BarCodeFontName   := 'Courier New';
+    Comp.AddPCBObject(Txt);
+    PCBServer.SendMessageToRobots(Comp.I_ObjectAddress, c_Broadcast,
+                                  PCBM_BoardRegisteration, Txt.I_ObjectAddress);
+end;
+
+{ Barcode variants that differ from AddTextBarcode2 in exactly ONE field each, so
+  the remaining offsets can be isolated: BC3 turns Inverted off (@159), BC4 turns
+  ShowText off (@225). Everything else is held identical on purpose.
+
+  DOCUMENTED NEGATIVE: BarCodeRenderMode and BarCodeMinWidth are not recoverable this
+  way. A BC5 varying only RenderMode moved no byte except @115, which reads 4/3/2/1
+  across the barcodes in creation order — an ordinal, not the property. MinWidth@153
+  reads 39604/88235 against an authored 5 mil, so Altium computes it from the content
+  and width rather than storing what was asked for. }
+procedure AddTextBarcodeVariant(Comp : IPCB_LibComponent; X : Integer; Y : Integer;
+                                Content : String; Inverted : Boolean;
+                                ShowText : Boolean; RenderMode : Integer);
+var Txt : IPCB_Text;
+begin
+    Txt := PCBServer.PCBObjectFactory(eTextObject, eNoDimension, eCreate_Default);
+    if Txt = nil then Exit;
+    Txt.XLocation := MilsToCoord(X);
+    Txt.YLocation := MilsToCoord(Y);
+    Txt.Layer     := eTopOverlay;
+    Txt.Size      := MilsToCoord(60);
+    Txt.Rotation  := 0.0;
+    Txt.Text      := Content;
+    Txt.TextKind          := eText_BarCode;
+    Txt.BarCodeKind       := eBarCode128;
+    Txt.BarCodeFullWidth  := MilsToCoord(600);
+    Txt.BarCodeFullHeight := MilsToCoord(150);
+    Txt.BarCodeXMargin    := MilsToCoord(30);
+    Txt.BarCodeYMargin    := MilsToCoord(40);
+    Txt.BarCodeMinWidth   := MilsToCoord(5);
+    Txt.BarCodeInverted   := Inverted;
+    Txt.BarCodeShowText   := ShowText;
+    Txt.BarCodeFontName   := 'Courier New';
+    Txt.BarCodeRenderMode := RenderMode;
+    Comp.AddPCBObject(Txt);
+    PCBServer.SendMessageToRobots(Comp.I_ObjectAddress, c_Broadcast,
+                                  PCBM_BoardRegisteration, Txt.I_ObjectAddress);
+end;
+
 { Inverted (knockout) TrueType text in an inverted rectangle. Names VERIFIED from
   the AD24 IDE dump: Inverted, UseInvertedRectangle, InvertedTTTextBorder,
   TTFOffsetFromInvertedRect. }
@@ -832,6 +902,13 @@ begin
                                           PCBM_BoardRegisteration, Pad.I_ObjectAddress);
         end;
 
+        // DOCUMENTED NEGATIVE (do not retry): DrillType is not stored on a library
+        // pad. The name IS in Advpcb.dll and `Pad.DrillType := 1` compiles and runs
+        // without error — but the saved pad is byte-identical to a plain through-hole
+        // pad apart from its coordinates, so AD24 keeps the press-fit/simple
+        // classification somewhere other than the library record. The probe pad was
+        // removed again rather than left asserting nothing.
+
         // Pad 3 carries the keepout flag, the other bit of the same word.
         Pad := PCBServer.PCBObjectFactory(ePadObject, eNoDimension, eCreate_Default);
         if Pad <> nil then
@@ -1113,6 +1190,9 @@ begin
         Lib.RegisterComponent(Comp);
         PCBServer.PreProcess;
         AddTextBarcode(Comp, 0, 100, 'BC128');
+        AddTextBarcode2(Comp, 0, -150, 'BC2');
+        AddTextBarcodeVariant(Comp, 0, -300, 'BC3', False, True,  0);
+        AddTextBarcodeVariant(Comp, 0, -450, 'BC4', True,  False, 0);
         AddTextInverted(Comp, 0, -100, 'INV');
         PCBServer.PostProcess;
     except

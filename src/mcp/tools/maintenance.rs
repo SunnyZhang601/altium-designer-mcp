@@ -1725,6 +1725,14 @@ mod tests {
             fp.add_region(Region::rectangle(-1.0, -1.0, 1.0, 1.0, Layer::TopLayer));
             fp.add_via(Via::new(0.6, 0.6, 0.6, 0.3));
             fp.add_text(Text {
+                barcode_full_width: None,
+                barcode_full_height: None,
+                barcode_x_margin: None,
+                barcode_y_margin: None,
+                barcode_kind: 0,
+                barcode_font_name: String::new(),
+                barcode_inverted: false,
+                barcode_show_text: false,
                 x: 0.0,
                 y: 1.0,
                 text: "REF".to_string(),

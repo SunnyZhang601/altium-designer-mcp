@@ -1210,6 +1210,40 @@ pub fn encode_text_geometry(text: &Text, wide_index: Option<u32>) -> Vec<u8> {
     // Altium's column-major text-box encoding.
     block[132] = pcb_justification_to_id(text.justification);
 
+    // Barcode block (offsets verified by diffing two authored barcodes). Each field
+    // is written only when set, so a plain text — and a barcode that does not
+    // override a value — replays the template bytes unchanged.
+    for (offset, value) in [
+        (137, text.barcode_full_width),
+        (141, text.barcode_full_height),
+        (145, text.barcode_x_margin),
+        (149, text.barcode_y_margin),
+    ] {
+        if let Some(mm) = value {
+            block[offset..offset + 4].copy_from_slice(&from_mm(mm).to_le_bytes());
+        }
+    }
+    if text.barcode_kind != 0 {
+        block[157] = text.barcode_kind;
+    }
+    if text.barcode_inverted {
+        block[159] = 1;
+    }
+    if text.barcode_show_text {
+        block[225] = 1;
+    }
+    // UTF-16LE, null-padded into the fixed 64-byte field at @161-224.
+    if !text.barcode_font_name.is_empty() {
+        let mut buf = [0u8; 64];
+        for (slot, unit) in buf
+            .chunks_exact_mut(2)
+            .zip(text.barcode_font_name.encode_utf16())
+        {
+            slot.copy_from_slice(&unit.to_le_bytes());
+        }
+        block[161..225].copy_from_slice(&buf);
+    }
+
     // Inverted (knockout) text-box descriptor. Defaults reproduce the template
     // bytes exactly (@110/123 = 0x00, @111/133 = 0, @124/128 = the template's
     // precomputed text-box size), so a from-scratch plain text stays byte-identical.
@@ -2092,6 +2126,14 @@ mod tests {
         // IsComment@40 / IsDesignator@41 overlay the template's 0x00 bytes
         // (offsets verified against AltiumSharp b[40]/b[41]).
         let text = Text {
+            barcode_full_width: None,
+            barcode_full_height: None,
+            barcode_x_margin: None,
+            barcode_y_margin: None,
+            barcode_kind: 0,
+            barcode_font_name: String::new(),
+            barcode_inverted: false,
+            barcode_show_text: false,
             x: 0.0,
             y: 0.0,
             text: "C1".to_string(),
@@ -2175,6 +2217,14 @@ mod tests {
         use crate::altium::TextJustification;
         // A default Text's geometry block keeps the template's 0xFF header bytes @3-8.
         let text = Text {
+            barcode_full_width: None,
+            barcode_full_height: None,
+            barcode_x_margin: None,
+            barcode_y_margin: None,
+            barcode_kind: 0,
+            barcode_font_name: String::new(),
+            barcode_inverted: false,
+            barcode_show_text: false,
             x: 0.0,
             y: 0.0,
             text: "X".to_string(),
@@ -2239,6 +2289,14 @@ mod tests {
         use crate::altium::TextJustification;
         // A framed inverted text overlays every descriptor field at its offset.
         let text = Text {
+            barcode_full_width: None,
+            barcode_full_height: None,
+            barcode_x_margin: None,
+            barcode_y_margin: None,
+            barcode_kind: 0,
+            barcode_font_name: String::new(),
+            barcode_inverted: false,
+            barcode_show_text: false,
             x: 0.0,
             y: 0.0,
             text: "X".to_string(),
@@ -3083,6 +3141,14 @@ mod tests {
     fn wide_strings_nonempty_has_no_trailing_pipe() {
         use crate::altium::TextJustification;
         let mk = |s: &str| Text {
+            barcode_full_width: None,
+            barcode_full_height: None,
+            barcode_x_margin: None,
+            barcode_y_margin: None,
+            barcode_kind: 0,
+            barcode_font_name: String::new(),
+            barcode_inverted: false,
+            barcode_show_text: false,
             x: 0.0,
             y: 0.0,
             text: s.to_string(),

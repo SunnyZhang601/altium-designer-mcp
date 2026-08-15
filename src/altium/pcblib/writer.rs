@@ -292,7 +292,13 @@ pub fn encode_data_stream(footprint: &Footprint) -> crate::altium::error::Altium
     let mut data = Vec::new();
 
     // Write name block: [block_len:4][str_len:1][name:str_len]
-    write_string_block(&mut data, &footprint.name, "footprint.name")?;
+    // Altium stores a non-Windows-1252 name as its raw UTF-8 bytes here, in
+    // PATTERN, in the library component list and in the storage name alike.
+    write_string_block(
+        &mut data,
+        &crate::altium::to_wire_text(&footprint.name),
+        "footprint.name",
+    )?;
 
     // Write primitives
     // Order: Arcs, Pads, Tracks (following typical Altium ordering)

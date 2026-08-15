@@ -209,7 +209,25 @@ function Get-AltiumResult([string]$Path) {
 # ---------------------------------------------------------------------------
 $failures = New-Object System.Collections.Generic.List[string]
 
+# Altium's PCB scripting API hands back a non-Latin footprint name in its on-wire
+# form: the UTF-8 bytes carried one char per byte. That is not a defect in the file
+# — asking Altium for the names in its OWN authored golden returns exactly the same
+# string — so the comparison accepts either the true name or that form. Decoding it
+# back is the inverse of what the writer does.
+function ConvertFrom-WireName([string]$Name) {
+    try {
+        # The system ANSI page, because that is the one Altium widened through.
+        $bytes = [System.Text.Encoding]::Default.GetBytes($Name)
+        $utf8  = New-Object System.Text.UTF8Encoding $false, $true
+        return $utf8.GetString($bytes)
+    } catch { return $Name }
+}
+
 function Compare-Names([string]$Label, [string[]]$Expected, [string[]]$Actual) {
+    $resolved = @($Actual | ForEach-Object {
+        if ($Expected -contains $_) { $_ } else { ConvertFrom-WireName $_ }
+    })
+    $Actual = $resolved
     $missing = @($Expected | Where-Object { $Actual -notcontains $_ })
     $extra   = @($Actual   | Where-Object { $Expected -notcontains $_ })
     if ($missing.Count -or $extra.Count) {

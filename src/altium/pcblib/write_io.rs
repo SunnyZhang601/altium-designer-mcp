@@ -24,9 +24,15 @@ impl PcbLib {
 
         let mut cfb = crate::altium::create_ole(writer)?;
 
+        // Storage names use the on-wire form, so the CFB name and every place the
+        // name is written stay consistent for a non-Windows-1252 footprint.
+        let wire_names: Vec<String> = self
+            .footprints
+            .iter()
+            .map(|f| crate::altium::to_wire_text(&f.name))
+            .collect();
         // Generate OLE-safe names for all footprints (handles long names and collisions)
-        let ole_names =
-            crate::altium::generate_ole_names(self.footprints.iter().map(|f| f.name.as_str()));
+        let ole_names = crate::altium::generate_ole_names(wire_names.iter().map(String::as_str));
 
         // Write FileHeader (pipe-delimited format for reader compatibility)
         self.write_file_header(&mut cfb, &ole_names)?;
@@ -514,7 +520,8 @@ impl PcbLib {
         // Keys (no trailing pipe): PATTERN, HEIGHT, DESCRIPTION, ITEMGUID, REVISIONGUID.
         let params = format!(
             "|PATTERN={}|HEIGHT=0mil|DESCRIPTION={}|ITEMGUID=|REVISIONGUID=",
-            footprint.name, footprint.description
+            crate::altium::to_wire_text(&footprint.name),
+            footprint.description
         );
         let mut params_data = Vec::new();
         crate::altium::framing::write_cstring_param_block(

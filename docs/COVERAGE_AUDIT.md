@@ -6,13 +6,23 @@
 > carry. The goal is parity: nothing an Altium `.PcbLib` / `.SchLib` can store should be
 > lost on read or unreachable on write.
 >
-> This is a worklist, not a history. Prune an entry the moment it ships.
+> A worklist, not a history. Prune an entry the moment it ships — git log is the record.
 
-## How to re-verify this list
+## Outstanding
 
-Every entry below was checked against the source rather than carried forward on trust. The
-previous edition had drifted badly — 103 of its 129 feature-loss entries named fields that
-had since been implemented — so re-verify before acting on any of it:
+Nothing in the format layer. No field an Altium library can store is currently known to be
+lost on read or unreachable on write.
+
+One fixture gap remains, tracked in [FIXTURE_COVERAGE.md](FIXTURE_COVERAGE.md): the SchLib
+Parameter display properties (`AUTOPOSITION`, `ISRULE`, `ISSYSTEMPARAMETER`,
+`TEXTHORZANCHOR` / `TEXTVERTANCHOR`) are modelled and round-tripped, but AD24 does not
+expose them on `ISch_Parameter`, so no script can author a golden for them. Moving them
+from round-trip coverage to fixture coverage needs a hand-authored file.
+
+## How to re-verify before trusting this
+
+An earlier edition went badly stale — 103 of its 129 entries named fields that had since
+been implemented — so treat "nothing outstanding" as a claim to re-check, not a fact:
 
 ```python
 # every backticked Altium property claimed missing, vs every field we model
@@ -25,87 +35,40 @@ fields = set(re.findall(r'pub ([a-z_0-9]+)\s*:', src))
 ```
 
 Name matching only narrows the candidates — a field can be modelled under a different name
-(`IsKeepout` and `IsTentingTop` live in `PcbFlags`, not in fields of their own), so confirm
-each survivor by reading the parser. The three cross-checks that matter:
+(`IsKeepout` and `IsTentingTop` live in `PcbFlags`, not in fields of their own) — so
+confirm each survivor by reading the parser. Three cross-checks:
 
 - **modelled?** a field on the primitive struct;
 - **parsed and written?** `src/altium/{pcblib,schlib}/`;
 - **reachable?** an entry in `src/mcp/tool_definitions.rs`.
 
-A feature needs all three to count as supported, and a golden fixture to count as *proven*
-— see [FIXTURE_COVERAGE.md](FIXTURE_COVERAGE.md).
+All three to count as supported; a golden fixture to count as *proven*.
 
-## Status
+To locate an unknown byte offset, author two primitives differing in exactly one field and
+diff their record blocks — the offset carrying the authored value is the field. That found
+the pad's mask-from-hole-edge flag at `@125` and all six barcode sizing offsets.
 
-Geometry and the properties that decide how a footprint or symbol **looks** are complete
-across every primitive, in both directions, and pinned to Altium-authored fixtures.
+## Verified negatives — do not retry
 
-What remains is fabrication and authoring **metadata**: fields Altium stores that never
-change the rendering, which is why they outlasted everything else. Thirteen groups, listed
-below.
+Properties AD24 accepts without error but does not persist in a library, each confirmed by
+authoring it and reading the saved bytes back.
 
-## 1. PcbLib format gaps
+| Property | Evidence |
+|----------|----------|
+| Via tenting (`IsTenting_Top`/`_Bottom`) | authors fine; saved flag word is empty |
+| Assembly test points (`IsAssyTestPoint_Top`/`_Bottom`) | flag word comes back a plain `0x000C` |
+| `TearDrop`, `UserRouted` | same `0x000C`, identical to an untouched pad |
+| `DrillType` | saved pad is byte-identical to a plain TH pad apart from coordinates |
+| `IsBackDrill`, `IsCounterHole`, `IsPreRoute` | derived board state; no per-pad property |
+| Barcode `MinWidth` | `@153` reads 39604/88235 against an authored 5 mil — Altium computes it |
+| Barcode `RenderMode` | moves no byte; `@115` is a creation-order ordinal, not the property |
+| PCB text justification | `TextJustification` does not exist on `IPCB_Text` |
+| Net index (any primitive) | a `PcbLib` has no net table, so it is always `0xFFFF` |
 
-Each of these is unmodelled: no struct field, nothing parsed, nothing written, nothing
-exposed. A golden fixture cannot cover them until the field exists, so the reader work
-leads and the fixture follows.
-
-- **🚫 `DrillType`** — resolved as a negative, not a gap. The name is in
-  `Advpcb.dll` and `Pad.DrillType := 1` compiles and runs without error, but the saved
-  pad is byte-identical to a plain through-hole pad apart from its coordinates. AD24
-  keeps the press-fit/simple classification somewhere other than the library record, so
-  no external file is needed after all — there is nothing to read.
-
-- **🚫 Text barcode `MinWidth` and `RenderMode`** — the other eight keys ship.
-  `MinWidth`@153 reads 39604/88235 against an authored 5 mil, so Altium computes it from
-  the content and width rather than storing the request. A barcode varying only
-  `RenderMode` moved no byte except @115, which reads 4/3/2/1 across the barcodes in
-  creation order — an ordinal, not the property. Neither is recoverable by diffing.
-
-- **[gap | read]** `model_2d_location` (`MODEL.2D.X` / `MODEL.2D.Y`) on ComponentBody —
-  `model_2d_rotation` is modelled but the position is not: the reader drops both keys and
-  the writer always emits `MODEL.2D.X=0mil|MODEL.2D.Y=0mil`. A body whose model is offset
-  in the 2D plane loses that offset.
-
-## 2. SchLib format gaps
-
-None outstanding. The Parameter display properties (`AUTOPOSITION`, `ISRULE`,
-`ISSYSTEMPARAMETER`, `TEXTHORZANCHOR` / `TEXTVERTANCHOR`) are modelled, read, written and
-exposed. They have **no golden fixture**: AD24 does not expose them on `ISch_Parameter`,
-so they cannot be authored by script, and the golden library does not contain them
-naturally. Coverage is a write-readback round-trip until a hand-authored file provides
-one — a fixture gap, not a modelling gap. See [FIXTURE_COVERAGE.md](FIXTURE_COVERAGE.md).
-
-## 3. Tool-schema gaps
-
-None outstanding.
-
-## 4. Round-trip fidelity
-
-Verified present, kept here only because fidelity regressions are easy to reintroduce:
-
-| Item | State |
-|------|-------|
-| `unique_id` preservation across PcbLib primitives | modelled (8 primitives) and read |
-| SchLib `*_FRAC` sub-coordinates | shipped, golden-covered (`FRACPINS`, `FRACSHAPES`) |
-| SchLib Pin auxiliary streams (`PinFrac`, `PinSymbolLineWidth`) | shipped, golden-covered |
-| PcbLib net / polygon / component indices | shipped; net index is [structurally absent from a library](FIXTURE_COVERAGE.md) |
-| `IsNotAccessible` round-trip (SchLib) | shipped |
-
-Region and ComponentBody already carry an `additional_parameters` passthrough: every key
-the typed model does not consume is captured in read order and re-emitted verbatim, so an
-unmodelled key survives a read-modify-write. Covered end to end by
-`write_pcblib_additional_parameters_roundtrip`.
-
-## Ordering
-
-Rough value order, highest first:
-
-1. **`model_2d_location`** — the last one.
-
-> **Heuristic, corrected.** A missing `Set*` counterpart does *not* mean a property is
-> unauthorable — `SolderMaskExpansionFromHoleEdge` and `BarCodeKind` both lack one and
-> both set fine. What holds is whether the name appears in **`Advpcb.dll`**, the native
-> Delphi engine, at all. Names found only in the `Altium.*.dll` .NET assemblies do not
-> resolve in DelphiScript: `TextJustification` is one, and assigning it fails the whole
-> script compile with "Undeclared identifier".
+> **Deciding whether a property is settable at all.** Check whether the name appears in
+> **`Advpcb.dll`** (PCB) or `AdvSch.dll` (schematic) — the native Delphi engines. A missing
+> `Set*` counterpart proves nothing: `SolderMaskExpansionFromHoleEdge` and `BarCodeKind`
+> both lack one and both set fine. Names found only in the `Altium.*.dll` **.NET**
+> assemblies do not resolve in DelphiScript — `TextJustification` is one — and an
+> unresolved identifier aborts the entire script compile, taking every other footprint in
+> that run with it.

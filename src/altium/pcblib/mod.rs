@@ -1569,6 +1569,41 @@ mod tests {
     }
 
     #[test]
+    fn component_body_model_2d_offset_round_trips() {
+        // MODEL.2D.X/Y sit in BODY_MODELLED_PARAM_KEYS, so the additional_parameters
+        // passthrough skips them: before they were parsed, a non-zero offset was
+        // dropped on read and the writer always emitted 0mil.
+        let mut original = Footprint::new("MODEL2D");
+        let mut body = ComponentBody::new("{GUID}", "MODEL.STEP");
+        body.model_2d_x = 1.27;
+        body.model_2d_y = -0.635;
+        original.add_component_body(body);
+
+        let data = writer::encode_data_stream(&original).expect("encode");
+        let mut decoded = Footprint::new("MODEL2D");
+        reader::parse_data_stream(&mut decoded, &data, None);
+
+        let read = &decoded.component_bodies[0];
+        assert!(
+            (read.model_2d_x - 1.27).abs() < 1e-4,
+            "x: {}",
+            read.model_2d_x
+        );
+        assert!(
+            (read.model_2d_y + 0.635).abs() < 1e-4,
+            "y: {}",
+            read.model_2d_y
+        );
+        assert!(
+            !read
+                .additional_parameters
+                .iter()
+                .any(|(k, _)| k.starts_with("MODEL.2D.")),
+            "the offset is a typed field, not a passthrough entry"
+        );
+    }
+
+    #[test]
     fn jumper_id_round_trips() {
         // Main-block i16 @110-111. Zero is "no jumper" and must leave the template
         // bytes alone, so the default pad is the control.
@@ -1862,6 +1897,8 @@ mod tests {
             body_color_3d: 8_421_504,
             body_opacity_3d: 1.0,
             model_2d_rotation: 0.0,
+            model_2d_x: 0.0,
+            model_2d_y: 0.0,
             net_index: 0xFFFF,
             polygon_index: 0xFFFF,
             component_index: -1,
@@ -1930,6 +1967,8 @@ mod tests {
                 body_color_3d: 8_421_504,
                 body_opacity_3d: 1.0,
                 model_2d_rotation: 0.0,
+                model_2d_x: 0.0,
+                model_2d_y: 0.0,
                 net_index: 0xFFFF,
                 polygon_index: 0xFFFF,
                 component_index: -1,

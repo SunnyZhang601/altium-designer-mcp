@@ -530,6 +530,8 @@ impl McpServer {
                                                 "body_color_3d": { "type": "integer", "description": "3D body colour as decimal RGB (Altium BODYCOLOR3D). Default: 8421504 (0x808080, grey)" },
                                                 "body_opacity_3d": { "type": "number", "description": "3D body opacity, 0.0-1.0 (Altium BODYOPACITY3D). Default: 1.0" },
                                                 "model_2d_rotation": { "type": "number", "description": "2D placement rotation in degrees (Altium MODEL.2D.ROTATION). Default: 0" },
+                                                "model_2d_x": { "type": "number", "description": "Model offset from the body origin in the 2D plane, X in mm (Altium MODEL.2D.X). Default: 0" },
+                                                "model_2d_y": { "type": "number", "description": "Model offset in the 2D plane, Y in mm (Altium MODEL.2D.Y). Default: 0" },
                                                 "model_id": { "type": "string", "description": "Model GUID referencing an embedded model (Altium MODELID). Default: \"\" (none)" },
                                                 "model_name": { "type": "string", "description": "Model filename or external path (Altium MODEL.NAME). Default: \"\" (none)" },
                                                 "embedded": { "type": "boolean", "description": "Whether the model is embedded in the library (Altium MODEL.EMBED). Default: false" },

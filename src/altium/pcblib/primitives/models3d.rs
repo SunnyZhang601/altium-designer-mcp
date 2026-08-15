@@ -176,6 +176,13 @@ pub struct ComponentBody {
     /// written with `{:.3}` so the default renders as `0.000` (byte-identity).
     #[serde(default)]
     pub model_2d_rotation: f64,
+    /// Model offset from the body origin in the 2D plane, X in mm (`MODEL.2D.X`).
+    /// Altium stores it mil-suffixed. Default `0.0`.
+    #[serde(default, serialize_with = "crate::altium::serde_round::serialize")]
+    pub model_2d_x: f64,
+    /// Model offset in the 2D plane, Y in mm (`MODEL.2D.Y`). Default `0.0`.
+    #[serde(default, serialize_with = "crate::altium::serde_round::serialize")]
+    pub model_2d_y: f64,
 
     /// Net index into the board's net list — common-header u16 @3. `0xFFFF`
     /// (65535) means "no net", the from-scratch default (round-trip fidelity).
@@ -265,6 +272,8 @@ impl ComponentBody {
             body_color_3d: default_body_color(),
             body_opacity_3d: default_opacity(),
             model_2d_rotation: 0.0,
+            model_2d_x: 0.0,
+            model_2d_y: 0.0,
             net_index: default_net_index(),
             polygon_index: default_polygon_index(),
             component_index: default_component_index(),

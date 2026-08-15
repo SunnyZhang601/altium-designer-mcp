@@ -1268,10 +1268,82 @@ fn samples_pcblib_locked_flag() {
         "and locked must not imply keepout"
     );
 
-    assert_eq!(fp.tracks.len(), 1, "LOCKFLAGS_PCB has one track");
+    // Every record shape that carries the shared flag word is authored with each
+    // bit, so no shape is left resting on a self-round-trip. Each is matched by the
+    // flag rather than by index, and the opposite bit is asserted absent, so a
+    // reader that decoded the word into the wrong shape's field would fail here.
+    assert_eq!(fp.tracks.len(), 2, "LOCKFLAGS_PCB has two tracks");
+    assert_eq!(fp.arcs.len(), 2, "LOCKFLAGS_PCB has two arcs");
+    assert_eq!(fp.fills.len(), 2, "LOCKFLAGS_PCB has two fills");
+
+    let locked_track = fp
+        .tracks
+        .iter()
+        .find(|t| t.flags.contains(PcbFlags::LOCKED))
+        .expect("a locked track");
     assert!(
-        fp.tracks[0].flags.contains(PcbFlags::LOCKED),
-        "the track is authored locked too"
+        !locked_track.flags.contains(PcbFlags::KEEPOUT),
+        "the locked track is not also a keepout"
+    );
+    let keepout_track = fp
+        .tracks
+        .iter()
+        .find(|t| t.flags.contains(PcbFlags::KEEPOUT))
+        .expect("a keepout track");
+    assert!(
+        !keepout_track.flags.contains(PcbFlags::LOCKED),
+        "the keepout track is not also locked"
+    );
+
+    let locked_arc = fp
+        .arcs
+        .iter()
+        .find(|a| a.flags.contains(PcbFlags::LOCKED))
+        .expect("a locked arc");
+    assert!(
+        !locked_arc.flags.contains(PcbFlags::KEEPOUT),
+        "the locked arc is not also a keepout"
+    );
+    let keepout_arc = fp
+        .arcs
+        .iter()
+        .find(|a| a.flags.contains(PcbFlags::KEEPOUT))
+        .expect("a keepout arc");
+    assert!(
+        !keepout_arc.flags.contains(PcbFlags::LOCKED),
+        "the keepout arc is not also locked"
+    );
+
+    let locked_fill = fp
+        .fills
+        .iter()
+        .find(|f| f.flags.contains(PcbFlags::LOCKED))
+        .expect("a locked fill");
+    assert!(
+        !locked_fill.flags.contains(PcbFlags::KEEPOUT),
+        "the locked fill is not also a keepout"
+    );
+    let keepout_fill = fp
+        .fills
+        .iter()
+        .find(|f| f.flags.contains(PcbFlags::KEEPOUT))
+        .expect("a keepout fill");
+    assert!(
+        !keepout_fill.flags.contains(PcbFlags::LOCKED),
+        "the keepout fill is not also locked"
+    );
+
+    // The plain arcs and fills elsewhere in the library are the controls: an
+    // unconditional LOCKED or KEEPOUT would light up here.
+    let arcs = lib.get("ARCS").expect("footprint ARCS not found");
+    assert!(
+        arcs.arcs.iter().all(|a| a.flags.is_empty()),
+        "the ARCS arcs carry no flags"
+    );
+    let fills = lib.get("FILLS").expect("footprint FILLS not found");
+    assert!(
+        fills.fills.iter().all(|f| f.flags.is_empty()),
+        "the FILLS fills carry no flags"
     );
 }
 

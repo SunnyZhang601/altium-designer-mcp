@@ -514,6 +514,8 @@ var
     Cache    : TPadCache;
     Trk      : IPCB_Track;
     Via      : IPCB_Via;
+    Arc      : IPCB_Arc;
+    Fill     : IPCB_Fill;
 begin
     // CreateNewDocumentFromDocumentKind creates + focuses a blank doc and returns its
     // IServerDocument (Client.OpenNewDocumentOfKind, used in the v0, does not exist).
@@ -830,6 +832,86 @@ begin
             Comp.AddPCBObject(Trk);
             PCBServer.SendMessageToRobots(Comp.I_ObjectAddress, c_Broadcast,
                                           PCBM_BoardRegisteration, Trk.I_ObjectAddress);
+        end;
+
+        // A keepout track, the second bit of the same word on the same primitive.
+        Trk := PCBServer.PCBObjectFactory(eTrackObject, eNoDimension, eCreate_Default);
+        if Trk <> nil then
+        begin
+            Trk.X1 := MilsToCoord(-40); Trk.Y1 := MilsToCoord(45);
+            Trk.X2 := MilsToCoord(40);  Trk.Y2 := MilsToCoord(45);
+            Trk.Width := MilsToCoord(6);
+            Trk.Layer := eTopOverlay;
+            Trk.IsKeepout := True;
+            Comp.AddPCBObject(Trk);
+            PCBServer.SendMessageToRobots(Comp.I_ObjectAddress, c_Broadcast,
+                                          PCBM_BoardRegisteration, Trk.I_ObjectAddress);
+        end;
+
+        // Arc and Fill carry the same shared flag word. Moveable/IsKeepout are the
+        // identifiers already proven on the pad and track above, so both primitives
+        // stay inside this run's one identifier family. Each is authored twice, once
+        // per bit, and the plain arcs and fills in ARCS/FILLS are the controls.
+        Arc := PCBServer.PCBObjectFactory(eArcObject, eNoDimension, eCreate_Default);
+        if Arc <> nil then
+        begin
+            Arc.XCenter    := MilsToCoord(-40);
+            Arc.YCenter    := MilsToCoord(-60);
+            Arc.Radius     := MilsToCoord(20);
+            Arc.LineWidth  := MilsToCoord(6);
+            Arc.StartAngle := 0;
+            Arc.EndAngle   := 360;
+            Arc.Layer      := eTopOverlay;
+            Arc.Moveable   := False;
+            Comp.AddPCBObject(Arc);
+            PCBServer.SendMessageToRobots(Comp.I_ObjectAddress, c_Broadcast,
+                                          PCBM_BoardRegisteration, Arc.I_ObjectAddress);
+        end;
+
+        Arc := PCBServer.PCBObjectFactory(eArcObject, eNoDimension, eCreate_Default);
+        if Arc <> nil then
+        begin
+            Arc.XCenter    := MilsToCoord(40);
+            Arc.YCenter    := MilsToCoord(-60);
+            Arc.Radius     := MilsToCoord(20);
+            Arc.LineWidth  := MilsToCoord(6);
+            Arc.StartAngle := 0;
+            Arc.EndAngle   := 360;
+            Arc.Layer      := eTopOverlay;
+            Arc.IsKeepout  := True;
+            Comp.AddPCBObject(Arc);
+            PCBServer.SendMessageToRobots(Comp.I_ObjectAddress, c_Broadcast,
+                                          PCBM_BoardRegisteration, Arc.I_ObjectAddress);
+        end;
+
+        Fill := PCBServer.PCBObjectFactory(eFillObject, eNoDimension, eCreate_Default);
+        if Fill <> nil then
+        begin
+            Fill.X1Location := MilsToCoord(-70);
+            Fill.Y1Location := MilsToCoord(-100);
+            Fill.X2Location := MilsToCoord(-30);
+            Fill.Y2Location := MilsToCoord(-80);
+            Fill.Layer      := eTopLayer;
+            Fill.Rotation   := 0;
+            Fill.Moveable   := False;
+            Comp.AddPCBObject(Fill);
+            PCBServer.SendMessageToRobots(Comp.I_ObjectAddress, c_Broadcast,
+                                          PCBM_BoardRegisteration, Fill.I_ObjectAddress);
+        end;
+
+        Fill := PCBServer.PCBObjectFactory(eFillObject, eNoDimension, eCreate_Default);
+        if Fill <> nil then
+        begin
+            Fill.X1Location := MilsToCoord(30);
+            Fill.Y1Location := MilsToCoord(-100);
+            Fill.X2Location := MilsToCoord(70);
+            Fill.Y2Location := MilsToCoord(-80);
+            Fill.Layer      := eTopLayer;
+            Fill.Rotation   := 0;
+            Fill.IsKeepout  := True;
+            Comp.AddPCBObject(Fill);
+            PCBServer.SendMessageToRobots(Comp.I_ObjectAddress, c_Broadcast,
+                                          PCBM_BoardRegisteration, Fill.I_ObjectAddress);
         end;
 
         PCBServer.PostProcess;

@@ -69,6 +69,23 @@ authorable with `Chr`**.
 A **literal** in the `.pas` does work — `GenerateSamples.pas` is UTF-8 and authors
 `Comp.Name := 'Резистор'` correctly. Use a literal, never `Chr`, for non-Latin text.
 
+### `try/except` does not catch an unknown identifier
+
+DelphiScript resolves identifiers at **compile** time, so a single unknown name aborts the
+whole script before any of it runs — wrapping the assignment in `try/except` protects
+nothing. The failure surfaces as a modal `Undeclared identifier: X` dialog, and because the
+script never runs, *every* footprint in that run is missing, not just the one with the bad
+name.
+
+Consequences worth planning around:
+
+- Verify a property or enum name before using it. The verified-name list lives in the
+  project memory notes; shipping AD24 scripts are the other reliable source.
+- Some fields are not direct properties at all. Pad mask expansion goes through the cache
+  record (`Cache := Pad.GetState_Cache; Cache.PasteMaskExpansionValid := eCacheManual; …;
+  Pad.SetState_Cache := Cache;`) — there is no `eMaskExpansion_*` identifier.
+- Add one new field family per run. A batch of guesses tells you only the *first* bad name.
+
 ### DelphiScript flattens non-ANSI strings when concatenating
 
 Building a response by string concatenation turns any non-ANSI character into `?`. This

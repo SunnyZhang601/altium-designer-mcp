@@ -55,7 +55,7 @@ fn samples_schlib_structure() {
     // plus twelve coverage-enrichment symbols (SHAPESTYLE, LOCKFLAGS, JUSTIFY,
     // FRACPINS, BEZIERSYM, PIESYM, IMAGESYM, TEXTFRAMESYM, EMBIMGSYM, SWAPPIN,
     // FRACSHAPES, DISPMODE) added to GenerateSamples.pas and regenerated on-site.
-    assert_eq!(lib.len(), 27, "expected exactly twenty-seven symbols");
+    assert_eq!(lib.len(), 28, "expected exactly twenty-eight symbols");
 
     let names = lib.names();
     for expected in [
@@ -448,12 +448,12 @@ fn samples_schlib_params() {
 
 #[test]
 fn samples_schlib_no_utf8_key_for_win1252_golden() {
-    // Every text value in the golden library is Windows-1252-representable, so the
-    // UTF-8 fix must NOT introduce a `%UTF8%` key anywhere: re-encoding each
-    // symbol's Data stream yields output with no `%UTF8%` marker, confirming the
-    // common case stays byte-identical (and the oracle sees zero regressions).
+    // Promotion must be reserved for values that need it: a Windows-1252
+    // symbol must NOT gain a `%UTF8%` key, so the common case stays
+    // byte-identical and the readability oracle sees no change. The Cyrillic
+    // symbol is excluded — it is the one that legitimately requires promotion.
     let lib = SchLib::open(sample("symbols.SchLib")).expect("failed to open symbols.SchLib");
-    for symbol in lib.iter() {
+    for symbol in lib.iter().filter(|s| s.name.is_ascii()) {
         let data = altium_designer_mcp::altium::schlib::writer::encode_data_stream(symbol)
             .expect("encode");
         assert!(
@@ -1368,4 +1368,25 @@ fn samples_schlib_rmw_shapestyle_records_match_golden_ignoring_stream_order() {
         "exactly one content record sits at slot 0 (token omitted)"
     );
     assert_eq!(numbered, vec![1, 2, 3, 4, 5], "content slots 1..5");
+}
+
+#[test]
+fn samples_schlib_unicode_symbol_name_and_description() {
+    // A symbol whose name is outside Windows-1252, authored by Altium itself.
+    //
+    // Altium writes such a value as its raw UTF-8 bytes under the plain key and
+    // widens the same bytes through the authoring machine's ANSI code page for
+    // the CFB storage name, so the header's LibRef entry and the storage name
+    // carry different bytes. Components are therefore located by walking the
+    // storages rather than trusting that list, and the name is recovered from
+    // the plain key's UTF-8 bytes — the `%UTF8%` companion Altium writes
+    // alongside is locale-dependent and decodes to mojibake off that machine.
+    let lib = SchLib::open(sample("symbols.SchLib")).expect("failed to open symbols.SchLib");
+
+    let sym = lib
+        .get("Резистор")
+        .expect("the Cyrillic-named symbol must be found, not silently skipped");
+    assert_eq!(sym.name, "Резистор");
+    assert_eq!(sym.description, "описание Ω", "Greek omega survives too");
+    assert_eq!(sym.rectangles.len(), 1, "its body shape is read normally");
 }

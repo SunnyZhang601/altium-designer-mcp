@@ -261,7 +261,7 @@ fn encode_component_header(symbol: &Symbol) -> String {
     let part_id_locked = if symbol.part_id_locked { "T" } else { "F" };
     let parts = vec![
         "RECORD=1".to_string(),
-        format!("LibReference={}", symbol.name),
+        text_field("LibReference", &symbol.name),
         text_field("ComponentDescription", &symbol.description),
         format!("PartCount={}", symbol.part_count + 1), // Altium uses part_count + 1
         format!("DisplayModeCount={}", symbol.display_mode_count),

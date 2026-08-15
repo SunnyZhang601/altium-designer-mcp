@@ -968,7 +968,7 @@ fn samples_pcblib_embstep() {
     let body = &fp.component_bodies[0];
 
     assert_eq!(
-        body.model_id, "{D4BDEABF-2E68-4209-B79B-0953B6FBECEF}",
+        body.model_id, "{EB21A301-A7A5-4910-AEC8-00EF1DF4DB64}",
         "the body references the embedded model's GUID"
     );
     assert_eq!(body.model_name, "minimal.step", "MODEL.NAME");

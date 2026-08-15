@@ -1867,6 +1867,23 @@ begin
     except
     end;
 
+    { ---- UNINAME — a symbol whose NAME is outside Windows-1252 (issue #323). ----
+
+      Records are stored as Windows-1252, but a CFB storage name is UTF-16, so the
+      component storage and the FileHeader's LibRef entry are written through
+      different encodings. This is the ground truth for what Altium itself does:
+      which storage name it picks, and whether it promotes LibRef / LibReference to
+      a %UTF8% key. Chr(N) truncates modulo 256 (see TEXT_LONG's documented
+      negative), so the name is a literal — this file is UTF-8. If DelphiScript
+      mangles the literal, the generated sample shows that instead, which is also
+      worth knowing. }
+    try
+        Comp := NewSymbol(Lib, 'Резистор', 'описание Ω', 1);
+        if Comp <> nil then
+            AddRect(Comp, -50, -25, 50, 25, False, $FFFFFF);
+    except
+    end;
+
     Lib.CurrentSchComponent := Comp;
     Lib.GraphicallyInvalidate;
     // IServerDocument has no DoFileSaveAs; use DoSafeChangeFileNameAndSave.

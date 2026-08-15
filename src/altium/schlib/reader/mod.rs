@@ -136,9 +136,9 @@ fn parse_text_record_from_string(symbol: &mut Symbol, text: &str) {
         1 => {
             // Component header
             // LibReference contains the full symbol name (may differ from OLE storage name)
-            if let Some(name) = props.get("libreference") {
+            if let Some(name) = read_utf8_text_field(&props, "libreference") {
                 if !name.is_empty() {
-                    symbol.name.clone_from(name);
+                    symbol.name = name;
                 }
             }
             if let Some(desc) = read_utf8_text_field(&props, "componentdescription") {
@@ -333,10 +333,36 @@ fn read_display_flags(props: &HashMap<String, String>) -> ShapeDisplayFlags {
 /// matching [`parse_properties`]'s lower-casing. Returns `None` when neither key
 /// is present so callers can distinguish an absent field from an empty one.
 fn read_utf8_text_field(props: &HashMap<String, String>, key: &str) -> Option<String> {
+    // The plain key comes first. Altium writes a value outside Windows-1252 as
+    // its raw UTF-8 bytes under the plain key, which the record decode surfaces
+    // as one char per byte, and that form is locale-independent. Its own
+    // `%UTF8%` companion is not: Altium builds it by widening those bytes
+    // through the authoring machine's ANSI code page, so decoding it elsewhere
+    // yields mojibake.
+    if let Some(plain) = props.get(key) {
+        if let Some(recovered) = recover_utf8_bytes(plain) {
+            return Some(recovered);
+        }
+    }
     if let Some(raw) = props.get(&format!("%utf8%{key}")) {
         return Some(crate::altium::decode_utf8_param_value(raw));
     }
     props.get(key).cloned()
+}
+
+/// Recovers a value stored as raw UTF-8 bytes inside a Windows-1252 record.
+///
+/// Returns `None` when `raw` is plain ASCII (nothing to recover) or when its
+/// bytes are not valid UTF-8, in which case it is a genuine Windows-1252 value
+/// and must be taken verbatim.
+fn recover_utf8_bytes(raw: &str) -> Option<String> {
+    if raw.is_ascii() {
+        return None;
+    }
+    // Every char came from a Windows-1252 decode, so re-encoding is exact and
+    // gives back the bytes as they sit in the record.
+    let bytes = crate::altium::encode_windows1252(raw);
+    std::str::from_utf8(&bytes).ok().map(str::to_string)
 }
 
 /// Converts Altium justification ID to our enum.

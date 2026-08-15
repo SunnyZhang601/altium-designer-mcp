@@ -74,6 +74,12 @@ pub struct Pad {
     #[serde(default = "default_true")]
     pub is_plated: bool,
 
+    /// Whether solder-mask expansion is measured from the HOLE edge rather than
+    /// the pad edge — main-block bool @125. Only meaningful on a pad with a hole.
+    /// Default `false`, matching a factory Altium pad.
+    #[serde(default)]
+    pub solder_mask_expansion_from_hole_edge: bool,
+
     /// Hole shape for through-hole pads.
     #[serde(default, skip_serializing_if = "is_default_hole_shape")]
     pub hole_shape: HoleShape,
@@ -331,6 +337,7 @@ impl Pad {
             layer: Layer::TopLayer,
             hole_size: None,
             is_plated: true,
+            solder_mask_expansion_from_hole_edge: false,
             hole_shape: HoleShape::Round,
             hole_slot_length: 0.0,
             hole_rotation: 0.0,
@@ -383,6 +390,7 @@ impl Pad {
             layer: Layer::MultiLayer,
             hole_size: Some(hole_size),
             is_plated: true,
+            solder_mask_expansion_from_hole_edge: false,
             hole_shape: HoleShape::Round,
             hole_slot_length: 0.0,
             hole_rotation: 0.0,

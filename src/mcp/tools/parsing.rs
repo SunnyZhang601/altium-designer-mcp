@@ -359,6 +359,11 @@ impl McpServer {
             .and_then(Value::as_str)
             .map(str::to_string);
 
+        let solder_mask_expansion_from_hole_edge = json
+            .get("solder_mask_expansion_from_hole_edge")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+
         Ok(Pad {
             designator: designator.to_string(),
             x,
@@ -369,6 +374,7 @@ impl McpServer {
             layer,
             hole_size,
             is_plated,
+            solder_mask_expansion_from_hole_edge,
             hole_shape,
             hole_slot_length,
             hole_rotation,

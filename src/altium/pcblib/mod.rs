@@ -1466,6 +1466,29 @@ mod tests {
     }
 
     #[test]
+    fn solder_mask_from_hole_edge_round_trips() {
+        // Main-block bool @125: measure mask expansion from the hole edge instead of
+        // the pad edge. A default pad leaves it clear, so the byte stays identical to
+        // Altium's template unless it is asked for.
+        let mut original = Footprint::new("HOLE_EDGE");
+        let mut from_hole = Pad::through_hole("1", 0.0, 0.0, 1.8, 1.8, 1.0);
+        from_hole.solder_mask_expansion_from_hole_edge = true;
+        original.add_pad(from_hole);
+        original.add_pad(Pad::through_hole("2", 3.0, 0.0, 1.8, 1.8, 1.0));
+
+        let data = writer::encode_data_stream(&original).expect("encode");
+        let mut decoded = Footprint::new("HOLE_EDGE");
+        reader::parse_data_stream(&mut decoded, &data, None);
+
+        assert_eq!(decoded.pads.len(), 2);
+        assert!(decoded.pads[0].solder_mask_expansion_from_hole_edge);
+        assert!(
+            !decoded.pads[1].solder_mask_expansion_from_hole_edge,
+            "a from-scratch pad measures from the pad edge"
+        );
+    }
+
+    #[test]
     fn testpoint_flags_round_trip_and_imply_locked() {
         // The fabrication test-point bits (0x0080 / 0x0100 in Altium's flag word)
         // must survive encode -> decode. Altium clears the unlocked bit on a pad it

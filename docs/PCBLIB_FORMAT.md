@@ -411,6 +411,7 @@ extended tail, written by overlaying the modelled fields onto a canonical byte t
 | 110-111 | 2 | Jumper ID (i16) | unmodelled (template) |
 | 114-117 | 4 | V7 layer id (derived from the pad's layer) | yes (write) |
 | 121-124 | 4 | Solder-mask cache (mirrors @90) | unmodelled (template) |
+| 125 | 1 | Solder-mask expansion measured from the hole edge (bool) | yes |
 | 126-141 | 16 | Identity GUID A (fresh per pad on write) | write-only |
 | 142-157 | 16 | Identity GUID B (fresh per pad on write) | write-only |
 | 162-165 | 4 | Hole positive tolerance (i32; `0x7FFFFFFF` = unset) | yes |

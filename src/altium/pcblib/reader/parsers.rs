@@ -159,6 +159,7 @@ pub(super) fn parse_pad(data: &[u8], offset: usize) -> ParseResult<Pad> {
     // for every pad, SMD included (verified against AltiumSharp ReadPad and
     // the golden fixture), so an absent byte reads back as `true`.
     let is_plated = geometry.get(60).map_or(true, |&b| b != 0);
+    let solder_mask_expansion_from_hole_edge = geometry.get(125).is_some_and(|&b| b != 0);
 
     // Per-pad identity GUIDs — extended-tail 16-byte fields @126 (GUID-A) and
     // @142 (GUID-B), read back verbatim (including the golden's nil GUIDs) so
@@ -310,6 +311,7 @@ pub(super) fn parse_pad(data: &[u8], offset: usize) -> ParseResult<Pad> {
         layer,
         hole_size,
         is_plated,
+        solder_mask_expansion_from_hole_edge,
         hole_shape,
         hole_slot_length,
         hole_rotation,

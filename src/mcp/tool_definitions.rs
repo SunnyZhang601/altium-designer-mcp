@@ -226,6 +226,7 @@ impl McpServer {
                                                 "layer": { "type": "string", "description": "Layer name: Top Layer, Bottom Layer, Multi-Layer (default for SMD)" },
                                                 "hole_size": { "type": "number", "description": "Hole diameter for through-hole pads (mm)" },
                                                 "is_plated": { "type": "boolean", "description": "Whether the hole is plated. Altium stores this for every pad (SMD included). Default: true" },
+                                                "solder_mask_expansion_from_hole_edge": { "type": "boolean", "description": "Measure solder-mask expansion from the HOLE edge instead of the pad edge. Only meaningful on a pad with a hole. Default: false" },
                                                 "hole_shape": {
                                                     "type": "string",
                                                     "enum": ["round", "square", "slot"],

@@ -864,6 +864,13 @@ begin
                                           PCBM_BoardRegisteration, Pad.I_ObjectAddress);
         end;
 
+        // DOCUMENTED NEGATIVE (do not retry): DrillType is not stored on a library
+        // pad. The name IS in Advpcb.dll and `Pad.DrillType := 1` compiles and runs
+        // without error — but the saved pad is byte-identical to a plain through-hole
+        // pad apart from its coordinates, so AD24 keeps the press-fit/simple
+        // classification somewhere other than the library record. The probe pad was
+        // removed again rather than left asserting nothing.
+
         // Pad 3 carries the keepout flag, the other bit of the same word.
         Pad := PCBServer.PCBObjectFactory(ePadObject, eNoDimension, eCreate_Default);
         if Pad <> nil then

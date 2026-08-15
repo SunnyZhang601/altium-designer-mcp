@@ -53,11 +53,12 @@ leads and the fixture follows.
 - **[gap | read]** `JumperID` — `AltiumSharp` reads an i16 at Pad offset 110 into
   `PcbPad.JumperID`; `PcbPadDto` exposes `JUMPERID`. Groups pads as a jumper / 0-ohm link
   and feeds test-point identification.
-- **[gap | read]** `DrillType` (0=Simple, 1=Pressfit) — `AltiumSharp` `PcbPad.DrillType`
-  separates a plated drilled hole from a press-fit one. Meaningful for connectors.
-  **Blocked:** no byte offset is known for it and AD24 exposes no setter, so it can
-  neither be located by diffing an authored pad nor guessed responsibly. Needs a
-  press-fit pad from a real library to locate the byte.
+- **🚫 `DrillType`** — resolved as a negative, not a gap. The name is in
+  `Advpcb.dll` and `Pad.DrillType := 1` compiles and runs without error, but the saved
+  pad is byte-identical to a plain through-hole pad apart from its coordinates. AD24
+  keeps the press-fit/simple classification somewhere other than the library record, so
+  no external file is needed after all — there is nothing to read.
+
 - **[gap | read]** Text barcode `MinWidth`, `Inverted`, `ShowText` and `RenderMode` —
   the sizing block's other six keys ship (`FullWidth`@137, `FullHeight`@141,
   `XMargin`@145, `YMargin`@149, `Kind`@157, `FontName`@161-224 as UTF-16LE), located by
@@ -112,8 +113,6 @@ Rough value order, highest first:
 1. **`model_2d_location`, `JumperID`, per-layer stack arrays** — small and isolated.
 2. **Barcode `MinWidth` / `Inverted` / `ShowText` / `RenderMode`** — one more authoring
    run, varying one field at a time.
-3. **`DrillType`** — `DrillType` does appear in `Advpcb.dll`, so it may well be
-   settable; retest before assuming it needs an external file.
 
 > **Heuristic, corrected.** A missing `Set*` counterpart does *not* mean a property is
 > unauthorable — `SolderMaskExpansionFromHoleEdge` and `BarCodeKind` both lack one and

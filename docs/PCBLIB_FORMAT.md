@@ -395,8 +395,8 @@ extended tail, written by overlaying the modelled fields onto a canonical byte t
 | 82-85 | 4 | Power-plane (anti-pad) clearance (i32; default 0.508 mm) | yes |
 | 86-89 | 4 | Paste mask expansion (i32) | yes |
 | 90-93 | 4 | Solder mask expansion (i32) | yes |
-| 101 | 1 | Paste mask expansion mode (0=None, 1=FromRule, 2=Manual) | yes |
-| 102 | 1 | Solder mask expansion mode (0=None, 1=FromRule, 2=Manual) | yes |
+| 101 | 1 | Paste mask expansion cache state (`TCacheState`, see below) | yes |
+| 102 | 1 | Solder mask expansion cache state (`TCacheState`, see below) | yes |
 | 110-111 | 2 | Jumper ID (i16) | unmodelled (template) |
 | 114-117 | 4 | V7 layer id (derived from the pad's layer) | yes (write) |
 | 121-124 | 4 | Solder-mask cache (mirrors @90) | unmodelled (template) |
@@ -415,7 +415,41 @@ template so the record matches Altium's 202-byte layout exactly.
 | Field | Threshold | Behaviour |
 |-------|-----------|-----------|
 | Hole size | ≤ 0.001 mm | Treated as zero (SMD pad) |
-| Mask expansion | ≤ 0.0001 mm | Read back as `None` (no manual expansion) |
+| Mask expansion | ≤ 0.0001 mm | The value reads back as absent (`None`), independently of the cache-state byte below |
+
+**Mask expansion cache state (`TCacheState`, bytes @101 / @102; via @66):**
+
+The mask-expansion byte is not an on/off switch. It is Altium's
+
+```pascal
+TCacheState = (eCacheInvalid, eCacheValid, eCacheManual)
+```
+
+(ordinals 0/1/2, read from the `Advpcb.dll` RTTI), and it says whether the expansion value
+stored alongside it is trustworthy:
+
+| Byte | `TCacheState` | Meaning |
+|------|---------------|---------|
+| 0 | `eCacheInvalid` | The stored value is stale. A pad or via authored by Altium and saved without being opened again carries this. |
+| 1 | `eCacheValid` | The stored value is a rule result Altium has already computed. Altium leaves this behind after opening a library and resolving the expansion itself. |
+| 2 | `eCacheManual` | The stored value was specified by hand. |
+
+**Only `eCacheManual` survives a round trip through Altium.** Opening a library recomputes
+every rule-driven expansion from the applicable design rule, so bytes 0 and 1 are
+indistinguishable afterwards — a pad written as `eCacheInvalid` with 0.0 and one written
+as `eCacheValid` with 0.0 both come back as `eCacheValid` with the rule's 4 mil. The
+value paired with byte 1 is therefore never authoritative in practice, and a wrong state
+here is a fidelity difference rather than a change to the fabricated mask.
+
+Two consequences worth knowing:
+
+- The writer emits byte 0 for a from-scratch pad or via, matching a factory Altium
+  primitive rather than one Altium has re-saved.
+- A library re-saved by Altium is not byte-comparable with the one handed to it even when
+  nothing was edited, because opening it resolves these caches.
+
+Measured by [`scripts/Verify-MaskCacheState.ps1`](../scripts/Verify-MaskCacheState.ps1),
+which writes all three states and reports what Altium makes of each.
 
 **Pad shapes (bytes @49-51 and in Block 5):**
 
@@ -769,7 +803,7 @@ constant regions are replayed verbatim.
 | 50-53 | 4 | Paste mask expansion (i32) | yes |
 | 54-57 | 4 | Solder mask expansion, front (i32) | yes |
 | 61-64 | 4 | Cache-valid word | unmodelled (template) |
-| 66 | 1 | Solder mask expansion mode (0=None, 1=FromRule, 2=Manual) | yes |
+| 66 | 1 | Solder mask expansion cache state (`TCacheState`, see [Pad](#pad-0x02)) | yes |
 | 74 | 1 | Diameter stack mode (0=Simple, 1=TopMiddleBottom, 2=FullStack) | yes |
 | 75-202 | 128 | Per-layer diameters (32 × i32; a Simple via repeats its diameter) | yes |
 | 242-245 | 4 | Solder mask expansion, back/bottom face (i32; mirrors the front when unset) | yes |

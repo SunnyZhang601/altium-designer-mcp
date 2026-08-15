@@ -211,12 +211,12 @@ pub(super) fn parse_pad(data: &[u8], offset: usize) -> ParseResult<Pad> {
     };
 
     // Paste/solder mask expansion modes - offsets 101/102 (tri-state byte).
-    let paste_mask_expansion_mode = geometry.get(101).map_or(MaskExpansionMode::FromRule, |&b| {
-        MaskExpansionMode::from_id(b)
-    });
-    let solder_mask_expansion_mode = geometry.get(102).map_or(MaskExpansionMode::FromRule, |&b| {
-        MaskExpansionMode::from_id(b)
-    });
+    let paste_mask_expansion_mode = geometry
+        .get(101)
+        .map_or(MaskExpansionMode::None, |&b| MaskExpansionMode::from_id(b));
+    let solder_mask_expansion_mode = geometry
+        .get(102)
+        .map_or(MaskExpansionMode::None, |&b| MaskExpansionMode::from_id(b));
 
     // Thermal-relief / power-plane connection fields (extended tail). Each
     // falls back to the from-scratch default (= Altium's pad template constant)
@@ -542,9 +542,9 @@ pub(super) fn parse_via(data: &[u8], offset: usize) -> ParseResult<Via> {
     let paste_mask_expansion = read_i32(block, 50).map_or(0.0, to_mm);
     let solder_mask_expansion = read_i32(block, 54).map_or(0.0, to_mm);
     // Offset 66 is a tri-state mode byte (0=None, 1=FromRule, 2=Manual), not a bool.
-    let solder_mask_expansion_mode = block.get(66).map_or(MaskExpansionMode::FromRule, |&b| {
-        MaskExpansionMode::from_id(b)
-    });
+    let solder_mask_expansion_mode = block
+        .get(66)
+        .map_or(MaskExpansionMode::None, |&b| MaskExpansionMode::from_id(b));
     // Bottom-face solder-mask expansion @242. Only surfaced when it differs from the
     // front @54, so a template-default via (both faces equal) reads back as `None`
     // and re-emits byte-identically.
@@ -1861,8 +1861,8 @@ mod tests {
         assert_eq!(pad.stack_mode, PadStackMode::Simple);
         assert!(pad.paste_mask_expansion.is_none());
         assert!(pad.solder_mask_expansion.is_none());
-        assert_eq!(pad.paste_mask_expansion_mode, MaskExpansionMode::FromRule);
-        assert_eq!(pad.solder_mask_expansion_mode, MaskExpansionMode::FromRule);
+        assert_eq!(pad.paste_mask_expansion_mode, MaskExpansionMode::None);
+        assert_eq!(pad.solder_mask_expansion_mode, MaskExpansionMode::None);
         assert_eq!(
             pad.power_plane_connect_style,
             PowerPlaneConnectStyle::Relief
@@ -2102,7 +2102,7 @@ mod tests {
         assert!((via.power_plane_clearance - 0.508).abs() < EPS);
         assert!(via.paste_mask_expansion.abs() < EPS);
         assert!(via.solder_mask_expansion.abs() < EPS);
-        assert_eq!(via.solder_mask_expansion_mode, MaskExpansionMode::FromRule);
+        assert_eq!(via.solder_mask_expansion_mode, MaskExpansionMode::None);
         assert!(via.solder_mask_expansion_back.is_none());
         assert_eq!(via.diameter_stack_mode, ViaStackMode::Simple);
         assert!(via.per_layer_diameters.is_none());

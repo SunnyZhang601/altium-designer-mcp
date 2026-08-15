@@ -271,18 +271,24 @@ impl McpServer {
             .get("paste_mask_expansion_mode")
             .and_then(Value::as_str)
             .map(|s| match s.to_lowercase().as_str() {
-                "none" => MaskExpansionMode::None,
                 "manual" => MaskExpansionMode::Manual,
-                _ => MaskExpansionMode::FromRule,
+                "from_rule" => MaskExpansionMode::FromRule,
+                // Anything else, "none" included, defers to the design rule —
+                // the safe direction, since FromRule tells Altium to honour the
+                // stored value verbatim.
+                _ => MaskExpansionMode::None,
             })
             .unwrap_or_default();
         let solder_mask_expansion_mode = json
             .get("solder_mask_expansion_mode")
             .and_then(Value::as_str)
             .map(|s| match s.to_lowercase().as_str() {
-                "none" => MaskExpansionMode::None,
                 "manual" => MaskExpansionMode::Manual,
-                _ => MaskExpansionMode::FromRule,
+                "from_rule" => MaskExpansionMode::FromRule,
+                // Anything else, "none" included, defers to the design rule —
+                // the safe direction, since FromRule tells Altium to honour the
+                // stored value verbatim.
+                _ => MaskExpansionMode::None,
             })
             .unwrap_or_default();
 
@@ -942,9 +948,12 @@ impl McpServer {
             .and_then(Value::as_str)
         {
             via.solder_mask_expansion_mode = match s.to_lowercase().as_str() {
-                "none" => MaskExpansionMode::None,
                 "manual" => MaskExpansionMode::Manual,
-                _ => MaskExpansionMode::FromRule,
+                "from_rule" => MaskExpansionMode::FromRule,
+                // Anything else, "none" included, defers to the design rule —
+                // the safe direction, since FromRule tells Altium to honour the
+                // stored value verbatim.
+                _ => MaskExpansionMode::None,
             };
         }
         if let Some(v) = json.get("thermal_relief_gap").and_then(Value::as_f64) {

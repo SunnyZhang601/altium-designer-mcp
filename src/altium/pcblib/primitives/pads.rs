@@ -339,8 +339,8 @@ impl Pad {
             rotation: 0.0,
             paste_mask_expansion: None,
             solder_mask_expansion: None,
-            paste_mask_expansion_mode: MaskExpansionMode::FromRule,
-            solder_mask_expansion_mode: MaskExpansionMode::FromRule,
+            paste_mask_expansion_mode: MaskExpansionMode::None,
+            solder_mask_expansion_mode: MaskExpansionMode::None,
             power_plane_connect_style: PowerPlaneConnectStyle::Relief,
             relief_conductor_width: default_pad_relief_conductor_width(),
             relief_entries: default_pad_relief_entries(),
@@ -391,8 +391,8 @@ impl Pad {
             rotation: 0.0,
             paste_mask_expansion: None,
             solder_mask_expansion: None,
-            paste_mask_expansion_mode: MaskExpansionMode::FromRule,
-            solder_mask_expansion_mode: MaskExpansionMode::FromRule,
+            paste_mask_expansion_mode: MaskExpansionMode::None,
+            solder_mask_expansion_mode: MaskExpansionMode::None,
             power_plane_connect_style: PowerPlaneConnectStyle::Relief,
             relief_conductor_width: default_pad_relief_conductor_width(),
             relief_entries: default_pad_relief_entries(),
@@ -480,18 +480,30 @@ pub enum ViaStackMode {
     FullStack,
 }
 
-/// Solder / paste mask expansion mode.
+/// Solder / paste mask expansion mode. Shared by pads and vias.
 ///
-/// Altium stores this as a tri-state byte, not a boolean: the expansion can be
-/// off, taken from the design rule, or a manually-specified value. (Shared by
-/// vias and, later, pads.)
+/// This is Altium's `TCacheState = (eCacheInvalid, eCacheValid, eCacheManual)`
+/// (ordinals 0/1/2, from the `Advpcb.dll` RTTI), so it describes the state of a
+/// *cached* expansion rather than an on/off switch. The stored expansion value
+/// is only authoritative when the state says so:
+///
+/// - `None` (0, `eCacheInvalid`) — the cached value is stale and Altium
+///   recomputes the expansion from the design rule. This is what a fresh
+///   Altium pad or via carries, so it is also our default.
+/// - `FromRule` (1, `eCacheValid`) — the stored value is a rule result Altium
+///   already computed and will honour as-is.
+/// - `Manual` (2, `eCacheManual`) — the stored value was specified by hand.
+///
+/// The distinction matters on write: pairing `FromRule` with a zero expansion
+/// tells Altium the rule genuinely resolved to zero, which suppresses the mask
+/// opening instead of deferring to the rule.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MaskExpansionMode {
-    /// No mask expansion.
-    None,
-    /// Expansion taken from the design rule (Altium's default).
+    /// Cached expansion invalid — Altium recomputes it from the design rule.
     #[default]
+    None,
+    /// The stored expansion is a rule result Altium computed and will honour.
     FromRule,
     /// A manually-specified expansion value is used.
     Manual,
@@ -592,8 +604,8 @@ pub struct Via {
     #[serde(default, serialize_with = "crate::altium::serde_round::serialize")]
     pub solder_mask_expansion: f64,
 
-    /// Solder mask expansion mode (`None` / `FromRule` / `Manual`). Altium stores this
-    /// as a tri-state byte; `FromRule` is the default for a fresh via.
+    /// Solder mask expansion mode (`None` / `FromRule` / `Manual`) — `SubRecord-1`
+    /// byte @66. A fresh Altium via carries `None`, deferring to the design rule.
     #[serde(default)]
     pub solder_mask_expansion_mode: MaskExpansionMode,
 
@@ -755,7 +767,7 @@ impl Via {
             from_layer: Layer::TopLayer,
             to_layer: Layer::BottomLayer,
             solder_mask_expansion: 0.0,
-            solder_mask_expansion_mode: MaskExpansionMode::FromRule,
+            solder_mask_expansion_mode: MaskExpansionMode::None,
             solder_mask_expansion_back: None,
             hole_positive_tolerance: None,
             hole_negative_tolerance: None,
@@ -794,7 +806,7 @@ impl Via {
             from_layer: from,
             to_layer: to,
             solder_mask_expansion: 0.0,
-            solder_mask_expansion_mode: MaskExpansionMode::FromRule,
+            solder_mask_expansion_mode: MaskExpansionMode::None,
             solder_mask_expansion_back: None,
             hole_positive_tolerance: None,
             hole_negative_tolerance: None,

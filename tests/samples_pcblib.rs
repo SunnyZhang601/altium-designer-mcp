@@ -1195,6 +1195,39 @@ fn samples_pcblib_padmask_expansions() {
 }
 
 #[test]
+fn samples_pcblib_via_mask_state_is_altium_factory_default() {
+    // Ground truth for the mask-expansion tri-state on a via, which is Altium's
+    // `TCacheState = (eCacheInvalid, eCacheValid, eCacheManual)`.
+    //
+    // An Altium-authored via carries byte @66 = 0 (`eCacheInvalid`), meaning the
+    // stored expansion is stale and Altium recomputes it from the design rule.
+    // Our from-scratch via writes the same byte, so this pins the two together:
+    // defaulting to `FromRule` instead would claim the 4 mil below is a rule
+    // result Altium must honour verbatim.
+    let lib = PcbLib::open(sample("footprints.PcbLib")).expect("failed to open footprints.PcbLib");
+    let fp = lib.get("VIAS").expect("footprint VIAS not found");
+    assert_eq!(fp.vias.len(), 2);
+
+    for (i, via) in fp.vias.iter().enumerate() {
+        assert_eq!(
+            via.solder_mask_expansion_mode,
+            MaskExpansionMode::None,
+            "via {i} keeps the factory cache state"
+        );
+        assert!(
+            approx_eq(via.solder_mask_expansion, 0.1016, 1e-4),
+            "via {i} carries Altium's 4 mil template expansion, got {}",
+            via.solder_mask_expansion
+        );
+        assert!(
+            via.paste_mask_expansion.abs() < 1e-9,
+            "a via has no paste by default, got {}",
+            via.paste_mask_expansion
+        );
+    }
+}
+
+#[test]
 fn samples_pcblib_locked_flag() {
     // The LOCKED bit of the shared common-header flag word, authored by Altium
     // (`Moveable := False`). A pad and a track cover the two record shapes that

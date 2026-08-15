@@ -141,8 +141,8 @@ fn parse_text_record_from_string(symbol: &mut Symbol, text: &str) {
                     symbol.name.clone_from(name);
                 }
             }
-            if let Some(desc) = props.get("componentdescription") {
-                symbol.description.clone_from(desc);
+            if let Some(desc) = read_utf8_text_field(&props, "componentdescription") {
+                symbol.description = desc;
             }
             if let Some(part_count) = props.get("partcount") {
                 // Altium stores part_count + 1 (part 0 is the common part), so we
@@ -161,8 +161,8 @@ fn parse_text_record_from_string(symbol: &mut Symbol, text: &str) {
             if let Some(part_id_locked) = props.get("partidlocked") {
                 symbol.part_id_locked = part_id_locked == "T";
             }
-            if let Some(source_lib) = props.get("sourcelibraryname") {
-                symbol.source_library_name.clone_from(source_lib);
+            if let Some(source_lib) = read_utf8_text_field(&props, "sourcelibraryname") {
+                symbol.source_library_name = source_lib;
             }
             if let Some(target_file) = props.get("targetfilename") {
                 symbol.target_file_name.clone_from(target_file);

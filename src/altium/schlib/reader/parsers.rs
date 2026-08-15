@@ -219,7 +219,7 @@ pub(super) fn parse_line(props: &HashMap<String, String>) -> Option<Line> {
 
 /// Parses a parameter from properties.
 pub(super) fn parse_parameter(props: &HashMap<String, String>) -> Option<Parameter> {
-    let name = props.get("name")?.clone();
+    let name = read_utf8_text_field(props, "name")?;
     let value = read_utf8_text_field(props, "text").unwrap_or_default();
 
     let x = crate::altium::schlib::coord::read(props, "location.x");
@@ -254,7 +254,7 @@ pub(super) fn parse_parameter(props: &HashMap<String, String>) -> Option<Paramet
         .unwrap_or(0);
     let show_name = props.get("showname").is_some_and(|s| s == "T");
     let hide_name = props.get("hidename").is_some_and(|s| s == "T");
-    let description = props.get("description").cloned().unwrap_or_default();
+    let description = read_utf8_text_field(props, "description").unwrap_or_default();
     let is_configurable = props.get("isconfigurable").is_some_and(|s| s == "T");
     let owner_part_id = props
         .get("ownerpartid")
@@ -581,7 +581,7 @@ pub(super) fn parse_image(props: &HashMap<String, String>) -> Option<Image> {
     let show_border = props.get("showborder").is_some_and(|s| s == "T");
     let keep_aspect = props.get("keepaspect").is_some_and(|s| s == "T");
     let embed_image = props.get("embedimage").is_some_and(|s| s == "T");
-    let file_name = props.get("filename").cloned().unwrap_or_default();
+    let file_name = read_utf8_text_field(props, "filename").unwrap_or_default();
     let owner_part_id = props
         .get("ownerpartid")
         .and_then(|s| s.parse().ok())

@@ -40,15 +40,15 @@ A feature needs all three to count as supported, and a golden fixture to count a
 Geometry and the properties that decide how a footprint or symbol **looks** are complete
 across every primitive, in both directions, and pinned to Altium-authored fixtures.
 
-What remains is fabrication and authoring **metadata**: fields Altium stores that never
-change the rendering, which is why they outlasted everything else. Thirteen groups, listed
-below.
+Nothing an Altium `.PcbLib` or `.SchLib` can store is known to be lost on read or
+unreachable on write. What follows is the verified negatives — properties AD24 accepts but
+does not persist in a library — and the round-trip items worth guarding against
+regression. Re-verify with the method above before trusting it; that is how the previous
+edition rotted.
 
 ## 1. PcbLib format gaps
 
-Each of these is unmodelled: no struct field, nothing parsed, nothing written, nothing
-exposed. A golden fixture cannot cover them until the field exists, so the reader work
-leads and the fixture follows.
+None outstanding. The two entries below are **negatives**, kept so they are not retried.
 
 - **🚫 `DrillType`** — resolved as a negative, not a gap. The name is in
   `Advpcb.dll` and `Pad.DrillType := 1` compiles and runs without error, but the saved
@@ -61,11 +61,6 @@ leads and the fixture follows.
   the content and width rather than storing the request. A barcode varying only
   `RenderMode` moved no byte except @115, which reads 4/3/2/1 across the barcodes in
   creation order — an ordinal, not the property. Neither is recoverable by diffing.
-
-- **[gap | read]** `model_2d_location` (`MODEL.2D.X` / `MODEL.2D.Y`) on ComponentBody —
-  `model_2d_rotation` is modelled but the position is not: the reader drops both keys and
-  the writer always emits `MODEL.2D.X=0mil|MODEL.2D.Y=0mil`. A body whose model is offset
-  in the 2D plane loses that offset.
 
 ## 2. SchLib format gaps
 
@@ -96,12 +91,6 @@ Region and ComponentBody already carry an `additional_parameters` passthrough: e
 the typed model does not consume is captured in read order and re-emitted verbatim, so an
 unmodelled key survives a read-modify-write. Covered end to end by
 `write_pcblib_additional_parameters_roundtrip`.
-
-## Ordering
-
-Rough value order, highest first:
-
-1. **`model_2d_location`** — the last one.
 
 > **Heuristic, corrected.** A missing `Set*` counterpart does *not* mean a property is
 > unauthorable — `SolderMaskExpansionFromHoleEdge` and `BarCodeKind` both lack one and

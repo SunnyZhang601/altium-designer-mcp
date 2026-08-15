@@ -937,6 +937,14 @@ impl McpServer {
                 .get("model_2d_rotation")
                 .and_then(Value::as_f64)
                 .unwrap_or(0.0),
+            model_2d_x: body_json
+                .get("model_2d_x")
+                .and_then(Value::as_f64)
+                .unwrap_or(0.0),
+            model_2d_y: body_json
+                .get("model_2d_y")
+                .and_then(Value::as_f64)
+                .unwrap_or(0.0),
             net_index: body_json
                 .get("net_index")
                 .and_then(Value::as_u64)

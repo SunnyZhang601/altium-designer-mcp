@@ -1551,6 +1551,11 @@ pub(super) fn parse_component_body(data: &[u8], offset: usize) -> ParseResult<Co
         .get("MODEL.2D.ROTATION")
         .and_then(|v| v.parse().ok())
         .unwrap_or(0.0);
+    // MODEL.2D.X/Y are in BODY_MODELLED_PARAM_KEYS, so the additional_parameters
+    // passthrough deliberately skips them — they have to be parsed here or the
+    // offset is simply lost.
+    let model_2d_x = parse_mil_value(params.get("MODEL.2D.X").map(String::as_str));
+    let model_2d_y = parse_mil_value(params.get("MODEL.2D.Y").map(String::as_str));
 
     let body = ComponentBody {
         model_id,
@@ -1575,6 +1580,8 @@ pub(super) fn parse_component_body(data: &[u8], offset: usize) -> ParseResult<Co
         body_color_3d,
         body_opacity_3d,
         model_2d_rotation,
+        model_2d_x,
+        model_2d_y,
         net_index,
         polygon_index,
         component_index,

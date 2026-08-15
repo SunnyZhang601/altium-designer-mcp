@@ -1654,8 +1654,8 @@ fn build_component_body_params(body: &ComponentBody) -> String {
         if body.embedded { "TRUE" } else { "FALSE" }
     ));
     params.push(format!("MODEL.NAME={}", body.model_name));
-    params.push("MODEL.2D.X=0mil".to_string());
-    params.push("MODEL.2D.Y=0mil".to_string());
+    params.push(format!("MODEL.2D.X={}", format_mil_coord(body.model_2d_x)));
+    params.push(format!("MODEL.2D.Y={}", format_mil_coord(body.model_2d_y)));
     params.push(format!("MODEL.2D.ROTATION={:.3}", body.model_2d_rotation));
     params.push(format!("MODEL.3D.ROTX={:.3}", body.rotation_x));
     params.push(format!("MODEL.3D.ROTY={:.3}", body.rotation_y));

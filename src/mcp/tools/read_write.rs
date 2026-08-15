@@ -798,6 +798,8 @@ impl McpServer {
                             body_color_3d: 8_421_504,
                             body_opacity_3d: 1.0,
                             model_2d_rotation: 0.0,
+                            model_2d_x: 0.0,
+                            model_2d_y: 0.0,
                             // External reference: no board association (free primitive).
                             net_index: 0xFFFF,
                             polygon_index: 0xFFFF,
@@ -961,6 +963,8 @@ impl McpServer {
                     body_color_3d: 8_421_504,
                     body_opacity_3d: 1.0,
                     model_2d_rotation: 0.0,
+                    model_2d_x: 0.0,
+                    model_2d_y: 0.0,
                     // Synthesised body: no board association (free primitive).
                     net_index: 0xFFFF,
                     polygon_index: 0xFFFF,
@@ -2488,6 +2492,8 @@ mod tests {
             body_color_3d: 8_421_504,
             body_opacity_3d: 1.0,
             model_2d_rotation: 0.0,
+            model_2d_x: 0.0,
+            model_2d_y: 0.0,
             net_index: 0xFFFF,
             polygon_index: 0xFFFF,
             component_index: -1,

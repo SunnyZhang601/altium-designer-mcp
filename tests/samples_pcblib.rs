@@ -1431,6 +1431,28 @@ fn samples_pcblib_locked_flag() {
 }
 
 #[test]
+fn samples_pcblib_jumper_group() {
+    // Jumper group (main-block i16 @110-111), authored by Altium: pads 7 and 8 share
+    // id 4 while every other pad keeps 0, so a reader that hard-coded either value
+    // fails rather than passes.
+    let lib = PcbLib::open(sample("footprints.PcbLib")).expect("failed to open footprints.PcbLib");
+    let fp = lib
+        .get("LOCKFLAGS_PCB")
+        .expect("footprint LOCKFLAGS_PCB not found");
+    let pad = |d: &str| {
+        fp.pads
+            .iter()
+            .find(|p| p.designator == d)
+            .unwrap_or_else(|| panic!("pad {d} not found"))
+    };
+    assert_eq!(pad("7").jumper_id, 4, "pad 7 is in jumper group 4");
+    assert_eq!(pad("8").jumper_id, 4, "and so is pad 8");
+    for d in ["1", "2", "3", "4", "5", "6"] {
+        assert_eq!(pad(d).jumper_id, 0, "pad {d} is in no jumper group");
+    }
+}
+
+#[test]
 fn samples_pcblib_testpoint_flags() {
     // Issue #334: a pad authored with only IsTestPoint_Top read back as LOCKED and
     // reported nothing for the flag that was set. Both halves are explained here.

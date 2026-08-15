@@ -671,6 +671,9 @@ fn build_pad_extended_tail(pad: &Pad) -> [u8; 141] {
     // Solder-mask expansion measured from the hole edge rather than the pad edge
     // (bool @125). Sits just past the solder-mask cache mirror at @121-124.
     tail[125 - START] = u8::from(pad.solder_mask_expansion_from_hole_edge);
+
+    // Jumper group id (i16 @110-111); 0 leaves the template bytes as they are.
+    tail[110 - START..112 - START].copy_from_slice(&pad.jumper_id.to_le_bytes());
     // 114-117: v7 layer id (derived from the pad's layer)
     tail[114 - START..118 - START]
         .copy_from_slice(&v7_layer_id(layer_to_id(pad.layer)).to_le_bytes());

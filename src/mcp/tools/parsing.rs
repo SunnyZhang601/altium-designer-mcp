@@ -374,6 +374,8 @@ impl McpServer {
             layer,
             hole_size,
             is_plated,
+            jumper_id: i16::try_from(json.get("jumper_id").and_then(Value::as_i64).unwrap_or(0))
+                .unwrap_or(0),
             solder_mask_expansion_from_hole_edge,
             hole_shape,
             hole_slot_length,

@@ -757,7 +757,7 @@ fn encode_pad_geometry(pad: &Pad) -> Vec<u8> {
     // Is plated - offset 60. Altium stores this as an independent bool that
     // defaults to 1 for every pad, SMD included (the golden fixture's SMD pads
     // all carry 1; AltiumSharp's PcbPad.IsPlated defaults to true). The writer
-    // previously derived it from hole_size, wrongly emitting 0 for SMD pads.
+    // It is independent of hole_size; deriving it from that emits 0 for SMD pads.
     block.push(u8::from(pad.is_plated));
 
     // Extended tail - offsets 61-201 (141 bytes)
@@ -1167,7 +1167,7 @@ pub fn encode_text_geometry(text: &Text, wide_index: Option<u32>) -> Vec<u8> {
 
     // Base font type (offset 43) is derived from the text kind: Stroke -> 0,
     // TrueType -> 1. The template default is 0, so stroke text stays
-    // byte-identical; the only change is the previously malformed TrueType record
+    // byte-identical; the TrueType record
     // (kind@160=1 with base@43=0). BarCode is a deferred kind and not modelled here.
     block[43] = u8::from(!matches!(text.kind, TextKind::Stroke));
     // Italic style (offset 45). Default false reproduces the template's 0x00.
@@ -2016,7 +2016,7 @@ mod tests {
     fn pad_is_plated_byte_defaults_to_one() {
         // @60 is an independent bool Altium defaults to 1 for EVERY pad, SMD
         // included (golden fixture + AltiumSharp `IsPlated = true`). The writer
-        // previously derived it from hole_size, wrongly emitting 0 for SMD pads.
+        // It is independent of hole_size; deriving it from that emits 0 for SMD pads.
         let smd = Pad::smd("1", 0.0, 0.0, 1.0, 0.6);
         assert_eq!(encode_pad_geometry(&smd)[60], 1, "SMD pad plated @60");
 
@@ -2381,7 +2381,7 @@ mod tests {
     #[test]
     fn v7_layer_id_handles_extended_mechanical_layers() {
         // Regression for #282. Byte IDs 186-201 are Mechanical 17-32 (Altium
-        // Designer 18+). They previously fell through to the `_` arm and were
+        // Designer 18+). Without an explicit arm they fall through to `_` and are
         // written as the multi-layer fallback, so a pad/track/arc/text/fill on
         // M17-M32 silently lost its layer.
         for (layer, want) in [
@@ -3000,7 +3000,7 @@ mod tests {
     #[test]
     fn fill_block_writes_v7_layer_id() {
         // The fill tail (offsets 37-49) carries the layer-derived v7 layer id at
-        // 42-45 — previously a blanket [0x00; 13] that left it zeroed.
+        // 42-45, rather than a blanket [0x00; 13] that would leave it zeroed.
         let block = encode_fill_block(&Fill::new(-1.0, -1.0, 1.0, 1.0, Layer::TopPaste));
         assert_eq!(block.len(), 50);
         let v7 = u32::from_le_bytes([block[42], block[43], block[44], block[45]]);
@@ -3044,7 +3044,7 @@ mod tests {
     #[test]
     fn wide_strings_empty_matches_altiumsharp_5_bytes() {
         // A footprint with no qualifying wide text emits AltiumSharp's empty form
-        // `[01 00 00 00][00]`, not the spurious `[02 00 00 00][7C 00]` we used to write.
+        // `[01 00 00 00][00]`, not a spurious leading-pipe `[02 00 00 00][7C 00]`.
         let fp = Footprint::new("WS_EMPTY");
         assert_eq!(
             encode_component_wide_strings(&fp),

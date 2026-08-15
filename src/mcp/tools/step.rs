@@ -412,11 +412,10 @@ impl McpServer {
         }
 
         // Extract or return the models. `output_path` is ALWAYS a directory in
-        // this mode — previously it meant a file path for exactly one match
-        // and a directory for several, so the same call wrote to different
-        // places depending on how many models the footprint happened to
-        // reference. The footprint decides the match count, not the caller,
-        // so the meaning of the argument must not depend on it.
+        // this mode. The footprint decides how many models match, not the
+        // caller, so an argument whose meaning switched between file and
+        // directory on that count would write to different places for reasons
+        // outside the caller's control.
         output_path.map_or_else(
             || {
                 if matching_models.len() == 1 {

@@ -230,7 +230,7 @@ pub(super) fn parse_parameter(props: &HashMap<String, String>) -> Option<Paramet
         .unwrap_or(1);
     // Altium omits Color when 0 (the golden's user parameters carry no key), so
     // absent reads as 0 — matching every other shape parser and AltiumSharp's
-    // TryGetInt. The old fabricated 0x800000 default re-emitted a spurious
+    // TryGetInt. Fabricating a 0x800000 default would re-emit a spurious
     // `Color=8388608` on read-modify-write.
     let color = props.get("color").and_then(|s| s.parse().ok()).unwrap_or(0);
     let hidden = props.get("ishidden").is_some_and(|s| s == "T");
@@ -247,7 +247,7 @@ pub(super) fn parse_parameter(props: &HashMap<String, String>) -> Option<Paramet
         .and_then(|s| s.parse().ok())
         .unwrap_or(0);
     // The golden's user parameters carry `Justification=8`/`=4`; absent => 0
-    // (bottom-left). Previously dropped on read (silent data loss).
+    // (bottom-left). Dropping it on read is silent data loss.
     let justification = props
         .get("justification")
         .and_then(|s| s.parse().ok())
@@ -1064,8 +1064,8 @@ mod tests {
 
     #[test]
     fn parameter_justification_reads_and_defaults() {
-        // Golden JUSTIFY: `Justification=8` on Value, `=4` on Tol — previously
-        // dropped on read (silent data loss); absent defaults to 0.
+        // Golden JUSTIFY: `Justification=8` on Value, `=4` on Tol, both read
+        // rather than dropped; absent defaults to 0.
         let p = parse_parameter(&parse_properties(
             "|RECORD=41|Justification=8|FontID=1|Text=1k|Name=Value|",
         ))
@@ -1110,8 +1110,8 @@ mod tests {
     #[test]
     fn test_absent_colour_reads_black() {
         // Altium omits Color/AreaColor when 0; AltiumSharp defaults absent to 0
-        // (black). We previously fabricated navy / pale-yellow defaults, so reading
-        // an Altium shape that omits these surfaced the wrong colour.
+        // (black), so we must too: fabricating navy / pale-yellow defaults gives
+        // the wrong colour for an Altium shape that omits them.
         let arc = parse_arc(&parse_properties(
             "|RECORD=12|Location.X=5|Location.Y=5|Radius=10|",
         ))

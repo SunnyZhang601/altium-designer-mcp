@@ -324,8 +324,8 @@ fn samples_schlib_lines() {
     }
 
     // The golden authors the designator record at Location.X=-5|Location.Y=5
-    // with a stable UniqueID; position and identity must read back (they were
-    // previously dropped and re-hardcoded/regenerated on write).
+    // with a stable UniqueID; position and identity must read back rather than
+    // being re-hardcoded or regenerated on write.
     assert!(
         approx_eq(symbol.designator_x, -5.0) && approx_eq(symbol.designator_y, 5.0),
         "golden designator position must read back as (-5, 5), got ({}, {})",
@@ -692,9 +692,9 @@ fn samples_schlib_polygons() {
 //
 // These assert the NON-default property values authored by the enrichment block
 // in GenerateSamples.pas, read from the real Altium-regenerated fixture. This is
-// the whole point of the enrichment: values that were previously only
-// self-round-trip-tested (line style, transparency, non-default justification,
-// off-grid PinFrac coordinates) are now verified against a genuine Altium file.
+// the whole point of the enrichment: values a self-round-trip cannot vouch
+// for (line style, transparency, non-default justification,
+// off-grid PinFrac coordinates) verified against a genuine Altium file.
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -770,7 +770,7 @@ fn samples_schlib_justify() {
     );
 
     // Parameter justification (the golden carries `Justification=8` on Value
-    // and `Justification=4` on the hidden Tol) — previously dropped on read.
+    // and `Justification=4` on the hidden Tol), which must survive the read.
     let param = |name: &str| -> &Parameter {
         sym.parameters
             .iter()
@@ -798,7 +798,7 @@ fn samples_schlib_fracpins() {
 
     // Three pins: two off-grid (PinFrac stream) and one with a non-default symbol
     // line width (PinSymbolLineWidth stream). This is the FIRST real-Altium ground
-    // truth for BOTH pin auxiliary streams — previously only self-round-trip-tested.
+    // truth for BOTH pin auxiliary streams, beyond a self-round-trip.
     assert_eq!(sym.pins.len(), 3, "FRACPINS has three pins");
     let pin = |d: &str| {
         sym.pins
@@ -1032,8 +1032,8 @@ fn samples_schlib_swappin() {
     //   SwapId_Pin  -> swap_id_group      ("A")
     //   SwapId_Part -> part_and_sequence  ("1" — replacing the "|&|" default)
     //   DefaultValue -> default_value     ("3V3")
-    // First real-Altium ground truth for the tail (previously only
-    // self-round-trip-tested).
+    // Real-Altium ground truth for the tail, beyond a
+    // self-round-trip.
     assert_eq!(sym.pins.len(), 1, "SWAPPIN has one pin");
     let pin = pin_by_designator(sym, "1");
     assert_eq!(pin.name, "SWP", "pin name");

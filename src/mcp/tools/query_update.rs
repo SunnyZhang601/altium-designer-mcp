@@ -130,9 +130,9 @@ impl McpServer {
         }
 
         // Parse vias, fills and component bodies. The create path (call_write_pcblib)
-        // handles these, but this update path used to omit them entirely, so a
-        // read-modify-write of a footprint carrying any via / fill / 3D body silently
-        // DROPPED it. Mirror the create path exactly.
+        // handles these, and this update path must mirror it exactly: omitting
+        // them makes a read-modify-write of a footprint carrying any via / fill
+        // / 3D body silently drop it.
         if let Some(vias) = fp_json.get("vias").and_then(Value::as_array) {
             for (i, via_json) in vias.iter().enumerate() {
                 match Self::parse_via(via_json) {
@@ -156,7 +156,7 @@ impl McpServer {
         }
 
         // Parse text. Accept both "text" (the create-path key) and the legacy
-        // "texts" so reusing the create schema for an update no longer silently
+        // "texts", so reusing the create schema for an update does not silently
         // drops text primitives.
         if let Some(texts) = fp_json
             .get("text")

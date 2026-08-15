@@ -140,8 +140,8 @@ fn read_file_header<R: Read + Seek>(cfb: &mut CompoundFile<R>) -> AltiumResult<F
     }
 
     // A PcbLib's FileHeader is a binary version-string block, not a
-    // length-prefixed pipe list, so it yields no properties at all and used to
-    // fall straight through to "zero symbols". Detect it positively: reading a
+    // length-prefixed pipe list, so it yields no properties at all. Detect it
+    // positively rather than falling through to "zero symbols": reading a
     // footprint library as a symbol library must fail, not look empty, because
     // any append-style caller would then save an empty library over the file.
     if looks_like_pcblib_header(&data) {

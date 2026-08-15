@@ -40,29 +40,27 @@ pub fn redact_absolute_paths(message: &str) -> String {
     // is still redacted. The false-positive guard holds: in `https://` the drive
     // candidate `s:/` is preceded by `p` (a letter, not in the class), so it never
     // matches.
-    // The path body deliberately allows spaces: `C:\Program Files\…`,
+    // The path body allows spaces, because `C:\Program Files\…`,
     // `C:\Users\First Last\…` and `OneDrive - Company\…` are ordinary Windows
-    // paths, and a body of `[^\s…]` stopped at the first space and left the rest
-    // of the directory tree in the message. It instead terminates on characters
-    // that cannot appear in a Windows path (`" < > | ? *`) or that end a path in
-    // prose: a *second* colon (the drive's is already consumed by the prefix, so
-    // a later one means `…\x.PcbLib: permission denied`), a comma, a semicolon,
-    // brackets, an apostrophe, or a newline.
+    // paths. It terminates instead on characters that cannot appear in a Windows
+    // path (`" < > | ? *`) or that end a path in prose: a *second* colon (the
+    // drive's is already consumed by the prefix, so a later one means
+    // `…\x.PcbLib: permission denied`), a comma, a semicolon, brackets, an
+    // apostrophe, or a newline.
     //
-    // Over-matching a trailing word is harmless — `basename` keeps it inside the
-    // final segment, so "Failed to read x.PcbLib now" still reads correctly —
-    // whereas under-matching discloses directories, so the bias is deliberate.
+    // The bias is deliberate. Over-matching a trailing word is harmless —
+    // `basename` keeps it inside the final segment, so "Failed to read
+    // x.PcbLib now" still reads correctly — whereas under-matching discloses
+    // directories.
+    //
     // The prefix alternation spells out all four shapes, longest first. The
-    // verbatim forms matter because `std::fs::canonicalize` returns them on
-    // Windows: an `\\?\C:\…` path met a body that excludes `?`, so the match
-    // ended after two backslashes and the rest of the path survived into the
-    // message as `<path>?\C:…`. Excluding `?` is still right for the body — it
-    // cannot occur in a real file name — so the prefix absorbs it instead.
-    // Separators are matched as `\{1,2}` throughout because this function is
-    // applied to an already-serialised JSON body (see `ToolCallResult::error`),
-    // where every Windows separator arrives escaped as `\\`. Matching only the
-    // single form meant a path inside a JSON string was left almost entirely
-    // intact — the visible failure was `<path>?\C:Corrupt.PcbLib`.
+    // verbatim forms are needed because `std::fs::canonicalize` returns them on
+    // Windows; `?` stays excluded from the body, where it cannot occur in a real
+    // file name, so the prefix absorbs it instead.
+    //
+    // Separators are matched as `\{1,2}` because this runs over an
+    // already-serialised JSON body (see `ToolCallResult::error`), where every
+    // Windows separator arrives escaped as `\\`.
     let windows = WINDOWS.get_or_init(|| {
         Regex::new(
             r#"(^|[\s"'(=:])((?:\\{2,4}[?.]\\{1,2}UNC\\{1,2}|\\{2,4}[?.]\\{1,2}[A-Za-z]:[\\/]{1,2}|\\{2,4}|[A-Za-z]:[\\/]{1,2})[^"'<>|?*:,;()\r\n]*)"#,
@@ -73,13 +71,12 @@ pub fn redact_absolute_paths(message: &str) -> String {
     // The leading segment must still be space-free so ordinary prose starting
     // with a slash-word is not swallowed, and at least one separator is required.
     //
-    // The boundary class matches the Windows one rather than plain `\s`. Every
+    // The boundary class matches the Windows one rather than plain `\s`: every
     // tool response is JSON, so a path is normally reached as `"filepath":
-    // "/home/…"` — preceded by a quote, never by whitespace — and a
-    // whitespace-only boundary left those completely unredacted. URLs stay safe:
-    // in `https://h/p` the first `/` is followed by another `/`, which the
-    // segment body rejects, and the second `/` is preceded by `/`, which is not
-    // a boundary character.
+    // "/home/…"`, preceded by a quote and never by whitespace. URLs stay safe
+    // regardless — in `https://h/p` the first `/` is followed by another `/`,
+    // which the segment body rejects, and the second `/` is preceded by `/`,
+    // which is not a boundary character.
     let unix = UNIX.get_or_init(|| {
         Regex::new(r#"(^|[\s"'(=:])(/[^\s/"'<>|:,;()\r\n]+(?:/[^/"'<>|:,;()\r\n]+)+)"#).unwrap()
     });
@@ -290,11 +287,10 @@ mod tests {
 
     #[test]
     fn redact_paths_containing_spaces() {
-        // Regression for the leak found via #306: the path body used to stop at
-        // the first space, so everything after it stayed in the message. Spaces
-        // are ordinary in Windows paths, so this was the common case, not an
-        // edge one — every affected user saw part of their directory tree, and
-        // potentially their account name, in error text.
+        // Regression for #306. Spaces are ordinary in Windows paths, so a
+        // path body that stops at the first space leaves the rest of the
+        // directory tree — and potentially the account name — in the message.
+        // This is the common case, not an edge one.
         assert_eq!(
             redact_absolute_paths(
                 "Failed to read C:\\Users\\me\\Documents\\embedded society\\proj\\Corrupt.PcbLib"
@@ -320,9 +316,8 @@ mod tests {
     #[test]
     fn redact_windows_verbatim_prefixed_paths() {
         // `std::fs::canonicalize` returns `\\?\C:\…` on Windows, so this is the
-        // shape the server actually handles after resolving a path — not an
-        // exotic input. It previously redacted to `<path>?\C:Corrupt.PcbLib`,
-        // which both leaked and was unreadable.
+        // shape the server handles after resolving a path, not an exotic input.
+        // The `?` must be absorbed by the prefix, since the body excludes it.
         assert_eq!(
             redact_absolute_paths("Failed to read \\\\?\\C:\\Users\\me\\proj\\Corrupt.PcbLib"),
             "Failed to read Corrupt.PcbLib"
@@ -360,9 +355,9 @@ mod tests {
     #[test]
     fn redact_quoted_paths_as_they_appear_in_json_responses() {
         // Every tool response is JSON, so this is how a path is actually reached
-        // in practice — preceded by a quote, never by whitespace. The Unix
-        // pattern used to require a whitespace boundary, so these leaked in full
-        // on Linux and macOS: not a truncated tail, the entire absolute path.
+        // in practice — preceded by a quote, never by whitespace, so a
+        // whitespace-only boundary would let the entire absolute path through
+        // on Linux and macOS.
         assert_eq!(
             redact_absolute_paths(r#"{"filepath": "/home/me/work/proj/.tmp/Corrupt.PcbLib"}"#),
             r#"{"filepath": "Corrupt.PcbLib"}"#

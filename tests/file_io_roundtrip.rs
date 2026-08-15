@@ -486,7 +486,7 @@ fn schlib_preserves_unique_id_and_pin_accessibility() {
 }
 
 /// Returns the set of OLE stream paths (lower-cased) in a written library file,
-/// used to assert whether the optional pin auxiliary streams were emitted.
+/// for asserting whether the optional pin auxiliary streams were emitted.
 fn ole_stream_paths(path: &std::path::Path) -> Vec<String> {
     let file = File::open(path).expect("open written SchLib");
     let cfb = cfb::CompoundFile::open(file).expect("parse OLE");
@@ -857,7 +857,7 @@ fn schlib_file_roundtrip_pin_symbols_and_colour() {
 /// Numeric silkscreen text must survive a write → read cycle unchanged (#309).
 ///
 /// Pin-1 markers and value legends are routinely just digits, and the reader
-/// used to treat any all-digit content block as a `/WideStrings` index.
+/// must not treat an all-digit content block as a `/WideStrings` index.
 ///
 /// Note on what this test does and does not prove today: it passes both with
 /// and without that fix, because the reader looks for `/WideStrings` at the

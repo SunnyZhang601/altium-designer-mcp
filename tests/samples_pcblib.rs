@@ -747,11 +747,9 @@ fn samples_pcblib_body3d() {
         "standoff_height: expected ~0, got {}",
         body.standoff_height,
     );
-    // Layer-reader regression (PR-11): the body is authored on Mechanical 13
-    // (layer id 69). It was previously collapsed to Top3DBody because the reader
-    // decoded only the V7_LAYER string via an incomplete map (MECHANICAL2-7) and
-    // ignored the CommonPrimitiveData header layer byte. The reader now reads the
-    // header byte, so the true layer survives.
+    // The body is authored on Mechanical 13 (layer id 69). The reader must
+    // take the layer from the CommonPrimitiveData header byte: decoding only
+    // the V7_LAYER string collapses any layer outside that map to Top3DBody.
     assert_eq!(body.layer, Layer::Mechanical13, "body layer");
 
     // Altium reorders the contour vertices on save, so we assert the vertex count
@@ -852,8 +850,8 @@ fn samples_pcblib_text_style() {
         .expect("TEXT_STYLE footprint not found");
 
     // A single TrueType text authored with Bold + Italic + Mirror + FontName —
-    // the first real-Altium ground truth for these IPCB_Text style fields (they
-    // were previously exercised only by a self-round-trip / oracle default).
+    // real-Altium ground truth for these IPCB_Text style fields, beyond what a
+    // self-round-trip or an oracle default can show.
     assert_eq!(fp.text.len(), 1, "TEXT_STYLE has one text");
     let t = &fp.text[0];
     assert_eq!(t.kind, TextKind::TrueType, "text kind is TrueType");
@@ -1039,9 +1037,9 @@ fn samples_pcblib_text_special() {
 
     // Two special text items authored in batch 4a: a Code-128 barcode ("BC128")
     // and an inverted (knockout) TrueType text in a framed rectangle ("INV").
-    // First real-Altium ground truth for TextKind::BarCode and the inverted
-    // text-box descriptor (offsets 110-133), previously only
-    // self-round-trip-tested. Matched by content; on-disk order is not
+    // Real-Altium ground truth for TextKind::BarCode and the inverted
+    // text-box descriptor (offsets 110-133), beyond a
+    // self-round-trip. Matched by content; on-disk order is not
     // guaranteed.
     assert_eq!(fp.text.len(), 2, "TEXT_SPECIAL has two text items");
     let by_content = |content: &str| {

@@ -503,7 +503,7 @@ mod tests {
     #[test]
     fn ole_name_hash_fallback_handles_multibyte_prefix_without_panicking() {
         // A long all-multibyte name forces truncation; exhausting the 999
-        // numeric suffixes drives the hash fallback, which previously panicked
+        // numeric suffixes drives the hash fallback, which must not panic
         // by byte-slicing inside a multi-byte char.
         let name = "\u{00B5}".repeat(32); // 'µ': 1 UTF-16 unit each, 32 > 31
         let prefix = "\u{00B5}".repeat(MAX_OLE_NAME_LEN - SUFFIX_LEN);

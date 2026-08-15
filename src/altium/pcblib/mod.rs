@@ -706,7 +706,7 @@ mod tests {
     fn pad_default_thermal_relief_byte_identical() {
         // A pad created with default thermal-relief must produce byte-for-byte
         // identical output regardless of whether the writer emits the struct
-        // fields or the old fixed template constants. We prove this by checking
+        // fields or the fixed template constants. We prove this by checking
         // that the default field values map back to the canonical template raw
         // values (style 0; conductor width / air gap 100000; entries 4; relief
         // expansion / clearance 200000), so the oracle stays at 0 regressions.
@@ -959,8 +959,8 @@ mod tests {
 
     #[test]
     fn text_stroke_width_round_trips() {
-        // Previously every text inherited the 252-byte template's 4-mil stroke; an
-        // explicit StrokeWidth (geometry offset 36) must now survive the round-trip.
+        // An explicit StrokeWidth (geometry offset 36) must survive the
+        // round-trip rather than inheriting the template's 4-mil stroke.
         let mut original = Footprint::new("TEXT_STROKE");
         original.add_text(Text {
             x: 0.0,
@@ -1167,7 +1167,7 @@ mod tests {
 
     #[test]
     fn text_comment_designator_flags_round_trip() {
-        // IsComment@40 / IsDesignator@41 (previously dropped on read) must
+        // IsComment@40 / IsDesignator@41 must
         // survive encode -> decode; a plain text keeps both false.
         let mut original = Footprint::new("TEXT_FLAGS");
         let mut text = Text {
@@ -1233,8 +1233,8 @@ mod tests {
 
     #[test]
     fn pad_is_plated_round_trips() {
-        // is_plated @60 (previously derived from hole_size on write and dropped
-        // on read) must survive encode -> decode, both at the default (true —
+        // is_plated @60 is an independent field, not derived from hole_size: it
+        // must survive encode -> decode, both at the default (true —
         // Altium's for every pad, SMD included) and explicitly unplated.
         let mut original = Footprint::new("PAD_PLATED");
         original.add_pad(Pad::smd("1", 0.0, 0.0, 1.0, 0.6));
@@ -1255,9 +1255,9 @@ mod tests {
 
     #[test]
     fn pad_identity_guids_round_trip() {
-        // The two per-pad identity GUIDs @126/@142 (previously write-only fresh
-        // values) now read back verbatim, so encode -> decode -> encode
-        // reproduces the same GUID bytes instead of regenerating them.
+        // The two per-pad identity GUIDs @126/@142 must read back verbatim, so
+        // that encode -> decode -> encode reproduces the same GUID bytes
+        // instead of regenerating them.
         let mut original = Footprint::new("PAD_GUIDS");
         original.add_pad(Pad::smd("1", 0.0, 0.0, 1.0, 0.6));
 
@@ -1359,8 +1359,8 @@ mod tests {
 
     #[test]
     fn binary_roundtrip_text_flags() {
-        // parse_text previously discarded the flag word (read PcbFlags::empty());
-        // a locked / tented text must now round-trip its flags.
+        // parse_text must carry the flag word through:
+        // a locked / tented text round-trips its flags.
         let mut original = Footprint::new("TEXT_FLAGS");
         original.add_text(Text {
             x: 0.0,
@@ -1405,8 +1405,8 @@ mod tests {
     fn binary_roundtrip_common_indices() {
         // A board-context Track and Text carrying a net/component association must
         // survive encode -> decode via the common-header indices (@3 net, @5
-        // polygon, @7 component). Previously these header bytes were dropped on
-        // read and hard-coded to 0xFF on write, so the association was lost.
+        // polygon, @7 component). Dropping them on read and hard-coding 0xFF
+        // on write loses the association.
         let mut original = Footprint::new("ROUNDTRIP_INDICES");
 
         let mut track = Track::new(-1.0, 0.0, 1.0, 0.0, 0.25, Layer::TopLayer);
@@ -1583,7 +1583,7 @@ mod tests {
         use super::primitives::Fill;
 
         // Solder-mask expansion @37-40 and keepout @46 round-trip; a default fill
-        // stays None (additive — byte-identical to the old zero-tail output).
+        // stays None (additive — byte-identical to a zero tail).
         let mut fp = Footprint::new("FILL_TAIL");
         let mut fill = Fill::new(0.0, 0.0, 2.0, 1.0, Layer::TopLayer);
         fill.solder_mask_expansion = Some(0.1);
@@ -1662,7 +1662,7 @@ mod tests {
         assert!(approx_eq(body.overall_height, 1.0, 0.01));
         assert!(approx_eq(body.standoff_height, 0.1, 0.01));
         assert_eq!(body.layer, Layer::Top3DBody);
-        // MODEL.CHECKSUM round-trips verbatim (previously dropped + hard-coded to 0).
+        // MODEL.CHECKSUM round-trips verbatim rather than being hard-coded to 0.
         assert_eq!(body.model_checksum, 7_654_321);
 
         // The explicit outline round-trips (4 vertices, in mm).
@@ -1785,7 +1785,7 @@ mod tests {
         let block = &data[pos + 5..pos + 5 + 321];
         // Common-header layer byte is MultiLayer (74) for a via.
         assert_eq!(block[0], 74, "via common header should be on MultiLayer");
-        // Exactly one block — no second via sub-block follows (the old 6-block bug).
+        // Exactly one block — no second via sub-block follows.
         assert!(
             !data[pos + 5 + 321..].windows(sig.len()).any(|w| w == sig),
             "via should emit exactly one block, not several"
@@ -1795,7 +1795,7 @@ mod tests {
     #[test]
     fn track_arc_extended_tail_round_trips() {
         // #113: a track/arc's solder-mask expansion and keepout restrictions are
-        // preserved on read->write (previously silently dropped). Additive: a
+        // preserved on read->write rather than dropped. Additive: a
         // default primitive (None) must round-trip back to None.
         let mut fp = Footprint::new("FIDELITY");
         let mut track = Track::new(0.0, 0.0, 1.0, 0.0, 0.2, Layer::TopLayer);
@@ -1985,8 +1985,8 @@ mod tests {
     fn each_via_gets_a_unique_identity_guid() {
         // PR-R6: every via must carry its OWN in-record identity GUIDs @259
         // (IdentityGuid) and @275 (IdentityGuidB) — like the pad, which generates
-        // fresh unique GUIDs per primitive. The template previously reused one
-        // fixed GUID for every via, so two vias in one footprint collided.
+        // fresh unique GUIDs per primitive. A single template GUID reused for
+        // every via would make two vias in one footprint collide.
         let mut fp = Footprint::new("VIA_GUIDS");
         fp.add_via(Via::new(0.0, 0.0, 0.6, 0.3));
         fp.add_via(Via::new(2.0, 0.0, 0.6, 0.3));

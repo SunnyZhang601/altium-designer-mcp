@@ -486,7 +486,7 @@ const fn pad_stack_mode_from_id(id: u8) -> PadStackMode {
 pub(super) fn parse_via(data: &[u8], offset: usize) -> ParseResult<Via> {
     // Altium writes a via as a single block: the 13-byte common header followed
     // by the 321-byte via SubRecord-1 (offsets 13-320). Mirror of `encode_via`
-    // (#113); the old reader expected six pad-style blocks.
+    // (#113). It is one block, not the six pad-style blocks a via resembles.
     let (block, next) = read_block(data, offset)
         .ok_or_else(|| AltiumError::parse_error(offset, "failed to read Via block"))?;
 
@@ -1225,8 +1225,8 @@ pub(super) fn parse_region(data: &[u8], offset: usize) -> ParseResult<Region> {
 
     // A region is a single block — there is no trailing empty "Block 1". Altium
     // places the next record's type byte immediately after this block, so `current`
-    // already points at the next record. (We previously read a spurious second block,
-    // which against a real Altium region would mis-read the next record's bytes.)
+    // already points at the next record. Reading a second block here would
+    // mis-read the next record's bytes against a real Altium region.
     // Extract typed properties from the parsed parameter block. Missing keys fall
     // back to the from-scratch defaults so a minimal region still round-trips.
     let kind = params
@@ -1440,7 +1440,7 @@ pub(super) fn parse_component_body(data: &[u8], offset: usize) -> ParseResult<Co
     let standoff_height = parse_mil_value(params.get("STANDOFFHEIGHT").map(String::as_str));
     let overall_height = parse_mil_value(params.get("OVERALLHEIGHT").map(String::as_str));
 
-    // MODEL.CHECKSUM is a plain integer; previously dropped. Round-trip it verbatim
+    // MODEL.CHECKSUM is a plain integer. Round-trip it verbatim
     // (0 = default/valid) — it is not recomputed from the model bytes here.
     let model_checksum = params
         .get("MODEL.CHECKSUM")
@@ -1449,10 +1449,10 @@ pub(super) fn parse_component_body(data: &[u8], offset: usize) -> ParseResult<Co
 
     // The body's layer is the CommonPrimitiveData layer byte at block offset 0 — the
     // authoritative source, exactly as AltiumSharp does (`result.Layer = layer`,
-    // PcbLibReader.ReadComponentBody). Previously we only decoded the `V7_LAYER`
-    // parameter string via the incomplete `parse_v7_layer` (MECHANICAL2-7 only) and
-    // fell back to `Top3DBody`, silently collapsing every other mechanical layer
-    // (e.g. MECHANICAL13 / id 69) to the top 3D-body layer on read. The header byte
+    // PcbLibReader.ReadComponentBody). Decoding only the `V7_LAYER` parameter
+    // string and falling back to `Top3DBody` silently collapses every mechanical
+    // layer that fallback does not cover (e.g. MECHANICAL13 / id 69) to the top
+    // 3D-body layer on read. The header byte
     // covers the full Mechanical1-32 range through `layer_from_id`, so a body authored
     // on any layer now reads back on its true layer. The writer already emits the
     // matching header byte and `V7_LAYER` token, so this is a read-only fix. When the
@@ -1468,7 +1468,7 @@ pub(super) fn parse_component_body(data: &[u8], offset: usize) -> ParseResult<Co
     // then the net/polygon/component words @3-8 (0xFF padding for a free body).
     let (net_index, polygon_index, component_index) = read_common_indices(block0);
 
-    // Additive fields previously discarded. Each default matches the writer's
+    // Additive fields. Each default matches the writer's
     // hard-coded literal default so a default body round-trips byte-identically.
     let name = params
         .get("NAME")
@@ -1639,8 +1639,8 @@ pub(super) fn parse_mil_value(s: Option<&str>) -> f64 {
 /// Handles the full `MECHANICAL1`-`MECHANICAL32` range, inverting the writer's
 /// [`region_v7_layer_token`](super::super::writer) mapping via [`layer_from_id`]:
 /// `MECHANICAL{1..=16}` map to layer ids `57..=72` and `MECHANICAL{17..=32}` to
-/// `186..=201`. It previously mapped only `MECHANICAL2`-`MECHANICAL7`, returning
-/// `None` for every other mechanical layer. This is the fallback for a body whose
+/// `186..=201`; every mechanical layer must map, not just a subset. This is
+/// the fallback for a body whose
 /// header layer byte is missing; the primary layer source is the header byte.
 pub(super) fn parse_v7_layer(s: &str) -> Option<Layer> {
     let n: u8 = s.strip_prefix("MECHANICAL")?.parse().ok()?;

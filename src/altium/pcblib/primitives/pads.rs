@@ -80,12 +80,12 @@ pub struct Pad {
 
     /// Slot length in mm for a `Slot` hole — size/shape block i32 @263.
     /// Only meaningful when `hole_shape` is `Slot`. Default 0.0 (matches the
-    /// value the writer previously hard-coded).
+    /// value the writer emits by default).
     #[serde(default, serialize_with = "crate::altium::serde_round::serialize")]
     pub hole_slot_length: f64,
 
     /// Hole rotation in degrees — size/shape block f64 @267. Rotates a slot hole.
-    /// Default 0.0 (matches the value the writer previously hard-coded).
+    /// Default 0.0 (matches the value the writer emits by default).
     #[serde(default, serialize_with = "crate::altium::serde_round::serialize")]
     pub hole_rotation: f64,
 

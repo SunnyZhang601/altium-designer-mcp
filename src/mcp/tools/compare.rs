@@ -1577,8 +1577,8 @@ mod tests {
     #[test]
     fn duplicate_pad_designators_all_occurrences_compared() {
         // Two same-designator pads per side (a legal thermal-pad split); the
-        // second occurrence differs. The old HashMap indexing collapsed the
-        // group to its last member and could report nothing.
+        // second occurrence differs. HashMap indexing would collapse the
+        // group to its last member and report nothing.
         let pads_a = [
             Pad::smd("9", 0.0, 0.0, 1.0, 1.0),
             Pad::smd("9", 2.0, 0.0, 1.0, 1.0),

@@ -102,7 +102,7 @@ impl PcbLib {
                     });
                 }
                 // Already embedded, and either the filepath is a bare model name
-                // (from a prior read) or it no longer points at a file — keep the
+                // (from a prior read) or it does not point at a file — keep the
                 // existing ComponentBody as-is.
                 (true, false, _) | (true, _, false) => {
                     tracing::trace!(
@@ -115,7 +115,7 @@ impl PcbLib {
                 // Already embedded but the user pointed at a new explicit path that
                 // exists — re-embed. Drop the old ComponentBodies AND the models
                 // they referenced, so the latter don't linger in self.models as
-                // orphans (which previously bloated the library on every save).
+                // orphans, which would bloat the library on every save.
                 (true, true, true) => {
                     tracing::debug!(
                         footprint = %footprint.name,

@@ -54,6 +54,81 @@ ground truth the reader and round-trip tests validate against. See
 > `footprints.PcbLib`, `symbols.SchLib`, and the `embed.bmp` image the symbols embed; it grows
 > with each authoring-script extension.
 
+## Caveats
+
+Hard-won behaviour of Altium, DelphiScript and Windows PowerShell 5.1. Each cost real
+debugging time here; several made a *correct* change look broken, which is the expensive
+kind. Read this before writing or trusting a script in this folder.
+
+### DelphiScript truncates any codepoint above 255
+
+`Chr(N)` for `N > 255` wraps modulo 256, so `Chr(937)` (Greek `Ω`) yields byte 169 (`©`)
+and `Chr(20013)` (CJK 中) yields 45 (`-`). Non-Windows-1252 text is therefore **not
+authorable with `Chr`**.
+
+A **literal** in the `.pas` does work — `GenerateSamples.pas` is UTF-8 and authors
+`Comp.Name := 'Резистор'` correctly. Use a literal, never `Chr`, for non-Latin text.
+
+### DelphiScript flattens non-ANSI strings when concatenating
+
+Building a response by string concatenation turns any non-ANSI character into `?`. This
+made the bridge destroy exactly what it was measuring: a correct library was reported as
+`????????` and looked like a failure in the code under test.
+
+`AltiumVerify.pas` therefore emits `\uXXXX` escapes from `Ord()` rather than embedding
+characters directly. **Any new script that reports text through the bridge must do the
+same**, or its results cannot be trusted for anything outside ASCII.
+
+### Altium's PCB scripting API returns names in their on-wire form
+
+For a footprint whose name is outside Windows-1252, `IPCB_LibComponent.Name` returns the
+name's UTF-8 bytes carried one char per byte (`Резистор_0402` comes back as
+`Đ ĐµĐ·Đ¸ŃŃ‚ĐľŃ€_0402`), not the true string. This is **not** a defect in the file being
+read: asking Altium for the names in its own authored `samples/footprints.PcbLib` returns
+the identical string.
+
+So a name comparison must accept that form. Decoding it back requires the **system ANSI
+code page** (`[System.Text.Encoding]::Default`), not 1252 — the widening happens through
+whatever ANSI page the machine runs, which on a non-Western install is not 1252.
+
+`ISch_Component.LibReference` does not share this; symbol names come back as the true
+string.
+
+### Regenerating the samples changes values that tests assert
+
+`Generate-Samples.ps1` re-authors both libraries from scratch, so Altium mints fresh
+identifiers each run. After regenerating, expect to update:
+
+- the **`EMBSTEP` model GUID** in `tests/samples_pcblib.rs` — a new GUID every time;
+- **component counts and name lists**, when the authoring script gains a symbol or
+  footprint.
+
+`UniqueID` values in the SchLib round-trip expectations are deliberately **normalised** to
+`<UID>` rather than asserted literally, precisely so a routine regeneration does not
+require hand-copying random letters. Prefer that pattern for anything else Altium
+regenerates.
+
+### Windows PowerShell 5.1 traps
+
+The scripts here target 5.1 (the shell Altium boxes have), which has three sharp edges:
+
+- **A `.ps1` containing non-ASCII needs a UTF-8 BOM.** Without one, 5.1 reads the file as
+  ANSI and mangles the script's own string literals, usually as a parse error far from the
+  real cause.
+- **Never `2>&1` a native executable.** Redirecting stderr wraps each line in an
+  `ErrorRecord`, so `$ErrorActionPreference = 'Stop'` treats a clean `cargo build` (exit 0
+  with warnings) as a failure.
+- **`Set-Content -Encoding utf8` writes a BOM.** A BOM at the start of a JSON config makes
+  the server's parser reject the file. Use
+  `[System.IO.File]::WriteAllText($path, $text, (New-Object System.Text.UTF8Encoding $false))`.
+
+### A modal dialog blocks the bridge
+
+A genuinely corrupt library can make Altium raise a modal "catastrophic failure" dialog,
+which the `try/except` in a script cannot catch. The wrapper then times out waiting for the
+response file — which is itself the signal that the file did not open. Do not read a
+timeout as a harness bug without checking the Altium window first.
+
 ## References
 
 Working on the DelphiScript automation in [`altium/`](altium/)? Altium's official scripting docs:

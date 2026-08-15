@@ -750,6 +750,34 @@ begin
         // A second, plain SMD pad so the first can be compared against a default.
         AddPadFull(Comp, 40, 0, 0, eRectangular, 60, 40, '2');
 
+        // Pad 3: solder-mask expansion measured from the HOLE edge rather than the pad
+        // edge. AltiumSharp reads this as a boolean (via SubRecord-1 @258); the name is
+        // in the Advpcb.dll RTTI but with no Set* counterpart, so the pad cache is the
+        // candidate route — the same record the mask expansions above go through.
+        // One unknown identifier this run.
+        Pad := PCBServer.PCBObjectFactory(ePadObject, eNoDimension, eCreate_Default);
+        if Pad <> nil then
+        begin
+            Pad.Name     := '3';
+            Pad.X        := MilsToCoord(0);
+            Pad.Y        := MilsToCoord(60);
+            Pad.TopXSize := MilsToCoord(70);
+            Pad.TopYSize := MilsToCoord(70);
+            Pad.TopShape := eRounded;
+            Pad.HoleSize := MilsToCoord(40);
+            Pad.Layer    := eMultiLayer;
+
+            Cache := Pad.GetState_Cache;
+            Cache.SolderMaskExpansionValid := eCacheManual;
+            Cache.SolderMaskExpansion      := MilsToCoord(5);
+            Pad.SetState_Cache             := Cache;
+            Pad.SolderMaskExpansionFromHoleEdge := True;
+
+            Comp.AddPCBObject(Pad);
+            PCBServer.SendMessageToRobots(Comp.I_ObjectAddress, c_Broadcast,
+                                          PCBM_BoardRegisteration, Pad.I_ObjectAddress);
+        end;
+
         PCBServer.PostProcess;
     except
     end;
@@ -883,6 +911,19 @@ begin
             PCBServer.SendMessageToRobots(Comp.I_ObjectAddress, c_Broadcast,
                                           PCBM_BoardRegisteration, Pad.I_ObjectAddress);
         end;
+
+        // DOCUMENTED NEGATIVE (do not retry): none of the remaining fabrication flags
+        // is stored on a library pad.
+        //
+        // TearDrop and UserRouted are the only two AD24 exposes as settable (each has
+        // a Set* counterpart in the Advpcb.dll RTTI). Both author without error — the
+        // script compiles and the pads appear — but the saved flag word comes back as
+        // a plain 0x000C, exactly like an untouched pad, where the fabrication test
+        // points above give 0x0080 / 0x0100. The two pads were removed again.
+        //
+        // IsBackDrill, IsCounterHole and IsPreRoute have no Set* counterpart at all:
+        // they are derived board state (layer-stack backdrills, counter-hole params,
+        // routing) rather than per-pad properties, so there is nothing to author.
 
         // A keepout track, the second bit of the same word on the same primitive.
         Trk := PCBServer.PCBObjectFactory(eTrackObject, eNoDimension, eCreate_Default);

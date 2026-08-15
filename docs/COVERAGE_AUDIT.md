@@ -55,12 +55,8 @@ leads and the fixture follows.
   and feeds test-point identification.
 - **[gap | read]** `DrillType` (0=Simple, 1=Pressfit) — `AltiumSharp` `PcbPad.DrillType`
   separates a plated drilled hole from a press-fit one. Meaningful for connectors.
-- **[gap | read]** Fabrication flags: `IsBackdrill`, `TearDrop`, `UserRouted`,
-  `IsCounterHole`, `IsPreRoute` — the rest of the same flag family, equally unmodelled.
-- **[gap | read]** `SolderMaskExpansionFromHoleEdge` (+ `…WithRule`) on Pad, and the same
-  byte on Via at `SubRecord-1` offset 258 — controls whether mask expansion is measured
-  from the hole edge instead of the pad edge. Changes real mask geometry on through-hole
-  pads.
+- **[gap | read]** `SolderMaskExpansionFromHoleEdge` on **Via** (`SubRecord-1` offset 258)
+  — the Pad equivalent ships (main-block bool @125); the Via byte is still unread.
 - **[gap | read]** `DrillLayerPairType` (Via `SubRecord-1` offset 312) — `AltiumSharp`
   reads `B(312)` (0=Through, 1=BlindBuriedStart, 2=Mid, 3=End). We infer span from
   `from_layer` / `to_layer` and have no explicit drill-pair type, so the blind/buried
@@ -121,13 +117,12 @@ One genuine gap remains in this group:
 
 Rough value order, highest first:
 
-1. **Fabrication flags** (backdrill, teardrop, user-routed, counter-hole, pre-route) — the
-   only group here a fabricator reads directly. Test points shipped; these share the word.
-2. **`SolderMaskExpansionFromHoleEdge`** — changes mask geometry on through-hole pads.
-3. **Region / ComponentBody param passthrough** — closes an open-ended class rather than
-   one field.
-4. **SchLib Parameter display properties** — four fields, one record, one fixture.
-5. **`DrillLayerPairType`, `DrillType`** — classification metadata for blind/buried and
+1. **Region / ComponentBody param passthrough** — closes an open-ended class of silent
+   loss rather than one field, including keys nobody has catalogued yet.
+2. **SchLib Parameter display properties** — four fields, one record, one fixture.
+3. **`DrillLayerPairType`, `DrillType`** — classification metadata for blind/buried and
    press-fit.
-6. **Barcode sizing block** — ten keys, one primitive, rarely used.
-7. **`model_2d_location`, `JumperID`, per-layer stack arrays** — small and isolated.
+4. **Via `SolderMaskExpansionFromHoleEdge`** — the Pad half shipped; this is the
+   remaining byte.
+5. **Barcode sizing block** — ten keys, one primitive, rarely used.
+6. **`model_2d_location`, `JumperID`, per-layer stack arrays** — small and isolated.

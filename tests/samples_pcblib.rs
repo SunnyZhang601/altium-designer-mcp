@@ -1192,6 +1192,21 @@ fn samples_pcblib_padmask_expansions() {
         default_pad.paste_mask_expansion_mode,
         MaskExpansionMode::None
     );
+
+    // Pad 3 measures its solder-mask expansion from the hole edge (main-block bool
+    // @125). The offset was derived by diffing this pad against pad 1 byte by byte —
+    // every other difference between them is geometry — so pads 1 and 2 double as the
+    // controls that keep the flag from being read unconditionally.
+    assert!(
+        pad("3").solder_mask_expansion_from_hole_edge,
+        "pad 3 measures mask expansion from the hole edge"
+    );
+    for d in ["1", "2"] {
+        assert!(
+            !pad(d).solder_mask_expansion_from_hole_edge,
+            "pad {d} measures from the pad edge"
+        );
+    }
 }
 
 #[test]

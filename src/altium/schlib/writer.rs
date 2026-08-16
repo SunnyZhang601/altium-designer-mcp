@@ -1212,6 +1212,9 @@ fn encode_footprint_model(model: &FootprintModel, owner_index: usize, is_current
         .as_deref()
         .map(|p| format!("|ModelDatafile0={p}"))
         .unwrap_or_default();
+    // The read UniqueID is re-emitted verbatim (deterministic RMW); only a
+    // from-scratch model gets a fresh one.
+    let unique_id = model.unique_id.clone().unwrap_or_else(generate_unique_id);
     format!(
         "|RECORD=45|OwnerIndex={}|IndexInSheet=-1|Description={}|ModelName={}|ModelType=PCBLIB|DatafileCount=1{}|ModelDatafileEntity0={}|ModelDatafileKind0=PCBLib|IsCurrent={}|UniqueID={}",
         owner_index,
@@ -1220,7 +1223,7 @@ fn encode_footprint_model(model: &FootprintModel, owner_index: usize, is_current
         datafile,
         model.name,
         if is_current { "T" } else { "F" },
-        generate_unique_id()
+        unique_id
     )
 }
 
@@ -1343,13 +1346,23 @@ pub fn encode_data_stream(symbol: &Symbol) -> crate::altium::error::AltiumResult
     // model after the first).
     let impl_index = count_records(&data);
     write_text_record(&mut data, &encode_implementation_list())?;
+    // IsCurrent is the model's own read state, not its list position: a symbol
+    // whose current footprint is the second model must keep it there through a
+    // read-modify-write. Only when NO model claims currency (a from-scratch
+    // list, where the field defaults false) does the first model take it, which
+    // is what Altium's own editor does on the first assignment.
+    let has_current = symbol.footprints.iter().any(|m| m.is_current);
     for (i, model) in symbol.footprints.iter().enumerate() {
         // The RECORD=45 is owned by the RECORD=44; its RECORD=46/48 children are
         // in turn owned by the RECORD=45 (its own stream-index).
         let model_index = count_records(&data);
         write_text_record(
             &mut data,
-            &encode_footprint_model(model, impl_index, i == 0),
+            &encode_footprint_model(
+                model,
+                impl_index,
+                model.is_current || (!has_current && i == 0),
+            ),
         )?;
         write_text_record(&mut data, &encode_model_datafile_link(model_index))?;
         write_text_record(&mut data, &encode_implementation(model_index))?;

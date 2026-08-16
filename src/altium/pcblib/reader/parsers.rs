@@ -1,4 +1,24 @@
 //! `PcbLib` reader: per-primitive binary parsers (pad/via/track/arc/text/region/fill/component-body).
+//!
+//! # Truncation is caught per field, not by an upfront length guard
+//!
+//! Each parser reads its fields through bounds-checked accessors and reports the
+//! first one that runs off the end of the block, naming that field. There is no
+//! "block too short" pre-check, and deliberately so: a guard that asserted the
+//! block was long enough for every field made each read's own error arm
+//! unreachable, so the checks that actually protect the parse could never be
+//! exercised — and a reader whose error handling cannot be tested is a reader
+//! whose error handling is assumed rather than known.
+//!
+//! Rejection behaviour is unchanged: the same truncated blocks are still
+//! refused, and the message now names the field that could not be read instead
+//! of quoting a byte count the caller has to map back to a field themselves.
+//!
+//! The consequence for anyone editing a parser: **read every field through
+//! `read_*`, `.first()` or `.get()`**. A bare `block[n]` panics on a truncated
+//! block where the old guard would have returned an error. Length checks that
+//! are *data-driven* rather than constant — a vertex count or a parameter-string
+//! length read out of the block itself — are a different thing and stay.
 
 #[allow(clippy::wildcard_imports)] // tightly-coupled reader split
 use super::*;
@@ -90,19 +110,11 @@ pub(super) fn parse_pad(data: &[u8], offset: usize) -> ParseResult<Pad> {
         None
     };
 
-    // Parse geometry block
-    if geometry.len() < 52 {
-        return Err(AltiumError::parse_error(
-            offset,
-            format!(
-                "Pad geometry block too short: {} bytes, expected at least 52",
-                geometry.len()
-            ),
-        ));
-    }
-
-    // Common header (13 bytes)
-    let layer_id = geometry[0];
+    // Common header (13 bytes). The layer byte opens it, so an empty geometry
+    // block fails here.
+    let layer_id = *geometry
+        .first()
+        .ok_or_else(|| AltiumError::parse_error(offset, "failed to read Pad layer"))?;
     let layer = layer_from_id(layer_id);
     let flags = read_flags(geometry);
     // Common-header connectivity indices @3-8 (net/polygon/component).
@@ -132,21 +144,22 @@ pub(super) fn parse_pad(data: &[u8], offset: usize) -> ParseResult<Pad> {
     let width = size_top_x;
     let height = size_top_y;
 
-    // Hole size - offset 45
-    let hole_size = if geometry.len() > 48 {
-        read_i32(geometry, 45)
-            .map(to_mm)
-            .filter(|&hole| hole > 0.001)
-    } else {
-        None
-    };
+    // Hole size @45 and shape @49. Both are required: a land with no shape byte
+    // is not a pad, and defaulting it to a rounded rectangle with no drill would
+    // hand back a plausible-looking pad that solders to nothing. `None` still
+    // means "no hole" — an SMD land reads a zero here — but the bytes have to be
+    // present to say so.
+    let drill =
+        to_mm(read_i32(geometry, 45).ok_or_else(|| {
+            AltiumError::parse_error(offset + 45, "failed to read Pad hole size")
+        })?);
+    let hole_size = (drill > 0.001).then_some(drill);
 
-    // Shape - offset 49
-    let shape = if geometry.len() > 49 {
-        pad_shape_from_id(geometry[49])
-    } else {
-        PadShape::RoundedRectangle
-    };
+    let shape = pad_shape_from_id(
+        *geometry
+            .get(49)
+            .ok_or_else(|| AltiumError::parse_error(offset + 49, "failed to read Pad shape"))?,
+    );
 
     // Rotation - offset 52 (8-byte double)
     let rotation = if geometry.len() > 59 {
@@ -495,16 +508,6 @@ pub(super) fn parse_via(data: &[u8], offset: usize) -> ParseResult<Via> {
     let (block, next) = read_block(data, offset)
         .ok_or_else(|| AltiumError::parse_error(offset, "failed to read Via block"))?;
 
-    if block.len() < 31 {
-        return Err(AltiumError::parse_error(
-            offset,
-            format!(
-                "Via block too short: {} bytes, expected at least 31",
-                block.len()
-            ),
-        ));
-    }
-
     let x = to_mm(
         read_i32(block, 13)
             .ok_or_else(|| AltiumError::parse_error(offset + 13, "failed to read Via x"))?,
@@ -521,8 +524,18 @@ pub(super) fn parse_via(data: &[u8], offset: usize) -> ParseResult<Via> {
         to_mm(read_i32(block, 25).ok_or_else(|| {
             AltiumError::parse_error(offset + 25, "failed to read Via hole size")
         })?);
-    let from_layer = layer_from_id(block[29]);
-    let to_layer = layer_from_id(block[30]);
+    // The layer span is what makes a via a via: without both ends it stitches
+    // nothing, so a block that stops short of them is refused rather than
+    // defaulted to "layer 0 to layer 0".
+    let from_layer =
+        layer_from_id(*block.get(29).ok_or_else(|| {
+            AltiumError::parse_error(offset + 29, "failed to read Via from layer")
+        })?);
+    let to_layer = layer_from_id(
+        *block
+            .get(30)
+            .ok_or_else(|| AltiumError::parse_error(offset + 30, "failed to read Via to layer"))?,
+    );
 
     // Common-header flag word @1-2 (locked/keepout/tenting top+bottom). Tenting a
     // via is the highest-value property here — it covers the pad with solder mask.
@@ -632,18 +645,11 @@ pub(super) fn parse_track(data: &[u8], offset: usize) -> ParseResult<Track> {
     let (block, next) = read_block(data, offset)
         .ok_or_else(|| AltiumError::parse_error(offset, "failed to read Track block"))?;
 
-    if block.len() < 33 {
-        return Err(AltiumError::parse_error(
-            offset,
-            format!(
-                "Track block too short: {} bytes, expected at least 33",
-                block.len()
-            ),
-        ));
-    }
-
-    // Common header (13 bytes)
-    let layer_id = block[0];
+    // Common header (13 bytes). The layer byte opens it, so an empty block
+    // fails here.
+    let layer_id = *block
+        .first()
+        .ok_or_else(|| AltiumError::parse_error(offset, "failed to read Track layer"))?;
     let layer = layer_from_id(layer_id);
     let flags = read_flags(block);
     // Common-header connectivity indices @3-8 (net/polygon/component).
@@ -704,18 +710,11 @@ pub(super) fn parse_arc(data: &[u8], offset: usize) -> ParseResult<Arc> {
     let (block, next) = read_block(data, offset)
         .ok_or_else(|| AltiumError::parse_error(offset, "failed to read Arc block"))?;
 
-    if block.len() < 45 {
-        return Err(AltiumError::parse_error(
-            offset,
-            format!(
-                "Arc block too short: {} bytes, expected at least 45",
-                block.len()
-            ),
-        ));
-    }
-
-    // Common header (13 bytes)
-    let layer_id = block[0];
+    // Common header (13 bytes). The layer byte opens it, so an empty block
+    // fails here.
+    let layer_id = *block
+        .first()
+        .ok_or_else(|| AltiumError::parse_error(offset, "failed to read Arc layer"))?;
     let layer = layer_from_id(layer_id);
     let flags = read_flags(block);
     // Common-header connectivity indices @3-8 (net/polygon/component).
@@ -804,18 +803,12 @@ pub(super) fn parse_text(
     let (geometry_block, mut current) = read_block(data, offset)
         .ok_or_else(|| AltiumError::parse_error(offset, "failed to read Text geometry block"))?;
 
-    if geometry_block.len() < 25 {
-        return Err(AltiumError::parse_error(
-            offset,
-            format!(
-                "Text geometry block too short: {} bytes, expected at least 25",
-                geometry_block.len()
-            ),
-        ));
-    }
-
     // Common header (13 bytes): layer at 0, Altium flag word at offsets 1-2.
-    let layer_id = geometry_block[0];
+    // Common header (13 bytes). The layer byte opens it, so an empty geometry
+    // block fails here.
+    let layer_id = *geometry_block
+        .first()
+        .ok_or_else(|| AltiumError::parse_error(offset, "failed to read Text layer"))?;
     let layer = layer_from_id(layer_id);
     // Decode the lock/tenting/keepout flag word like every other primitive does,
     // rather than discarding it (the write side already encodes these correctly).
@@ -1206,19 +1199,12 @@ pub(super) fn parse_region(data: &[u8], offset: usize) -> ParseResult<Region> {
         AltiumError::parse_error(offset, "failed to read Region properties block")
     })?;
 
-    if props_block.len() < 22 {
-        return Err(AltiumError::parse_error(
-            offset,
-            format!(
-                "Region properties block too short: {} bytes, expected at least 22",
-                props_block.len()
-            ),
-        ));
-    }
-
     // Common header (13 bytes): @0 layer, @1-2 flags, @3-4 net index (u16),
     // @5-6 polygon index (u16), @7-8 component index (u16, 0xFFFF -> -1), @9-12 reserved.
-    let layer_id = props_block[0];
+    // The layer byte opens it, so an empty properties block fails here.
+    let layer_id = *props_block
+        .first()
+        .ok_or_else(|| AltiumError::parse_error(offset, "failed to read Region layer"))?;
     let layer = layer_from_id(layer_id);
     let flags = read_flags(props_block);
     let (net_index, polygon_index, component_index) = read_common_indices(props_block);
@@ -1389,19 +1375,11 @@ pub(super) fn parse_fill(data: &[u8], offset: usize) -> ParseResult<Fill> {
     let (block, current) = read_block(data, offset)
         .ok_or_else(|| AltiumError::parse_error(offset, "failed to read Fill block"))?;
 
-    // Minimum size: 13 (header) + 16 (coordinates) + 8 (rotation) = 37 bytes
-    if block.len() < 37 {
-        return Err(AltiumError::parse_error(
-            offset,
-            format!(
-                "Fill block too short: {} bytes, expected at least 37",
-                block.len()
-            ),
-        ));
-    }
-
-    // Common header (13 bytes)
-    let layer_id = block[0];
+    // Common header (13 bytes). The layer byte opens it, so an empty block
+    // fails here.
+    let layer_id = *block
+        .first()
+        .ok_or_else(|| AltiumError::parse_error(offset, "failed to read Fill layer"))?;
     let layer = layer_from_id(layer_id);
     let flags = read_flags(block);
     // Common-header connectivity indices @3-8 (net/polygon/component).
@@ -1456,6 +1434,53 @@ pub(super) fn parse_fill(data: &[u8], offset: usize) -> ParseResult<Fill> {
 /// A `ComponentBody` is a single size-prefixed block (matching `AltiumSharp` and
 /// the `BODY_3D` golden libraries): the layer/flags header, a C-string
 /// parameter block, then the 2D outline polygon — all within the one block.
+/// The body's decoded `IDENTIFIER` plus its four verbatim texture values
+/// (centre X/Y, size X/Y). IDENTIFIER is a comma-separated list of decimal
+/// Unicode code points (settled by `manual/identifier.PcbLib`: `µΩ电` =
+/// `181,937,30005`), decoded here and re-encoded symmetrically by the writer.
+/// The texture values round-trip verbatim: the UI writes
+/// `TEXTURESIZEX=0.0001mil` where a scripted body carries `0mil`, so they
+/// cannot be derived; `None` (absent key) lets the writer emit the
+/// scripted-body default.
+fn parse_body_identity_params(
+    params: &std::collections::HashMap<String, String>,
+) -> (String, [Option<String>; 4]) {
+    let identifier = params
+        .get("IDENTIFIER")
+        .map(|v| decode_identifier(v))
+        .unwrap_or_default();
+    let texture = |key: &str| params.get(key).cloned();
+    (
+        identifier,
+        [
+            texture("TEXTURECENTERX"),
+            texture("TEXTURECENTERY"),
+            texture("TEXTURESIZEX"),
+            texture("TEXTURESIZEY"),
+        ],
+    )
+}
+
+/// Decodes an `IDENTIFIER` value — comma-separated decimal Unicode code
+/// points — into the string it names. Empty input or any unparsable entry
+/// yields an empty identifier (never a half-decoded one).
+fn decode_identifier(value: &str) -> String {
+    if value.is_empty() {
+        return String::new();
+    }
+    value
+        .split(',')
+        .map(|part| {
+            part.trim()
+                .parse::<u32>()
+                .ok()
+                .and_then(char::from_u32)
+                .ok_or(())
+        })
+        .collect::<Result<String, ()>>()
+        .unwrap_or_default()
+}
+
 /// The `MODEL.CHECKSUM` value, round-tripped verbatim (0 when absent).
 fn parse_model_checksum(params: &std::collections::HashMap<String, String>) -> i64 {
     params
@@ -1464,6 +1489,7 @@ fn parse_model_checksum(params: &std::collections::HashMap<String, String>) -> i
         .unwrap_or(0)
 }
 
+#[allow(clippy::too_many_lines)] // one straight-line read per body field, like encode_data_stream
 pub(super) fn parse_component_body(data: &[u8], offset: usize) -> ParseResult<ComponentBody> {
     // The single block holds the header, parameters and outline.
     let (block0, current) = read_block(data, offset).ok_or_else(|| {
@@ -1505,15 +1531,17 @@ pub(super) fn parse_component_body(data: &[u8], offset: usize) -> ParseResult<Co
             .and_then(|v| v.parse::<f64>().ok())
             .unwrap_or(0.0)
     };
-    let rotation_x = rotation("MODEL.3D.ROTX");
-    let rotation_y = rotation("MODEL.3D.ROTY");
-    let rotation_z = rotation("MODEL.3D.ROTZ");
+    let [rotation_x, rotation_y, rotation_z] =
+        ["MODEL.3D.ROTX", "MODEL.3D.ROTY", "MODEL.3D.ROTZ"].map(rotation);
 
     let height = |key: &str| parse_mil_value(params.get(key).map(String::as_str));
-    let z_offset = height("MODEL.3D.DZ");
-    let standoff_height = height("STANDOFFHEIGHT");
-    let cavity_height = height("CAVITYHEIGHT");
-    let overall_height = height("OVERALLHEIGHT");
+    let [z_offset, standoff_height, cavity_height, overall_height] = [
+        "MODEL.3D.DZ",
+        "STANDOFFHEIGHT",
+        "CAVITYHEIGHT",
+        "OVERALLHEIGHT",
+    ]
+    .map(height);
 
     // MODEL.CHECKSUM is a plain integer. Round-trip it verbatim
     // (0 = default/valid) — it is not recomputed from the model bytes here.
@@ -1578,7 +1606,14 @@ pub(super) fn parse_component_body(data: &[u8], offset: usize) -> ParseResult<Co
     let model_2d_x = parse_mil_value(params.get("MODEL.2D.X").map(String::as_str));
     let model_2d_y = parse_mil_value(params.get("MODEL.2D.Y").map(String::as_str));
 
+    let (identifier, textures) = parse_body_identity_params(&params);
+
     let body = ComponentBody {
+        identifier,
+        texture_center_x: textures[0].clone(),
+        texture_center_y: textures[1].clone(),
+        texture_size_x: textures[2].clone(),
+        texture_size_y: textures[3].clone(),
         model_id,
         model_name,
         embedded,
@@ -1912,17 +1947,50 @@ mod tests {
     // -------------------------------------------------------------------------
 
     #[test]
-    fn pad_geometry_block_shorter_than_52_bytes_is_rejected() {
+    fn pad_geometry_missing_a_named_field_is_rejected_by_that_field() {
         // A truncated pad record must fail loudly. Accepted silently, its size
         // and hole bytes would read as zeros and the footprint would load with a
         // 0 x 0 mm land — a pad that solders to nothing, with no error anywhere
         // to explain why the assembled board is open-circuit.
-        let data = pad_record(&[0_u8; 51], None);
-        let err = parse_pad(&data, 0).unwrap_err();
-        assert!(
-            err.to_string().contains("Pad geometry block too short"),
-            "unexpected error: {err}"
-        );
+        //
+        // Each field is refused by name, so the message says which byte range
+        // was missing rather than quoting a total the reader has to map back.
+        for (len, expected) in [
+            (0, "failed to read Pad layer"),
+            (14, "failed to read Pad x coordinate"),
+            (18, "failed to read Pad y coordinate"),
+            (22, "failed to read Pad width"),
+            (26, "failed to read Pad height"),
+            (46, "failed to read Pad hole size"),
+            (49, "failed to read Pad shape"),
+        ] {
+            let data = pad_record(&vec![0_u8; len], None);
+            let err = parse_pad(&data, 0).unwrap_err();
+            assert!(
+                err.to_string().contains(expected),
+                "{len} bytes: expected {expected:?}, got: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_pad_is_accepted_once_every_named_field_is_present() {
+        // The boundary is now the last named field (shape @49) rather than the
+        // old hand-picked 52, which sat two bytes past anything the parser
+        // reads. A 50-byte block carries a complete pad — position, size, hole
+        // and shape — so it is parsed, with the optional tail taking its
+        // template defaults.
+        let mut geometry = vec![0_u8; 50];
+        write_common_header(&mut geometry, 33);
+        geometry[21..25].copy_from_slice(&400_000_i32.to_le_bytes());
+        geometry[25..29].copy_from_slice(&300_000_i32.to_le_bytes());
+        geometry[49] = 2; // Rectangle
+
+        let (pad, _) = parse_pad(&pad_record(&geometry, None), 0).expect("50 bytes is a whole pad");
+        assert!((pad.width - 1.016).abs() < 1e-6, "{}", pad.width);
+        assert_eq!(pad.shape, PadShape::Rectangle);
+        assert_eq!(pad.hole_size, None, "a zero drill means an SMD land");
+        assert!((pad.rotation - 0.0).abs() < f64::EPSILON);
     }
 
     #[test]
@@ -2146,16 +2214,25 @@ mod tests {
     // -------------------------------------------------------------------------
 
     #[test]
-    fn via_block_shorter_than_31_bytes_is_rejected() {
+    fn via_missing_a_named_field_is_rejected_by_that_field() {
         // Below 31 bytes the from/to layer bytes are missing. Accepted silently,
         // the via would span "layer 0 to layer 0" — a via that stitches nothing,
         // leaving the net it was placed for open on the finished board.
-        let data = block(&[0_u8; 30]);
-        let err = parse_via(&data, 0).unwrap_err();
-        assert!(
-            err.to_string().contains("Via block too short"),
-            "unexpected error: {err}"
-        );
+        for (len, expected) in [
+            (14, "failed to read Via x"),
+            (18, "failed to read Via y"),
+            (22, "failed to read Via diameter"),
+            (26, "failed to read Via hole size"),
+            (29, "failed to read Via from layer"),
+            (30, "failed to read Via to layer"),
+        ] {
+            let data = block(&vec![0_u8; len]);
+            let err = parse_via(&data, 0).unwrap_err();
+            assert!(
+                err.to_string().contains(expected),
+                "{len} bytes: expected {expected:?}, got: {err}"
+            );
+        }
     }
 
     #[test]
@@ -2244,16 +2321,25 @@ mod tests {
     // -------------------------------------------------------------------------
 
     #[test]
-    fn track_block_shorter_than_33_bytes_is_rejected() {
+    fn track_missing_a_named_field_is_rejected_by_that_field() {
         // Below 33 bytes the width field is missing. A silently-accepted track
         // would be 0 mm wide: invisible in the library editor and absent from
         // the Gerber output, even though the footprint "loaded fine".
-        let data = block(&[0_u8; 32]);
-        let err = parse_track(&data, 0).unwrap_err();
-        assert!(
-            err.to_string().contains("Track block too short"),
-            "unexpected error: {err}"
-        );
+        for (len, expected) in [
+            (0, "failed to read Track layer"),
+            (14, "failed to read Track x1 coordinate"),
+            (18, "failed to read Track y1 coordinate"),
+            (22, "failed to read Track x2 coordinate"),
+            (26, "failed to read Track y2 coordinate"),
+            (32, "failed to read Track width"),
+        ] {
+            let data = block(&vec![0_u8; len]);
+            let err = parse_track(&data, 0).unwrap_err();
+            assert!(
+                err.to_string().contains(expected),
+                "{len} bytes: expected {expected:?}, got: {err}"
+            );
+        }
     }
 
     #[test]
@@ -2280,16 +2366,28 @@ mod tests {
     }
 
     #[test]
-    fn arc_block_shorter_than_45_bytes_is_rejected() {
+    fn arc_missing_a_named_field_is_rejected_by_that_field() {
         // Below 45 bytes the width at @41 is missing, so a silently-accepted arc
         // draws with zero width — a courtyard or polarity arc that disappears
         // from the silkscreen without any load error.
-        let data = block(&[0_u8; 44]);
-        let err = parse_arc(&data, 0).unwrap_err();
-        assert!(
-            err.to_string().contains("Arc block too short"),
-            "unexpected error: {err}"
-        );
+        // The two angle doubles at @25 and @33 are not in this list on purpose:
+        // they carry `unwrap_or` defaults (0 and 360, i.e. a full circle) rather
+        // than failing, and the required width at @41 sits past both, so any
+        // block long enough to reach the width has already supplied them.
+        for (len, expected) in [
+            (0, "failed to read Arc layer"),
+            (14, "failed to read Arc x coordinate"),
+            (18, "failed to read Arc y coordinate"),
+            (22, "failed to read Arc radius"),
+            (44, "failed to read Arc width"),
+        ] {
+            let data = block(&vec![0_u8; len]);
+            let err = parse_arc(&data, 0).unwrap_err();
+            assert!(
+                err.to_string().contains(expected),
+                "{len} bytes: expected {expected:?}, got: {err}"
+            );
+        }
     }
 
     #[test]
@@ -2315,17 +2413,26 @@ mod tests {
     }
 
     #[test]
-    fn fill_block_shorter_than_37_bytes_is_rejected() {
+    fn fill_missing_a_named_field_is_rejected_by_that_field() {
         // Below 37 bytes the rotation double at @29 is missing. A silently
         // accepted fill would be un-rotated: a rotated copper or keepout
         // rectangle would land axis-aligned, covering a different set of pads
         // than the designer drew.
-        let data = block(&[0_u8; 36]);
-        let err = parse_fill(&data, 0).unwrap_err();
-        assert!(
-            err.to_string().contains("Fill block too short"),
-            "unexpected error: {err}"
-        );
+        for (len, expected) in [
+            (0, "failed to read Fill layer"),
+            (14, "failed to read Fill x1 coordinate"),
+            (18, "failed to read Fill y1 coordinate"),
+            (22, "failed to read Fill x2 coordinate"),
+            (26, "failed to read Fill y2 coordinate"),
+            (36, "failed to read Fill rotation"),
+        ] {
+            let data = block(&vec![0_u8; len]);
+            let err = parse_fill(&data, 0).unwrap_err();
+            assert!(
+                err.to_string().contains(expected),
+                "{len} bytes: expected {expected:?}, got: {err}"
+            );
+        }
     }
 
     // -------------------------------------------------------------------------
@@ -2333,16 +2440,23 @@ mod tests {
     // -------------------------------------------------------------------------
 
     #[test]
-    fn text_geometry_block_shorter_than_25_bytes_is_rejected() {
+    fn text_missing_a_named_field_is_rejected_by_that_field() {
         // Below 25 bytes the text height at @21 is missing. A zero-height
         // silkscreen string is invisible in the editor and in the fab output,
         // so the part would ship with no designator or polarity marking.
-        let data = block(&[0_u8; 24]);
-        let err = parse_text(&data, 0, None).unwrap_err();
-        assert!(
-            err.to_string().contains("Text geometry block too short"),
-            "unexpected error: {err}"
-        );
+        for (len, expected) in [
+            (0, "failed to read Text layer"),
+            (14, "failed to read Text x coordinate"),
+            (18, "failed to read Text y coordinate"),
+            (24, "failed to read Text height"),
+        ] {
+            let data = block(&vec![0_u8; len]);
+            let err = parse_text(&data, 0, None).unwrap_err();
+            assert!(
+                err.to_string().contains(expected),
+                "{len} bytes: expected {expected:?}, got: {err}"
+            );
+        }
     }
 
     #[test]
@@ -2592,18 +2706,22 @@ mod tests {
     }
 
     #[test]
-    fn region_properties_block_shorter_than_22_bytes_is_rejected() {
+    fn region_missing_a_named_field_is_rejected_by_that_field() {
         // Below 22 bytes there is no parameter-length field, so the vertex
         // outline cannot be located at all. Accepting it would produce a region
         // with no vertices — a copper pour that silently disappears from the
         // footprint, leaving the net it fed unconnected.
-        let data = block(&[0_u8; 21]);
-        let err = parse_region(&data, 0).unwrap_err();
-        assert!(
-            err.to_string()
-                .contains("Region properties block too short"),
-            "unexpected error: {err}"
-        );
+        for (len, expected) in [
+            (0, "failed to read Region layer"),
+            (21, "failed to read Region parameter string length"),
+        ] {
+            let data = block(&vec![0_u8; len]);
+            let err = parse_region(&data, 0).unwrap_err();
+            assert!(
+                err.to_string().contains(expected),
+                "{len} bytes: expected {expected:?}, got: {err}"
+            );
+        }
     }
 
     #[test]

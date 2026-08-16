@@ -2045,3 +2045,119 @@ fn samples_pcblib_drill_tolerances() {
         assert_eq!(pad(d).hole_negative_tolerance, None, "pad {d}");
     }
 }
+
+/// The hand-authored `manual/identifier.PcbLib` (AD24 UI, 2026-08-16): one
+/// footprint, two extruded bodies whose `IDENTIFIER` values settle the on-disk
+/// encoding — comma-separated decimal Unicode code points (`µΩ电` =
+/// `181,937,30005`) — and whose `MODEL.*` groups prove a UI-authored extruded
+/// body carries a stable `MODELID`, real `MODEL.2D.X/Y` placement, and
+/// `MODEL.EXTRUDED.MINZ/MAXZ`, unlike the script-authored golden's bodies.
+///
+/// Bodies are matched by identifier, never by index: a twin-save experiment
+/// showed AD reorders bodies between saves of the same in-memory state.
+#[test]
+fn samples_manual_identifier_bodies_read_exactly() {
+    let lib = PcbLib::open(sample("manual/identifier.PcbLib"))
+        .expect("failed to open manual/identifier.PcbLib");
+    let fp = lib.get("BODY_IDENT").expect("BODY_IDENT footprint");
+    assert_eq!(fp.component_bodies.len(), 2, "two bodies");
+
+    let by_ident = |ident: &str| {
+        fp.component_bodies
+            .iter()
+            .find(|b| b.identifier == ident)
+            .unwrap_or_else(|| panic!("body {ident:?} not found"))
+    };
+
+    let ascii = by_ident("BodyA");
+    assert!(
+        approx_eq(ascii.overall_height, 1.0, 1e-4),
+        "BodyA is 1 mm tall"
+    );
+    let uni = by_ident("\u{00B5}\u{03A9}\u{7535}"); // µΩ电
+    assert!(
+        approx_eq(uni.overall_height, 0.5, 1e-4),
+        "µΩ电 is 0.5 mm tall"
+    );
+
+    for body in [ascii, uni] {
+        assert!(
+            body.model_id.starts_with('{') && body.model_id.len() == 38,
+            "a UI-authored extruded body carries a MODELID: {:?}",
+            body.model_id
+        );
+        assert_ne!(body.model_checksum, 0, "and a checksum");
+        assert_eq!(
+            body.texture_size_x.as_deref(),
+            Some("0.0001mil"),
+            "the UI's texture size is 0.0001mil, not the scripted 0mil"
+        );
+    }
+    // Real 2D placement, from dragging the bodies in the editor.
+    assert!(
+        approx_eq(uni.model_2d_x, -0.5715, 1e-4),
+        "µΩ电 MODEL.2D.X (-22.5 mil)"
+    );
+    assert!(
+        approx_eq(uni.model_2d_y, -2.159, 1e-4),
+        "µΩ电 MODEL.2D.Y (-85 mil)"
+    );
+    assert!(
+        approx_eq(ascii.model_2d_x, -1.905, 1e-4),
+        "BodyA MODEL.2D.X (-75 mil)"
+    );
+    assert!(
+        approx_eq(ascii.model_2d_y, 1.016, 1e-4),
+        "BodyA MODEL.2D.Y (40 mil)"
+    );
+}
+
+/// Every body field of the manual identifier fixture survives our own
+/// write -> read, including the fields only this fixture exercises.
+#[test]
+fn samples_manual_identifier_survives_a_write_read_cycle() {
+    use std::io::Cursor;
+
+    let mut lib =
+        PcbLib::open(sample("manual/identifier.PcbLib")).expect("open manual/identifier.PcbLib");
+    let mut buffer = Cursor::new(Vec::new());
+    lib.write(&mut buffer).expect("write");
+    buffer.set_position(0);
+    let reread = PcbLib::read(&mut buffer).expect("read back");
+
+    let before = lib.get("BODY_IDENT").expect("before");
+    let after = reread.get("BODY_IDENT").expect("after");
+    for b in &before.component_bodies {
+        let a = after
+            .component_bodies
+            .iter()
+            .find(|a| a.identifier == b.identifier)
+            .unwrap_or_else(|| panic!("body {:?} lost", b.identifier));
+        assert_eq!(a.model_id, b.model_id, "{}: MODELID", b.identifier);
+        assert_eq!(
+            a.model_checksum, b.model_checksum,
+            "{}: checksum",
+            b.identifier
+        );
+        assert_eq!(
+            a.texture_size_x, b.texture_size_x,
+            "{}: texture size",
+            b.identifier
+        );
+        assert!(
+            approx_eq(a.model_2d_x, b.model_2d_x, 1e-6),
+            "{}: 2D X",
+            b.identifier
+        );
+        assert!(
+            approx_eq(a.model_2d_y, b.model_2d_y, 1e-6),
+            "{}: 2D Y",
+            b.identifier
+        );
+        assert!(
+            approx_eq(a.overall_height, b.overall_height, 1e-6),
+            "{}: height",
+            b.identifier
+        );
+    }
+}

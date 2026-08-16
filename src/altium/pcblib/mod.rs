@@ -2111,6 +2111,11 @@ mod tests {
         // Add a ComponentBody with typical values and an explicit outline.
         let body = ComponentBody {
             model_id: "{TEST-GUID-1234-5678-ABCDEFGH}".to_string(),
+            identifier: String::new(),
+            texture_center_x: None,
+            texture_center_y: None,
+            texture_size_x: None,
+            texture_size_y: None,
             model_name: "TEST_MODEL.step".to_string(),
             embedded: true,
             rotation_x: 0.0,
@@ -2184,6 +2189,11 @@ mod tests {
         for i in 0..2 {
             fp.add_component_body(ComponentBody {
                 model_id: format!("{{GUID-{i}}}"),
+                identifier: String::new(),
+                texture_center_x: None,
+                texture_center_y: None,
+                texture_size_x: None,
+                texture_size_y: None,
                 model_name: format!("M{i}.step"),
                 embedded: true,
                 rotation_x: 0.0,

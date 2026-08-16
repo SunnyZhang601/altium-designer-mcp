@@ -770,7 +770,12 @@ impl McpServer {
                         // Preserve the full path for external references so organized subfolders work
                         use crate::altium::pcblib::{ComponentBody, Layer};
                         footprint.add_component_body(ComponentBody {
-                            model_id: String::new(),            // No GUID for external reference
+                            model_id: String::new(), // No GUID for external reference
+                            identifier: String::new(),
+                            texture_center_x: None,
+                            texture_center_y: None,
+                            texture_size_x: None,
+                            texture_size_y: None,
                             model_name: model_path.to_string(), // Preserve full path
                             embedded: false,
                             rotation_x: 0.0,
@@ -945,6 +950,11 @@ impl McpServer {
                 use crate::altium::pcblib::{ComponentBody, Layer};
                 footprint.add_component_body(ComponentBody {
                     model_id: String::new(),
+                    identifier: String::new(),
+                    texture_center_x: None,
+                    texture_center_y: None,
+                    texture_size_x: None,
+                    texture_size_y: None,
                     model_name: String::new(),
                     embedded: false,
                     rotation_x: 0.0,
@@ -2476,6 +2486,11 @@ mod tests {
         use crate::altium::pcblib::{ComponentBody, Footprint, Layer};
         let body = |h: f64, name: &str| ComponentBody {
             model_id: String::new(),
+            identifier: String::new(),
+            texture_center_x: None,
+            texture_center_y: None,
+            texture_size_x: None,
+            texture_size_y: None,
             model_name: name.to_string(),
             embedded: false,
             rotation_x: 0.0,

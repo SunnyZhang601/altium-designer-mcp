@@ -129,6 +129,11 @@ fn json_guid(json: &Value) -> Option<String> {
     json.get("guid").and_then(Value::as_str).map(str::to_string)
 }
 
+/// Reads an optional verbatim string field from a primitive's JSON.
+fn json_guidless_opt(json: &Value, key: &str) -> Option<String> {
+    json.get(key).and_then(Value::as_str).map(str::to_string)
+}
+
 /// Accepted pad-shape spellings, quoted in every shape error so the two tools
 /// give identical guidance.
 pub const PAD_SHAPE_HELP: &str = "Valid shapes are: rectangle, round (or circle), \
@@ -891,6 +896,11 @@ impl McpServer {
                 .to_string()
         };
         ComponentBody {
+            identifier: str_or("identifier", ""),
+            texture_center_x: json_guidless_opt(body_json, "texture_center_x"),
+            texture_center_y: json_guidless_opt(body_json, "texture_center_y"),
+            texture_size_x: json_guidless_opt(body_json, "texture_size_x"),
+            texture_size_y: json_guidless_opt(body_json, "texture_size_y"),
             model_id: str_or("model_id", ""),
             model_name: str_or("model_name", ""),
             embedded: body_json

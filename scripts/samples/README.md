@@ -42,6 +42,26 @@ rename the component by pasting the name, paste the description, place one pin
 and add a parameter `Value` with the word. Save ONCE as `i18n5.SchLib` and never re-open
 it in Altium (see the load+save warning above).
 
+### `manual/identifier.PcbLib`
+
+One footprint, `BODY_IDENT`, with two extruded 3D bodies authored in the AD24 UI
+(2026-08-16). It settles three things no scripted fixture could:
+
+- **`IDENTIFIER` encoding**: comma-separated decimal Unicode code points — `BodyA` is
+  `66,111,100,121,65` and `µΩ电` is `181,937,30005`.
+- **UI-authored extruded bodies carry a `MODEL.*` group** (stable `MODELID`, checksum, real
+  `MODEL.2D.X/Y` placement, `MODEL.MODELTYPE=0` + `MODEL.EXTRUDED.MINZ/MAXZ`, and
+  `TEXTURESIZEX/Y=0.0001mil`), unlike script-authored ones, which carry none.
+- **Per-save ID stability**: the library was saved twice from one unchanged in-memory state,
+  and the twin files differ only in `DATE`/`TIME`/viewport — `MODELID`, `MODEL.CHECKSUM`,
+  `ITEMGUID`, `REVISIONGUID` are stable, which is what let `golden_fidelity` stop excusing
+  them. (The twin also showed AD reorders bodies between saves — match bodies by identifier,
+  never index.)
+
+**To rebuild it:** new PCB Library; rename the component `BODY_IDENT`; place two extruded
+3D bodies (Place → 3D Body, type Extruded, draw a rectangle each); set Identifier `BodyA`
+with Overall Height 1mm on one and Identifier `µΩ电` with 0.5mm on the other; save ONCE.
+
 ### `manual/parameters.SchLib`
 
 One component, `PARAMPROPS`, carrying three `RECORD=41` parameters that between them cover

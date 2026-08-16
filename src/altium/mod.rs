@@ -186,18 +186,22 @@ pub fn from_wire_text(raw: &str) -> Option<String> {
 
 /// Generates a safe OLE storage name for a component.
 ///
-/// OLE Compound File names are limited to 31 characters. This function:
+/// OLE Compound File names are limited to 31 UTF-16 code units. This function:
 /// - Returns the name as-is if it fits within the limit
-/// - Truncates longer names and adds a unique suffix to avoid collisions
+/// - Plain-truncates a longer name to the limit, as Altium does — the
+///   `SectionKeys` stream carries the mapping back to the real name, so the
+///   storage name has to match Altium's or the mapping misses
+/// - Falls back to a `~NNN` suffix only when the truncation collides with a
+///   name already taken
 ///
 /// # Arguments
 ///
-/// * `name` - The full component name
+/// * `name` - The full component name (wire form)
 /// * `used_names` - Set of OLE names already in use (to avoid collisions)
 ///
 /// # Returns
 ///
-/// A safe OLE name (≤31 chars) that doesn't collide with existing names.
+/// A safe OLE name (≤31 units) that doesn't collide with existing names.
 #[must_use]
 pub fn generate_ole_name<S: BuildHasher>(name: &str, used_names: &HashSet<String, S>) -> String {
     // OLE/CFB storage names cannot contain the path separator '/'; a component
@@ -215,10 +219,20 @@ pub fn generate_ole_name<S: BuildHasher>(name: &str, used_names: &HashSet<String
         return name.to_string();
     }
 
-    // Truncate, leaving room for a "~NNN" suffix, measuring in UTF-16 units.
-    let prefix = truncate_utf16(name, MAX_OLE_NAME_LEN - SUFFIX_LEN);
+    // Altium's own rule: cut the name at the limit and record the mapping in
+    // `SectionKeys`. The golden's Sinhala symbol is cut mid-codepoint on disk,
+    // so the cut is on wire bytes with no regard for character boundaries; for
+    // a wire name (one byte per char) truncating by UTF-16 unit is the same
+    // cut, minus the ability to split a char in two.
+    let plain = truncate_utf16(name, MAX_OLE_NAME_LEN);
+    if !used_names.contains(&plain) {
+        return plain;
+    }
 
-    // Find a unique suffix
+    // Two names sharing their first 31 units: fall back to a "~NNN" suffix for
+    // the later one. Altium's behaviour here is unobserved; uniqueness matters
+    // more than matching it, and SectionKeys still maps the name back.
+    let prefix = truncate_utf16(name, MAX_OLE_NAME_LEN - SUFFIX_LEN);
     for i in 1..1000 {
         let candidate = format!("{prefix}~{i:03}");
         if !used_names.contains(&candidate) {
@@ -273,6 +287,78 @@ where
         out.push(ole);
     }
     out
+}
+
+/// Encodes the root `/SectionKeys` stream: the map from a component's real
+/// `LibRef` back to its truncated storage name.
+///
+/// Altium writes one entry per component whose name does not survive the
+/// 31-unit storage cap. Layout, pinned by the golden `SchLib` (`KeyCount=5`,
+/// one entry per over-cap name):
+///
+/// ```text
+/// [u32 len]["|KeyCount=N|%UTF8%LibRef0=…|||LibRef0=…|%UTF8%SectionKey0=…|||SectionKey0=…" + 0x00]
+/// ```
+///
+/// Values are wire strings (a non-Windows-1252 name is its raw UTF-8 bytes).
+/// A non-ASCII value gets a `%UTF8%` twin, written **before** the plain key and
+/// followed by two empty segments — the `|||` is Altium's own separator, kept
+/// so the stream matches theirs byte-for-byte given the same values. The twin
+/// carries the same bytes as the plain key: Altium builds its twin by decoding
+/// the UTF-8 bytes through the authoring machine's ANSI code page, which makes
+/// the golden's twin content a locale artefact (Windows-1250 there), not a
+/// format rule — identical bytes are correct on every machine and every reader
+/// recovers the same name from either key.
+///
+/// Returns `None` when no name was truncated, so no stream is written — the
+/// common case, and byte-identical to Altium's output for such a library.
+pub(crate) fn encode_section_keys(pairs: &[(String, String)]) -> Option<Vec<u8>> {
+    use std::fmt::Write as _;
+
+    if pairs.is_empty() {
+        return None;
+    }
+
+    let mut text = format!("|KeyCount={}", pairs.len());
+    let field = |key: &str, value: &str, out: &mut String| {
+        if value.is_ascii() {
+            let _ = write!(out, "|{key}={value}");
+        } else {
+            let _ = write!(out, "|%UTF8%{key}={value}|||{key}={value}");
+        }
+    };
+    for (i, (lib_ref, section_key)) in pairs.iter().enumerate() {
+        field(&format!("LibRef{i}"), lib_ref, &mut text);
+        field(&format!("SectionKey{i}"), section_key, &mut text);
+    }
+
+    let mut data = Vec::new();
+    framing::write_cstring_param_block(&mut data, &encode_windows1252(&text));
+    Some(data)
+}
+
+/// Parses a `/SectionKeys` stream into `(LibRef, SectionKey)` pairs, both in
+/// wire form. Inverse of [`encode_section_keys`]; the plain keys are read and
+/// the `%UTF8%` twins ignored, since the plain key already holds the raw UTF-8
+/// bytes and the twin's encoding depends on the locale that authored the file.
+pub(crate) fn parse_section_keys(data: &[u8]) -> Vec<(String, String)> {
+    let Some((block, _)) = framing::read_block(data, 0) else {
+        return Vec::new();
+    };
+    let text = decode_windows1252(block.strip_suffix(&[0x00]).unwrap_or(block));
+    let params = parse_pipe_params_raw(&text);
+
+    let count = params
+        .get("KeyCount")
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(0);
+    (0..count)
+        .filter_map(|i| {
+            let lib_ref = params.get(&format!("LibRef{i}"))?;
+            let section_key = params.get(&format!("SectionKey{i}"))?;
+            Some((lib_ref.clone(), section_key.clone()))
+        })
+        .collect()
 }
 
 /// Creates an Altium-mandated OLE v3 (512-byte sector) compound file.
@@ -534,12 +620,13 @@ mod tests {
 
     #[test]
     fn long_name_truncated() {
+        // Altium's rule: a plain cut at the limit, with SectionKeys carrying
+        // the mapping back; the ~NNN suffix appears only on a collision.
         let used = HashSet::new();
         let name = "VERY_LONG_COMPONENT_NAME_THAT_EXCEEDS_LIMIT";
         let result = generate_ole_name(name, &used);
-        assert!(result.len() <= MAX_OLE_NAME_LEN);
-        assert!(result.starts_with("VERY_LONG_COMPONENT_NAME_TH"));
-        assert!(result.contains('~'));
+        assert_eq!(result, "VERY_LONG_COMPONENT_NAME_THAT_E");
+        assert_eq!(result.len(), MAX_OLE_NAME_LEN);
     }
 
     #[test]
@@ -563,7 +650,9 @@ mod tests {
         // by byte-slicing inside a multi-byte char.
         let name = "\u{00B5}".repeat(32); // 'µ': 1 UTF-16 unit each, 32 > 31
         let prefix = "\u{00B5}".repeat(MAX_OLE_NAME_LEN - SUFFIX_LEN);
-        let used: HashSet<String> = (1..1000).map(|i| format!("{prefix}~{i:03}")).collect();
+        let mut used: HashSet<String> = (1..1000).map(|i| format!("{prefix}~{i:03}")).collect();
+        // Also occupy the plain 31-unit truncation so the suffix path runs.
+        used.insert("\u{00B5}".repeat(MAX_OLE_NAME_LEN));
         let result = generate_ole_name(&name, &used);
         assert!(result.encode_utf16().count() <= MAX_OLE_NAME_LEN);
         assert!(result.contains('~'));

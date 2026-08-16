@@ -15,12 +15,18 @@ golden, writes it back and diffs the OLE streams and every parameter block. Anyt
 still loses is listed in that test's `KNOWN_DEFECTS` and described here; the two lists are
 the same list, so an entry leaves both together.
 
-**`SectionKeys` is neither read nor written (`PcbLib`, `SchLib`).** Altium encodes a
-component's storage name as the UTF-8 bytes of its name, one byte per storage-name
-character, capped at the compound-file limit of 31 UTF-16 code units. Past that cap it
-writes a `SectionKeys` stream mapping the real `LibRef` back to the truncated name
-(`|KeyCount=N|%UTF8%LibRef0=…|||LibRef0=…|%UTF8%SectionKey0=…|…`). Without it a component
-with a long non-ASCII name keeps only its truncated storage name.
+**`PinWideText` is neither read nor written (`SchLib`).** Altium writes a per-symbol
+`PinWideText` stream when a pin's text leaves Windows-1252: the same container as the root
+icon `/Storage` stream (`[len]["|HEADER=PinWideText|Weight=1"+NUL]` then one zlib entry per
+pin, named by pin ordinal). We drop it on a read-modify-write. The golden carries 52 of
+them, one per i18n symbol.
+
+**Five i18n fixture symbols are internally inconsistent** (`_JV`, `_BN`, `_CR`, `_IU`,
+`_SB`): `DelphiScript` mangled their source literals, and the damage differs by location —
+the golden's CFB storage name folds to the *correct* word while the record inside stores a
+shifted string, so no self-consistent writer can reproduce both. The cure is regenerating
+these five with literals built from character codes (`Chr()`), not source text; needs an
+Altium run.
 
 **Identity streams are keyed by ordinal, not attached to the primitive (`PcbLib`).** A
 footprint's `PrimitiveGuids` records and its unique ids both name a primitive by its

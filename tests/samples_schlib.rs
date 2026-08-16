@@ -1705,3 +1705,86 @@ fn samples_schlib_manual_parameter_properties() {
     );
     assert!(rule.hidden, "the rule parameter is hidden");
 }
+
+/// The `SectionKeys` stream — the real-name -> truncated-storage-name map for
+/// components past the 31-unit cap — must survive a read-modify-write with the
+/// same pairs, and the truncated storage names must match Altium's plain cut.
+#[test]
+fn samples_schlib_section_keys_survive_a_read_modify_write() {
+    use std::io::{Cursor, Read as _};
+
+    /// `(LibRef, SectionKey)` pairs from a library's `/SectionKeys` stream, as
+    /// a set — entry numbering is Altium's iteration order, which we do not
+    /// promise to reproduce.
+    fn pairs(bytes: &[u8]) -> std::collections::BTreeSet<(String, String)> {
+        let mut cfb = cfb::CompoundFile::open(Cursor::new(bytes)).expect("parse OLE");
+        let mut data = Vec::new();
+        cfb.open_stream("/SectionKeys")
+            .expect("SectionKeys stream present")
+            .read_to_end(&mut data)
+            .expect("read SectionKeys");
+        // [u32 len][text + NUL]: split the pipe list, keep LibRefN/SectionKeyN.
+        let text: String = data[4..].iter().map(|&b| b as char).collect();
+        let text = text.trim_end_matches('\0');
+        let mut lib_refs = std::collections::BTreeMap::new();
+        let mut section_keys = std::collections::BTreeMap::new();
+        for part in text.split('|') {
+            let Some((key, value)) = part.split_once('=') else {
+                continue;
+            };
+            if let Some(n) = key.strip_prefix("LibRef") {
+                if let Ok(n) = n.parse::<usize>() {
+                    lib_refs.insert(n, value.to_string());
+                }
+            } else if let Some(n) = key.strip_prefix("SectionKey") {
+                if let Ok(n) = n.parse::<usize>() {
+                    section_keys.insert(n, value.to_string());
+                }
+            }
+        }
+        lib_refs
+            .into_iter()
+            .filter_map(|(n, lr)| section_keys.get(&n).map(|sk| (lr, sk.clone())))
+            .collect()
+    }
+
+    let golden = std::fs::read(sample("symbols.SchLib")).expect("read golden");
+    let golden_pairs = pairs(&golden);
+    assert_eq!(
+        golden_pairs.len(),
+        5,
+        "the golden truncates five names (Khmer, Malayalam, Thai, Sinhala, Lao)"
+    );
+    for (lib_ref, section_key) in &golden_pairs {
+        assert_eq!(
+            section_key.as_bytes(),
+            &lib_ref.as_bytes()[..section_key.len()],
+            "a SectionKey is its LibRef plain-cut at the storage cap"
+        );
+        // The pair strings hold one char per wire byte, so the cap is counted
+        // in chars, not in this string's own UTF-8 length.
+        assert!(section_key.chars().count() <= 31, "storage cap is 31 units");
+    }
+
+    let lib = SchLib::read(Cursor::new(golden.as_slice())).expect("read golden");
+    let mut rewritten = Cursor::new(Vec::new());
+    lib.write(&mut rewritten).expect("write the golden back");
+
+    // The Inuktitut fixture is one of the five DelphiScript-mangled symbols:
+    // its RECORD name (what any reader gets) is a 45-byte mangled string that
+    // needs truncating, while Altium's in-memory name was the real 9-unit word
+    // and needed no entry. Golden and rewrite legitimately disagree there, so
+    // the damaged fixtures are excluded and everything else must match.
+    let damaged = ["_JV", "_BN", "_CR", "_IU", "_SB"];
+    let clean = |set: std::collections::BTreeSet<(String, String)>| {
+        set.into_iter()
+            .filter(|(lr, _)| !damaged.iter().any(|d| lr.ends_with(d)))
+            .collect::<std::collections::BTreeSet<_>>()
+    };
+    assert_eq!(
+        clean(pairs(rewritten.get_ref())),
+        clean(golden_pairs),
+        "every LibRef -> SectionKey pair must come back; a changed pair breaks \
+         Altium's name resolution for that component"
+    );
+}

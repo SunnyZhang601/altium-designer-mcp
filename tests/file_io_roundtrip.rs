@@ -433,11 +433,14 @@ fn pcblib_non_ascii_description_is_windows1252() {
     );
 }
 
-/// The `SchLib` `FileHeader` (component description) must likewise be Windows-1252.
+/// A non-ASCII `SchLib` description is stored as its raw UTF-8 bytes with a
+/// `%UTF8%` twin — the same promotion every text field gets. The golden's
+/// `Résistance_L1` record settled the rule: AD promotes any non-ASCII value,
+/// even one (like `é` or `µ`) that Windows-1252 could hold in a single byte.
 #[test]
-fn schlib_non_ascii_description_is_windows1252() {
+fn schlib_non_ascii_description_promotes_to_utf8() {
     let temp_dir = test_temp_dir();
-    let file_path = temp_dir.path().join("test_win1252.SchLib");
+    let file_path = temp_dir.path().join("test_desc_utf8.SchLib");
 
     let mut lib = SchLib::new();
     let mut sym = Symbol::new("RES");
@@ -452,12 +455,16 @@ fn schlib_non_ascii_description_is_windows1252() {
 
     let raw = std::fs::read(&file_path).expect("read raw file");
     assert!(
-        contains_bytes(&raw, b"10\xb5F"),
-        "description should be Windows-1252 (0xB5 for µ)"
+        contains_bytes(&raw, b"10\xc2\xb5F"),
+        "description travels as raw UTF-8 bytes (0xC2 0xB5 for \u{00B5})"
     );
     assert!(
-        !contains_bytes(&raw, b"10\xc2\xb5F"),
-        "description must NOT be UTF-8 (0xC2 0xB5 for µ)"
+        contains_bytes(&raw, b"%UTF8%CompDescr0="),
+        "the FileHeader entry carries the %UTF8% twin"
+    );
+    assert!(
+        contains_bytes(&raw, b"%UTF8%ComponentDescription="),
+        "the RECORD=1 entry carries the %UTF8% twin"
     );
 }
 

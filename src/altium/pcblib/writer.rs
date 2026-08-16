@@ -2402,68 +2402,454 @@ mod tests {
             .contains("exceeds maximum of 255 bytes"));
     }
 
-    #[test]
-    fn test_layer_to_id() {
-        // Copper layers
-        assert_eq!(layer_to_id(Layer::TopLayer), 1);
-        assert_eq!(layer_to_id(Layer::BottomLayer), 32);
-        assert_eq!(layer_to_id(Layer::MultiLayer), 74);
-
-        // Mid layers (2-31)
-        assert_eq!(layer_to_id(Layer::MidLayer1), 2);
-        assert_eq!(layer_to_id(Layer::MidLayer2), 3);
-        assert_eq!(layer_to_id(Layer::MidLayer15), 16);
-        assert_eq!(layer_to_id(Layer::MidLayer30), 31);
-
-        // Silkscreen and mask layers
-        assert_eq!(layer_to_id(Layer::TopOverlay), 33);
-        assert_eq!(layer_to_id(Layer::BottomOverlay), 34);
-        assert_eq!(layer_to_id(Layer::TopPaste), 35);
-        assert_eq!(layer_to_id(Layer::BottomPaste), 36);
-        assert_eq!(layer_to_id(Layer::TopSolder), 37);
-        assert_eq!(layer_to_id(Layer::BottomSolder), 38);
-
+    /// Every `Layer` variant paired with the Altium layer id it must serialise to.
+    ///
+    /// The ids are Altium's own numbering, mirrored in the doc comment on each
+    /// [`Layer`] variant; this table pins the writer side of that mapping. It is
+    /// deliberately exhaustive rather than a sample: #282 was Mechanical 17-32
+    /// silently taking a fallback arm in code that already looked finished, and only
+    /// a full walk catches that class of bug.
+    const ALL_LAYERS: [(Layer, u8); 107] = [
+        // Signal: top, mid 1-30, bottom (ids 1-32)
+        (Layer::TopLayer, 1),
+        (Layer::MidLayer1, 2),
+        (Layer::MidLayer2, 3),
+        (Layer::MidLayer3, 4),
+        (Layer::MidLayer4, 5),
+        (Layer::MidLayer5, 6),
+        (Layer::MidLayer6, 7),
+        (Layer::MidLayer7, 8),
+        (Layer::MidLayer8, 9),
+        (Layer::MidLayer9, 10),
+        (Layer::MidLayer10, 11),
+        (Layer::MidLayer11, 12),
+        (Layer::MidLayer12, 13),
+        (Layer::MidLayer13, 14),
+        (Layer::MidLayer14, 15),
+        (Layer::MidLayer15, 16),
+        (Layer::MidLayer16, 17),
+        (Layer::MidLayer17, 18),
+        (Layer::MidLayer18, 19),
+        (Layer::MidLayer19, 20),
+        (Layer::MidLayer20, 21),
+        (Layer::MidLayer21, 22),
+        (Layer::MidLayer22, 23),
+        (Layer::MidLayer23, 24),
+        (Layer::MidLayer24, 25),
+        (Layer::MidLayer25, 26),
+        (Layer::MidLayer26, 27),
+        (Layer::MidLayer27, 28),
+        (Layer::MidLayer28, 29),
+        (Layer::MidLayer29, 30),
+        (Layer::MidLayer30, 31),
+        (Layer::BottomLayer, 32),
+        // Multi-layer (74) - where through-hole pads live
+        (Layer::MultiLayer, 74),
+        // Silkscreen, solder mask and paste (33-38)
+        (Layer::TopOverlay, 33),
+        (Layer::BottomOverlay, 34),
+        (Layer::TopPaste, 35),
+        (Layer::BottomPaste, 36),
+        (Layer::TopSolder, 37),
+        (Layer::BottomSolder, 38),
         // Internal planes (39-54)
-        assert_eq!(layer_to_id(Layer::InternalPlane1), 39);
-        assert_eq!(layer_to_id(Layer::InternalPlane2), 40);
-        assert_eq!(layer_to_id(Layer::InternalPlane16), 54);
+        (Layer::InternalPlane1, 39),
+        (Layer::InternalPlane2, 40),
+        (Layer::InternalPlane3, 41),
+        (Layer::InternalPlane4, 42),
+        (Layer::InternalPlane5, 43),
+        (Layer::InternalPlane6, 44),
+        (Layer::InternalPlane7, 45),
+        (Layer::InternalPlane8, 46),
+        (Layer::InternalPlane9, 47),
+        (Layer::InternalPlane10, 48),
+        (Layer::InternalPlane11, 49),
+        (Layer::InternalPlane12, 50),
+        (Layer::InternalPlane13, 51),
+        (Layer::InternalPlane14, 52),
+        (Layer::InternalPlane15, 53),
+        (Layer::InternalPlane16, 54),
+        // Drill and keep-out (55, 56, 73)
+        (Layer::DrillGuide, 55),
+        (Layer::KeepOut, 56),
+        (Layer::DrillDrawing, 73),
+        // Named component layers - aliases of Mechanical 2-7 (58-63)
+        (Layer::TopAssembly, 58),
+        (Layer::BottomAssembly, 59),
+        (Layer::TopCourtyard, 60),
+        (Layer::BottomCourtyard, 61),
+        (Layer::Top3DBody, 62),
+        (Layer::Bottom3DBody, 63),
+        // Mechanical 1-16 (57-72)
+        (Layer::Mechanical1, 57),
+        (Layer::Mechanical2, 58),
+        (Layer::Mechanical3, 59),
+        (Layer::Mechanical4, 60),
+        (Layer::Mechanical5, 61),
+        (Layer::Mechanical6, 62),
+        (Layer::Mechanical7, 63),
+        (Layer::Mechanical8, 64),
+        (Layer::Mechanical9, 65),
+        (Layer::Mechanical10, 66),
+        (Layer::Mechanical11, 67),
+        (Layer::Mechanical12, 68),
+        (Layer::Mechanical13, 69),
+        (Layer::Mechanical14, 70),
+        (Layer::Mechanical15, 71),
+        (Layer::Mechanical16, 72),
+        // Mechanical 17-32 (186-201, Altium Designer 18+) - the #282 range
+        (Layer::Mechanical17, 186),
+        (Layer::Mechanical18, 187),
+        (Layer::Mechanical19, 188),
+        (Layer::Mechanical20, 189),
+        (Layer::Mechanical21, 190),
+        (Layer::Mechanical22, 191),
+        (Layer::Mechanical23, 192),
+        (Layer::Mechanical24, 193),
+        (Layer::Mechanical25, 194),
+        (Layer::Mechanical26, 195),
+        (Layer::Mechanical27, 196),
+        (Layer::Mechanical28, 197),
+        (Layer::Mechanical29, 198),
+        (Layer::Mechanical30, 199),
+        (Layer::Mechanical31, 200),
+        (Layer::Mechanical32, 201),
+        // System and UI layers (75-85) - never carry library primitives
+        (Layer::ConnectLayer, 75),
+        (Layer::BackgroundLayer, 76),
+        (Layer::DRCErrorLayer, 77),
+        (Layer::HighlightLayer, 78),
+        (Layer::GridColor1, 79),
+        (Layer::GridColor10, 80),
+        (Layer::PadHoleLayer, 81),
+        (Layer::ViaHoleLayer, 82),
+        (Layer::TopPadMaster, 83),
+        (Layer::BottomPadMaster, 84),
+        (Layer::DRCDetailLayer, 85),
+    ];
 
-        // Drill layers
-        assert_eq!(layer_to_id(Layer::DrillGuide), 55);
-        assert_eq!(layer_to_id(Layer::KeepOut), 56);
-        assert_eq!(layer_to_id(Layer::DrillDrawing), 73);
+    /// The v7 catch-all id. Only [`EXPECTED_V7_FALLBACK`] may legitimately reach it.
+    const V7_FALLBACK: u32 = 0x0103_000F;
 
-        // Mechanical layers (57-72)
-        assert_eq!(layer_to_id(Layer::Mechanical1), 57);
-        // Component layer pairs (aliased to mechanical 2-7)
-        assert_eq!(layer_to_id(Layer::TopAssembly), 58);
-        assert_eq!(layer_to_id(Layer::BottomAssembly), 59);
-        assert_eq!(layer_to_id(Layer::TopCourtyard), 60);
-        assert_eq!(layer_to_id(Layer::BottomCourtyard), 61);
-        assert_eq!(layer_to_id(Layer::Top3DBody), 62);
-        assert_eq!(layer_to_id(Layer::Bottom3DBody), 63);
-        // Mechanical aliases for the same layers
-        assert_eq!(layer_to_id(Layer::Mechanical2), 58);
-        assert_eq!(layer_to_id(Layer::Mechanical3), 59);
-        assert_eq!(layer_to_id(Layer::Mechanical4), 60);
-        assert_eq!(layer_to_id(Layer::Mechanical5), 61);
-        assert_eq!(layer_to_id(Layer::Mechanical6), 62);
-        assert_eq!(layer_to_id(Layer::Mechanical7), 63);
-        assert_eq!(layer_to_id(Layer::Mechanical8), 64);
-        assert_eq!(layer_to_id(Layer::Mechanical16), 72);
+    /// The only layers allowed to serialise to [`V7_FALLBACK`]: `MultiLayer`, whose
+    /// fallback *is* its encoding, and the system/UI layers, which never carry a
+    /// library primitive. Any other layer landing here has silently lost its
+    /// identity on write.
+    const EXPECTED_V7_FALLBACK: [Layer; 12] = [
+        Layer::MultiLayer,
+        Layer::ConnectLayer,
+        Layer::BackgroundLayer,
+        Layer::DRCErrorLayer,
+        Layer::HighlightLayer,
+        Layer::GridColor1,
+        Layer::GridColor10,
+        Layer::PadHoleLayer,
+        Layer::ViaHoleLayer,
+        Layer::TopPadMaster,
+        Layer::BottomPadMaster,
+        Layer::DRCDetailLayer,
+    ];
 
-        // Special layers (75-85)
-        assert_eq!(layer_to_id(Layer::ConnectLayer), 75);
-        assert_eq!(layer_to_id(Layer::BackgroundLayer), 76);
-        assert_eq!(layer_to_id(Layer::DRCErrorLayer), 77);
-        assert_eq!(layer_to_id(Layer::HighlightLayer), 78);
-        assert_eq!(layer_to_id(Layer::GridColor1), 79);
-        assert_eq!(layer_to_id(Layer::GridColor10), 80);
-        assert_eq!(layer_to_id(Layer::PadHoleLayer), 81);
-        assert_eq!(layer_to_id(Layer::ViaHoleLayer), 82);
-        assert_eq!(layer_to_id(Layer::TopPadMaster), 83);
-        assert_eq!(layer_to_id(Layer::BottomPadMaster), 84);
-        assert_eq!(layer_to_id(Layer::DRCDetailLayer), 85);
+    #[test]
+    fn layer_to_id_maps_every_variant() {
+        for (layer, want) in ALL_LAYERS {
+            assert_eq!(
+                layer_to_id(layer),
+                want,
+                "{layer:?} must serialise to Altium layer id {want}"
+            );
+        }
+    }
+
+    /// Compile-time completeness guard for [`ALL_LAYERS`].
+    ///
+    /// A new `Layer` variant makes this match non-exhaustive, so the build fails
+    /// here rather than the variant silently never being exercised — which is
+    /// exactly how Mechanical 17-32 went unnoticed in #282.
+    #[test]
+    #[allow(clippy::too_many_lines)] // One arm per Layer variant is the point
+    fn every_layer_variant_is_listed_in_all_layers() {
+        for (layer, _) in ALL_LAYERS {
+            match layer {
+                Layer::TopLayer
+                | Layer::MidLayer1
+                | Layer::MidLayer2
+                | Layer::MidLayer3
+                | Layer::MidLayer4
+                | Layer::MidLayer5
+                | Layer::MidLayer6
+                | Layer::MidLayer7
+                | Layer::MidLayer8
+                | Layer::MidLayer9
+                | Layer::MidLayer10
+                | Layer::MidLayer11
+                | Layer::MidLayer12
+                | Layer::MidLayer13
+                | Layer::MidLayer14
+                | Layer::MidLayer15
+                | Layer::MidLayer16
+                | Layer::MidLayer17
+                | Layer::MidLayer18
+                | Layer::MidLayer19
+                | Layer::MidLayer20
+                | Layer::MidLayer21
+                | Layer::MidLayer22
+                | Layer::MidLayer23
+                | Layer::MidLayer24
+                | Layer::MidLayer25
+                | Layer::MidLayer26
+                | Layer::MidLayer27
+                | Layer::MidLayer28
+                | Layer::MidLayer29
+                | Layer::MidLayer30
+                | Layer::BottomLayer
+                | Layer::MultiLayer
+                | Layer::TopOverlay
+                | Layer::BottomOverlay
+                | Layer::TopSolder
+                | Layer::BottomSolder
+                | Layer::TopPaste
+                | Layer::BottomPaste
+                | Layer::InternalPlane1
+                | Layer::InternalPlane2
+                | Layer::InternalPlane3
+                | Layer::InternalPlane4
+                | Layer::InternalPlane5
+                | Layer::InternalPlane6
+                | Layer::InternalPlane7
+                | Layer::InternalPlane8
+                | Layer::InternalPlane9
+                | Layer::InternalPlane10
+                | Layer::InternalPlane11
+                | Layer::InternalPlane12
+                | Layer::InternalPlane13
+                | Layer::InternalPlane14
+                | Layer::InternalPlane15
+                | Layer::InternalPlane16
+                | Layer::DrillGuide
+                | Layer::DrillDrawing
+                | Layer::KeepOut
+                | Layer::TopAssembly
+                | Layer::BottomAssembly
+                | Layer::TopCourtyard
+                | Layer::BottomCourtyard
+                | Layer::Top3DBody
+                | Layer::Bottom3DBody
+                | Layer::Mechanical1
+                | Layer::Mechanical2
+                | Layer::Mechanical3
+                | Layer::Mechanical4
+                | Layer::Mechanical5
+                | Layer::Mechanical6
+                | Layer::Mechanical7
+                | Layer::Mechanical8
+                | Layer::Mechanical9
+                | Layer::Mechanical10
+                | Layer::Mechanical11
+                | Layer::Mechanical12
+                | Layer::Mechanical13
+                | Layer::Mechanical14
+                | Layer::Mechanical15
+                | Layer::Mechanical16
+                | Layer::Mechanical17
+                | Layer::Mechanical18
+                | Layer::Mechanical19
+                | Layer::Mechanical20
+                | Layer::Mechanical21
+                | Layer::Mechanical22
+                | Layer::Mechanical23
+                | Layer::Mechanical24
+                | Layer::Mechanical25
+                | Layer::Mechanical26
+                | Layer::Mechanical27
+                | Layer::Mechanical28
+                | Layer::Mechanical29
+                | Layer::Mechanical30
+                | Layer::Mechanical31
+                | Layer::Mechanical32
+                | Layer::ConnectLayer
+                | Layer::BackgroundLayer
+                | Layer::DRCErrorLayer
+                | Layer::HighlightLayer
+                | Layer::GridColor1
+                | Layer::GridColor10
+                | Layer::PadHoleLayer
+                | Layer::ViaHoleLayer
+                | Layer::TopPadMaster
+                | Layer::BottomPadMaster
+                | Layer::DRCDetailLayer => {}
+            }
+        }
+    }
+
+    #[test]
+    fn all_layers_table_lists_each_variant_once() {
+        // Catches a copy-paste duplicate masking a missing variant: the table would
+        // still have 107 rows and the exhaustiveness guard would still compile.
+        let mut seen = std::collections::HashSet::new();
+        for (layer, _) in ALL_LAYERS {
+            assert!(
+                seen.insert(format!("{layer:?}")),
+                "{layer:?} appears twice in ALL_LAYERS"
+            );
+        }
+        assert_eq!(seen.len(), ALL_LAYERS.len());
+    }
+
+    #[test]
+    fn v7_layer_id_falls_back_only_for_system_layers() {
+        // The #282 failure mode was a real layer reaching the `_` arm and being
+        // written as multi-layer. Pinning the exact fallback set means any future
+        // layer that starts falling through fails here.
+        for (layer, id) in ALL_LAYERS {
+            let allowed = EXPECTED_V7_FALLBACK.contains(&layer);
+            assert_eq!(
+                v7_layer_id(id) == V7_FALLBACK,
+                allowed,
+                "{layer:?} (id {id}) must {} the v7 fallback",
+                if allowed { "use" } else { "not use" }
+            );
+        }
+    }
+
+    #[test]
+    fn v7_layer_ids_collide_only_between_documented_aliases() {
+        // Two layers may share a v7 id only when they share an Altium layer id -
+        // i.e. they are the documented alias pairs (TopAssembly/Mechanical2, ...).
+        // Any other collision is two distinct layers writing as the same layer.
+        let mut seen: std::collections::HashMap<u32, (Layer, u8)> =
+            std::collections::HashMap::new();
+        for (layer, id) in ALL_LAYERS {
+            let v7 = v7_layer_id(id);
+            if v7 == V7_FALLBACK {
+                continue; // the system layers legitimately share the catch-all
+            }
+            if let Some((prev_layer, prev_id)) = seen.insert(v7, (layer, id)) {
+                assert_eq!(
+                    prev_id, id,
+                    "{layer:?} and {prev_layer:?} share v7 id {v7:#010X} \
+                     without sharing an Altium layer id"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn pad_shape_ids_match_altium_numbering() {
+        // Altium `PcbPad` shape ids. `Oval` is deliberately not its own id: Altium
+        // draws an oblong as a Round pad with unequal X/Y sizes.
+        for (shape, want) in [
+            (PadShape::Round, 1),
+            (PadShape::Oval, 1),
+            (PadShape::Rectangle, 2),
+            (PadShape::Octagonal, 3),
+            (PadShape::RoundedRectangle, 9),
+        ] {
+            assert_eq!(
+                pad_shape_to_id(shape),
+                want,
+                "{shape:?} must encode as {want}"
+            );
+        }
+    }
+
+    #[test]
+    fn hole_shape_ids_match_altium_numbering() {
+        for (shape, want) in [
+            (HoleShape::Round, 0),
+            (HoleShape::Square, 1),
+            (HoleShape::Slot, 2),
+        ] {
+            assert_eq!(
+                hole_shape_to_id(shape),
+                want,
+                "{shape:?} must encode as {want}"
+            );
+        }
+    }
+
+    #[test]
+    fn stack_mode_ids_match_altium_numbering() {
+        // Pad and via stack modes share Altium's ordinal encoding.
+        for (mode, want) in [
+            (PadStackMode::Simple, 0),
+            (PadStackMode::TopMiddleBottom, 1),
+            (PadStackMode::FullStack, 2),
+        ] {
+            assert_eq!(
+                pad_stack_mode_to_id(mode),
+                want,
+                "{mode:?} must encode as {want}"
+            );
+        }
+        for (mode, want) in [
+            (ViaStackMode::Simple, 0),
+            (ViaStackMode::TopMiddleBottom, 1),
+            (ViaStackMode::FullStack, 2),
+        ] {
+            assert_eq!(
+                via_stack_mode_to_id(mode),
+                want,
+                "{mode:?} must encode as {want}"
+            );
+        }
+    }
+
+    #[test]
+    fn text_kind_and_stroke_font_ids_match_altium_numbering() {
+        for (kind, want) in [
+            (TextKind::Stroke, 0),
+            (TextKind::TrueType, 1),
+            (TextKind::BarCode, 2),
+        ] {
+            assert_eq!(
+                text_kind_to_id(kind),
+                want,
+                "{kind:?} must encode as {want}"
+            );
+        }
+        // Stroke font ids are 1-based: Altium's default stroke font is index 1.
+        for (font, want) in [
+            (StrokeFont::Default, 1),
+            (StrokeFont::SansSerif, 2),
+            (StrokeFont::Serif, 3),
+        ] {
+            assert_eq!(
+                stroke_font_to_id(font),
+                want,
+                "{font:?} must encode as {want}"
+            );
+        }
+    }
+
+    #[test]
+    fn pcb_justification_ids_are_column_major() {
+        // Altium numbers the 3x3 anchor grid down each column, 1-based:
+        // LeftTop=1..LeftBottom=3, CenterTop=4..CenterBottom=6, RightTop=7..=9.
+        for (justification, want) in [
+            (TextJustification::TopLeft, 1),
+            (TextJustification::MiddleLeft, 2),
+            (TextJustification::BottomLeft, 3),
+            (TextJustification::TopCenter, 4),
+            (TextJustification::MiddleCenter, 5),
+            (TextJustification::BottomCenter, 6),
+            (TextJustification::TopRight, 7),
+            (TextJustification::MiddleRight, 8),
+            (TextJustification::BottomRight, 9),
+        ] {
+            assert_eq!(
+                pcb_justification_to_id(justification),
+                want,
+                "{justification:?} must encode as {want}"
+            );
+        }
+        // The from-scratch default must stay byte-identical to the geometry
+        // template's justification byte at offset 132.
+        assert_eq!(
+            pcb_justification_to_id(TextJustification::BottomLeft),
+            0x03,
+            "the default anchor must match the template byte"
+        );
     }
 
     #[test]

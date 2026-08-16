@@ -868,6 +868,7 @@ fn test_component_body_roundtrip() {
         z_offset: 0.0,
         overall_height: 0.35,
         standoff_height: 0.0,
+        cavity_height: 0.0,
         layer: Layer::TopLayer,
         outline: Vec::new(),
         unique_id: None,
@@ -929,6 +930,7 @@ fn test_component_body_with_rotation() {
         z_offset: 0.1,    // 0.1mm standoff
         overall_height: 1.75,
         standoff_height: 0.0,
+        cavity_height: 0.0,
         layer: Layer::TopLayer,
         outline: Vec::new(),
         unique_id: None,
@@ -2760,6 +2762,7 @@ fn test_component_body_external_model_reference() {
         z_offset: 0.0,
         overall_height: 1.0,
         standoff_height: 0.0,
+        cavity_height: 0.0,
         layer: Layer::Top3DBody,
         outline: Vec::new(),
         unique_id: None,

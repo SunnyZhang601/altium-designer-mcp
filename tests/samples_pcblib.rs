@@ -40,13 +40,12 @@ fn samples_exist() {
 fn samples_pcblib_pad_shapes() {
     let lib = PcbLib::open(sample("footprints.PcbLib")).expect("failed to open footprints.PcbLib");
 
-    // Seventeen footprints: twelve per-primitive-family footprints plus the five
-    // coverage-enrichment footprints (TEXT_STYLE, REGION_CUTOUT, TEXT_SPECIAL,
-    // MULTILAYER, EMBSTEP). Note: PAD_THERMAL remains a documented negative — the
-    // thermal-relief/power-plane setters crash AD24's scripting engine on a fresh
-    // library pad in every sequence tried (batch 4b final bisect); see
-    // GenerateSamples.pas.
-    assert_eq!(lib.len(), 21, "expected exactly twenty-one footprints");
+    // Twelve per-primitive-family footprints plus the coverage-enrichment ones
+    // (TEXT_STYLE, REGION_CUTOUT, TEXT_SPECIAL, MULTILAYER, EMBSTEP, PRIMPROPS).
+    // Note: PAD_THERMAL remains a documented negative — the thermal-relief /
+    // power-plane setters crash AD24's scripting engine on a fresh library pad in
+    // every sequence tried (batch 4b final bisect); see GenerateSamples.pas.
+    assert_eq!(lib.len(), 22, "expected exactly twenty-two footprints");
     let names = lib.names();
     for expected in [
         "PAD_SHAPES",
@@ -70,6 +69,7 @@ fn samples_pcblib_pad_shapes() {
         "LOCKFLAGS_PCB",
         "MULTILAYER",
         "EMBSTEP",
+        "PRIMPROPS",
     ] {
         assert!(
             names.iter().any(|n| n == expected),
@@ -863,6 +863,123 @@ fn samples_pcblib_text_style() {
     assert!(t.italic, "text is italic");
     assert!(t.mirror, "text is mirrored");
     assert_eq!(t.font_name, "Arial", "TrueType font name round-trips");
+}
+
+#[test]
+fn samples_pcblib_via_manual_mask_expansion() {
+    let lib = PcbLib::open(sample("footprints.PcbLib")).expect("failed to open footprints.PcbLib");
+    let fp = lib.get("PRIMPROPS").expect("PRIMPROPS footprint not found");
+
+    // The counterpart to samples_pcblib_via_mask_state_is_altium_factory_default:
+    // that one pins a via left on the rule, this one a via switched to manual.
+    // Both expansions had to be set through TPadCache — the direct
+    // Via.SolderMaskExpansion* / .PasteMaskExpansion* setters compile and then
+    // bring AD24 down with a native access violation, so no golden can ever be
+    // authored that way (see GenerateSamples.pas).
+    assert_eq!(fp.vias.len(), 1, "PRIMPROPS has one via");
+    let v = &fp.vias[0];
+    assert_eq!(
+        v.solder_mask_expansion_mode,
+        MaskExpansionMode::Manual,
+        "the cache marks the expansion manual"
+    );
+    assert!(
+        approx_eq(v.solder_mask_expansion, 0.1778, 1e-4),
+        "7 mil solder-mask expansion, got {}",
+        v.solder_mask_expansion
+    );
+    assert!(
+        approx_eq(v.paste_mask_expansion, 0.0762, 1e-4),
+        "3 mil paste-mask expansion, got {}",
+        v.paste_mask_expansion
+    );
+}
+
+#[test]
+fn samples_pcblib_component_body_placement_and_appearance() {
+    let lib = PcbLib::open(sample("footprints.PcbLib")).expect("failed to open footprints.PcbLib");
+    let fp = lib.get("PRIMPROPS").expect("PRIMPROPS footprint not found");
+
+    // The only body in the library that is not flat, grey and opaque. Without it
+    // the standoff, cavity, colour and opacity arms read nothing but defaults.
+    assert_eq!(fp.component_bodies.len(), 1, "PRIMPROPS has one body");
+    let b = &fp.component_bodies[0];
+
+    // 10 mil standoff, 50 mil overall, 5 mil cavity.
+    assert!(
+        approx_eq(b.standoff_height, 0.254, 1e-6),
+        "standoff height, got {}",
+        b.standoff_height
+    );
+    assert!(
+        approx_eq(b.overall_height, 1.27, 1e-6),
+        "overall height, got {}",
+        b.overall_height
+    );
+    // CAVITYHEIGHT was on the reader's modelled-keys list — and so excluded from
+    // the unknown-key passthrough — while no field parsed it, and the writer
+    // emitted a hard-coded `CAVITYHEIGHT=0mil`. A non-zero value was therefore
+    // lost in both directions until this fixture caught it.
+    assert!(
+        approx_eq(b.cavity_height, 0.127, 1e-6),
+        "cavity height, got {}",
+        b.cavity_height
+    );
+
+    // Red at half opacity, against the grey opaque default every other body has.
+    assert_eq!(b.body_color_3d, 255, "3D body colour (BGR red)");
+    assert!(
+        approx_eq(b.body_opacity_3d, 0.5, 1e-6),
+        "3D body opacity, got {}",
+        b.body_opacity_3d
+    );
+}
+
+#[test]
+fn samples_pcblib_region_kinds_and_naming() {
+    let lib = PcbLib::open(sample("footprints.PcbLib")).expect("failed to open footprints.PcbLib");
+    let fp = lib.get("PRIMPROPS").expect("PRIMPROPS footprint not found");
+
+    // One region per TRegionKind AD24 offers. Authoring all four is the only way
+    // to pin the integer behind each name: nothing documents them, and a region
+    // whose kind we misread is indistinguishable from a plain copper pour.
+    let by_name = |n: &str| {
+        fp.regions
+            .iter()
+            .find(|r| r.name == n)
+            .unwrap_or_else(|| panic!("PRIMPROPS region {n:?} not found"))
+    };
+
+    // KIND=2. Also proves Name and UnionIndex survive: every other region in the
+    // library is unnamed and in no union.
+    let named = by_name("NamedPour");
+    assert_eq!(named.kind, RegionKind::NamedRegion, "KIND=2");
+    assert_eq!(named.union_index, 7, "authored union index");
+
+    // KIND=4.
+    assert_eq!(by_name("CavityRgn").kind, RegionKind::Cavity, "KIND=4");
+
+    // KIND=1, the plain polygon cutout.
+    assert_eq!(by_name("PlainCut").kind, RegionKind::Cutout, "KIND=1");
+
+    // eRegionKind_BoardCutout is NOT a kind on disk: AD24 rewrites it as copper
+    // on the keep-out layer with ISBOARDCUTOUT=TRUE, the same representation
+    // samples_pcblib_region_cutout asserts. Named here so the four authored
+    // kinds account for only three KIND integers.
+    let cut = by_name("BoardCut");
+    assert_eq!(cut.kind, RegionKind::Copper, "a board cutout stores KIND=0");
+    assert_eq!(
+        cut.layer,
+        Layer::KeepOut,
+        "and is moved to the keep-out layer"
+    );
+    assert!(
+        cut.additional_parameters
+            .iter()
+            .any(|(k, v)| k == "ISBOARDCUTOUT" && v == "TRUE"),
+        "the board-cutout flag is preserved, got {:?}",
+        cut.additional_parameters
+    );
 }
 
 #[test]

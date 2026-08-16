@@ -163,6 +163,7 @@ impl PcbLib {
                 z_offset: model_3d.z_offset,
                 overall_height: 0.0, // Could be calculated from STEP, but not implemented
                 standoff_height: 0.0,
+                cavity_height: 0.0,
                 layer: Layer::Top3DBody,
                 outline: Vec::new(), // Synthesised from the footprint extent on write
                 unique_id: None,

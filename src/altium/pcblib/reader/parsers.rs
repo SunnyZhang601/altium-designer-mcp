@@ -1472,24 +1472,23 @@ pub(super) fn parse_component_body(data: &[u8], offset: usize) -> ParseResult<Co
     let model_name = params.get("MODEL.NAME").cloned().unwrap_or_default();
     let embedded = params.get("MODEL.EMBED").is_some_and(|v| v == "TRUE");
 
-    // Parse rotations (stored as strings like "0.000")
-    let rotation_x = params
-        .get("MODEL.3D.ROTX")
-        .and_then(|v| v.parse::<f64>().ok())
-        .unwrap_or(0.0);
-    let rotation_y = params
-        .get("MODEL.3D.ROTY")
-        .and_then(|v| v.parse::<f64>().ok())
-        .unwrap_or(0.0);
-    let rotation_z = params
-        .get("MODEL.3D.ROTZ")
-        .and_then(|v| v.parse::<f64>().ok())
-        .unwrap_or(0.0);
+    // Rotations are plain decimal strings like "0.000"; heights carry a unit
+    // suffix ("0mil", "15.748mil") and go through `parse_mil_value` below.
+    let rotation = |key: &str| {
+        params
+            .get(key)
+            .and_then(|v| v.parse::<f64>().ok())
+            .unwrap_or(0.0)
+    };
+    let rotation_x = rotation("MODEL.3D.ROTX");
+    let rotation_y = rotation("MODEL.3D.ROTY");
+    let rotation_z = rotation("MODEL.3D.ROTZ");
 
-    // Parse heights (stored as strings like "0mil" or "15.748mil")
-    let z_offset = parse_mil_value(params.get("MODEL.3D.DZ").map(String::as_str));
-    let standoff_height = parse_mil_value(params.get("STANDOFFHEIGHT").map(String::as_str));
-    let overall_height = parse_mil_value(params.get("OVERALLHEIGHT").map(String::as_str));
+    let height = |key: &str| parse_mil_value(params.get(key).map(String::as_str));
+    let z_offset = height("MODEL.3D.DZ");
+    let standoff_height = height("STANDOFFHEIGHT");
+    let cavity_height = height("CAVITYHEIGHT");
+    let overall_height = height("OVERALLHEIGHT");
 
     // MODEL.CHECKSUM is a plain integer. Round-trip it verbatim
     // (0 = default/valid) — it is not recomputed from the model bytes here.
@@ -1567,6 +1566,7 @@ pub(super) fn parse_component_body(data: &[u8], offset: usize) -> ParseResult<Co
         z_offset,
         overall_height,
         standoff_height,
+        cavity_height,
         layer,
         outline,
         unique_id: None,

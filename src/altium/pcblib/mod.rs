@@ -1884,6 +1884,7 @@ mod tests {
             z_offset: 0.5,        // mm
             overall_height: 1.0,  // mm
             standoff_height: 0.1, // mm
+            cavity_height: 0.3,   // mm
             layer: Layer::Top3DBody,
             outline: vec![(-2.0, 1.0), (-2.0, -1.0), (2.0, -1.0), (2.0, 1.0)],
             unique_id: None,
@@ -1923,6 +1924,7 @@ mod tests {
         assert!(approx_eq(body.z_offset, 0.5, 0.01));
         assert!(approx_eq(body.overall_height, 1.0, 0.01));
         assert!(approx_eq(body.standoff_height, 0.1, 0.01));
+        assert!(approx_eq(body.cavity_height, 0.3, 0.01));
         assert_eq!(body.layer, Layer::Top3DBody);
         // MODEL.CHECKSUM round-trips verbatim rather than being hard-coded to 0.
         assert_eq!(body.model_checksum, 7_654_321);
@@ -1954,6 +1956,7 @@ mod tests {
                 z_offset: 0.0,
                 overall_height: 1.0,
                 standoff_height: 0.0,
+                cavity_height: 0.0,
                 layer: Layer::Top3DBody,
                 outline: Vec::new(), // exercise the synthesised-bbox fallback
                 unique_id: None,

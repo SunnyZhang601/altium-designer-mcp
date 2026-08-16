@@ -587,10 +587,14 @@ impl McpServer {
             return None; // Need at least 3 vertices for a polygon
         }
 
-        // `kind` accepts a name ("copper"/"cutout") or a raw KIND integer.
+        // `kind` accepts a name (matching the serde representation) or a raw
+        // KIND integer. Board cutouts are not a kind of their own — AD24 stores
+        // one as copper on the keep-out layer with `ISBOARDCUTOUT=TRUE`.
         let parse_kind_str = |s: &str| match s.to_ascii_lowercase().as_str() {
             "cutout" => RegionKind::Cutout,
             "copper" => RegionKind::Copper,
+            "named_region" => RegionKind::NamedRegion,
+            "cavity" => RegionKind::Cavity,
             other => other
                 .parse::<i32>()
                 .map_or(RegionKind::Copper, RegionKind::from_id),
@@ -889,6 +893,7 @@ impl McpServer {
             z_offset: f("z_offset"),
             overall_height: f("overall_height"),
             standoff_height: f("standoff_height"),
+            cavity_height: f("cavity_height"),
             layer,
             outline,
             unique_id: body_json

@@ -1287,16 +1287,48 @@ fn encode_region(data: &mut Vec<u8>, region: &Region) {
 
 /// Returns the canonical Altium `V7_LAYER` token for a layer.
 ///
-/// Altium identifies a Region's layer by this parameter string, NOT the
-/// common-header layer byte. Mechanical and component-pair layers must use their
-/// `MECHANICAL{n}` token (e.g. Top Courtyard -> `MECHANICAL4`). The display name
-/// with spaces stripped (`TOPCOURTYARD`) is not a valid token, so Altium fails to
-/// resolve the layer and silently drops the region onto Top Layer (copper). The
-/// 3D-body encoder already hardcodes `MECHANICAL6`/`MECHANICAL7` for this reason.
-fn region_v7_layer_token(layer: Layer) -> String {
+/// Altium identifies a Region's or `ComponentBody`'s layer by this parameter
+/// string, NOT the common-header layer byte, and it is a fixed vocabulary
+/// rather than the display name: `TOP`, not `TOPLAYER`; `PLANE3`, not
+/// `INTERNALPLANE3`. A token Altium cannot resolve leaves the primitive on Top
+/// Layer (copper), so `BOTTOMLAYER` — which is what stripping the spaces out of
+/// the display name produces — silently moves a bottom-side region to the top.
+///
+/// The vocabulary is `Advpcb.dll`'s own, held there as UTF-16LE strings:
+/// `MECHANICAL`, `MID` and `PLANE` are prefixes taking a number, alongside
+/// `TOP`, `BOTTOM`, `TOPOVERLAY`, `BOTTOMOVERLAY`, `TOPPASTE`, `BOTTOMPASTE`,
+/// `TOPSOLDER`, `BOTTOMSOLDER`, `DRILLGUIDE`, `DRILLDRAWING`, `KEEPOUT`,
+/// `MULTILAYER` and `CONNECT`. The golden confirms `TOP`, `MECHANICAL1` and
+/// `MECHANICAL13`.
+pub(super) fn v7_layer_token(layer: Layer) -> String {
     match layer_to_id(layer) {
+        1 => "TOP".to_string(),
+        id @ 2..=31 => format!("MID{}", id - 1),
+        32 => "BOTTOM".to_string(),
+        33 => "TOPOVERLAY".to_string(),
+        34 => "BOTTOMOVERLAY".to_string(),
+        35 => "TOPPASTE".to_string(),
+        36 => "BOTTOMPASTE".to_string(),
+        37 => "TOPSOLDER".to_string(),
+        38 => "BOTTOMSOLDER".to_string(),
+        id @ 39..=54 => format!("PLANE{}", id - 38),
+        55 => "DRILLGUIDE".to_string(),
+        56 => "KEEPOUT".to_string(),
         id @ 57..=72 => format!("MECHANICAL{}", id - 56),
+        73 => "DRILLDRAWING".to_string(),
+        74 => "MULTILAYER".to_string(),
+        75 => "CONNECT".to_string(),
+        76 => "BACKGROUND".to_string(),
+        77 => "DRCERRORS".to_string(),
+        78 => "SELECTIONS".to_string(),
+        79 => "VISIBLEGRID1X".to_string(),
+        80 => "VISIBLEGRID10X".to_string(),
+        81 => "PADHOLES".to_string(),
+        82 => "VIAHOLES".to_string(),
         id @ 186..=201 => format!("MECHANICAL{}", id - 169),
+        // The pad masters and the DRC detail layer have no token in the
+        // vocabulary. Nothing a library can hold sits on them, so the display
+        // name stands in rather than a guess dressed up as a fact.
         _ => layer.as_str().replace(' ', "").to_uppercase(),
     }
 }
@@ -1338,7 +1370,10 @@ fn encode_region_properties(region: &Region) -> Vec<u8> {
     // canonical key set (matching AltiumSharp `BuildRegionParamText`). Each value is
     // now taken from the typed field; a default region reproduces the historical
     // hard-coded string byte-for-byte (KIND=0, NAME=, ARCRESOLUTION=0mil, ...).
-    let layer_name = region_v7_layer_token(region.layer);
+    let layer_name = region
+        .v7_layer
+        .clone()
+        .unwrap_or_else(|| v7_layer_token(region.layer));
     let params = format!(
         "V7_LAYER={layer_name}|NAME={name}|KIND={kind}|SUBPOLYINDEX={spi}|UNIONINDEX={uix}\
          |ARCRESOLUTION={arc}|ISSHAPEBASED={shape}|CAVITYHEIGHT={cav}",
@@ -1592,7 +1627,7 @@ fn build_component_body_params(body: &ComponentBody) -> String {
     // MECHANICAL{n} token for any mechanical layer (Top3DBody=MECHANICAL6,
     // Mechanical1=MECHANICAL1, etc.) instead of hardcoding one — a mismatch
     // between the param string and the layer byte makes Altium drop the body.
-    params.push(format!("V7_LAYER={}", region_v7_layer_token(body.layer)));
+    params.push(format!("V7_LAYER={}", v7_layer_token(body.layer)));
 
     // Standard parameters. Each field's default reproduces the prior hard-coded
     // literal exactly, so a template-default body stays byte-identical (the oracle
@@ -2955,7 +2990,7 @@ mod tests {
         ] {
             let n = v7_layer_id(layer_to_id(layer)) - 0x0102_0000;
             assert_eq!(
-                region_v7_layer_token(layer),
+                v7_layer_token(layer),
                 format!("MECHANICAL{n}"),
                 "{layer:?}: id and token must reference the same mechanical layer"
             );
@@ -2963,18 +2998,32 @@ mod tests {
     }
 
     #[test]
-    fn test_region_v7_layer_token() {
+    fn test_v7_layer_token() {
         use crate::altium::pcblib::primitives::Vertex;
         // Component-pair / mechanical layers must use the MECHANICAL{n} token,
         // not the display name (which Altium can't resolve -> falls back to Top Layer).
-        assert_eq!(region_v7_layer_token(Layer::TopCourtyard), "MECHANICAL4");
-        assert_eq!(region_v7_layer_token(Layer::TopAssembly), "MECHANICAL2");
-        assert_eq!(region_v7_layer_token(Layer::Mechanical1), "MECHANICAL1");
-        assert_eq!(region_v7_layer_token(Layer::Mechanical17), "MECHANICAL17");
-        assert_eq!(region_v7_layer_token(Layer::Mechanical32), "MECHANICAL32");
-        // Non-mechanical layers keep the stripped/uppercased display token.
-        assert_eq!(region_v7_layer_token(Layer::TopLayer), "TOPLAYER");
-        assert_eq!(region_v7_layer_token(Layer::TopOverlay), "TOPOVERLAY");
+        assert_eq!(v7_layer_token(Layer::TopCourtyard), "MECHANICAL4");
+        assert_eq!(v7_layer_token(Layer::TopAssembly), "MECHANICAL2");
+        assert_eq!(v7_layer_token(Layer::Mechanical1), "MECHANICAL1");
+        assert_eq!(v7_layer_token(Layer::Mechanical17), "MECHANICAL17");
+        assert_eq!(v7_layer_token(Layer::Mechanical32), "MECHANICAL32");
+        // The rest of the vocabulary is equally its own: the token is not the
+        // display name with the spaces taken out. `TOPLAYER` and `BOTTOMLAYER`
+        // resolve to nothing, and an unresolved token leaves the primitive on
+        // Top Layer — so the bottom-side case is a silent side swap.
+        assert_eq!(v7_layer_token(Layer::TopLayer), "TOP");
+        assert_eq!(v7_layer_token(Layer::BottomLayer), "BOTTOM");
+        assert_eq!(v7_layer_token(Layer::MidLayer1), "MID1");
+        assert_eq!(v7_layer_token(Layer::MidLayer30), "MID30");
+        assert_eq!(v7_layer_token(Layer::InternalPlane3), "PLANE3");
+        assert_eq!(v7_layer_token(Layer::KeepOut), "KEEPOUT");
+        assert_eq!(v7_layer_token(Layer::MultiLayer), "MULTILAYER");
+        assert_eq!(v7_layer_token(Layer::DrillDrawing), "DRILLDRAWING");
+        assert_eq!(v7_layer_token(Layer::DrillGuide), "DRILLGUIDE");
+        // These two do keep their display spelling, because that is what the
+        // vocabulary happens to use.
+        assert_eq!(v7_layer_token(Layer::TopOverlay), "TOPOVERLAY");
+        assert_eq!(v7_layer_token(Layer::BottomSolder), "BOTTOMSOLDER");
 
         // A region on Top Courtyard must serialize V7_LAYER=MECHANICAL4.
         let region = Region {

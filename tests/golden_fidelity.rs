@@ -72,21 +72,13 @@ const BY_DESIGN: &[(&str, &str)] = &[
 /// an entry as its fix lands. It is spelled out here rather than left implicit
 /// so the cost is visible in code review instead of being discovered in a
 /// corrupted library.
-const KNOWN_DEFECTS: &[(&str, &str)] = &[
-    (
-        "V7_LAYER",
-        "Altium writes the short layer name (TOP); we write the long form \
-         (TOPLAYER), and for a board cutout we write the resolved keep-out layer \
-         rather than the stored one",
-    ),
-    (
-        "sectionkeys",
-        "Altium emits a SectionKeys stream mapping LibRef -> storage name for \
+const KNOWN_DEFECTS: &[(&str, &str)] = &[(
+    "sectionkeys",
+    "Altium emits a SectionKeys stream mapping LibRef -> storage name for \
          every component whose name does not fit the CFB 31-character cap once \
          encoded; we neither read nor write it, so those components lose their \
          real name and keep only the truncated storage name",
-    ),
-];
+)];
 
 /// A component whose name leaves ASCII is written under a storage name that
 /// differs from the golden's, so its streams read as missing here.

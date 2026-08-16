@@ -335,6 +335,19 @@ pub struct Region {
     /// Unique ID assigned by Altium (8-character alphanumeric string).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unique_id: Option<String>,
+    /// The `V7_LAYER` token exactly as Altium wrote it, kept only when it names
+    /// a different layer than [`Self::layer`].
+    ///
+    /// The two normally agree, and the token is derived from `layer` when this
+    /// is `None` — every from-scratch region. A board cutout is the case where
+    /// they diverge: AD24 moves the region's layer byte to the keep-out layer
+    /// and records that in `LAYER=KEEPOUT|KEEPOUT=TRUE|ISBOARDCUTOUT=TRUE`,
+    /// while `V7_LAYER` stays on the layer the region was drawn on. The golden
+    /// authors its cutouts with `Rgn.Layer := eTopLayer` and AD24 saves them as
+    /// layer byte 56 (keep-out) with `V7_LAYER=TOP`, so the drawn layer is
+    /// recoverable from nowhere else.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub v7_layer: Option<String>,
     /// Unmodelled parameter keys read verbatim from the nested `KEY=VALUE|...`
     /// block, in read order. Altium regions carry board-region keys the typed
     /// model does not recognise (e.g. `LAYER`, `KEEPOUT`, `ISBOARDCUTOUT`,
@@ -390,6 +403,7 @@ impl Default for Region {
             vertices: Vec::new(),
             holes: Vec::new(),
             layer: Layer::default(),
+            v7_layer: None,
             flags: PcbFlags::empty(),
             kind: RegionKind::Copper,
             name: String::new(),

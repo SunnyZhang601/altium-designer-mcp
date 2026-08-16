@@ -655,10 +655,7 @@ impl McpServer {
             })
             .unwrap_or_default();
 
-        let unique_id = json
-            .get("unique_id")
-            .and_then(Value::as_str)
-            .map(str::to_string);
+        let text_field = |key: &str| json.get(key).and_then(Value::as_str).map(str::to_string);
 
         // Round-trip unmodelled board-region keys captured on read (a `read_pcblib`
         // emits `additional_parameters` as an array of `[key, value]` pairs; accept
@@ -670,6 +667,9 @@ impl McpServer {
             vertices,
             holes,
             layer,
+            // Derived from `layer` unless a read supplied a divergent token
+            // (a board cutout); the tool schema does not expose it.
+            v7_layer: text_field("v7_layer"),
             flags: json_flags(json),
             kind,
             name,
@@ -681,7 +681,7 @@ impl McpServer {
             sub_poly_index,
             union_index,
             is_shape_based,
-            unique_id,
+            unique_id: text_field("unique_id"),
             additional_parameters,
         })
     }

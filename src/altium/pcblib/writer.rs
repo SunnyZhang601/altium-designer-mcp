@@ -1672,44 +1672,30 @@ fn build_component_body_params(body: &ComponentBody) -> String {
     params.push("TEXTURESIZEY=0mil".to_string());
     params.push("TEXTUREROTATION= 0.00000000000000E+0000".to_string());
 
-    // Model reference. Extruded bodies have no model file but still need a model
-    // GUID, so synthesize one when the caller didn't supply it.
-    let model_id = if extruded && body.model_id.is_empty() {
-        format!("{{{}}}", uuid::Uuid::new_v4().to_string().to_uppercase())
-    } else {
-        body.model_id.clone()
-    };
-    params.push(format!("MODELID={model_id}"));
-    // Round-trip the stored checksum verbatim (default 0 keeps fresh output identical).
-    params.push(format!("MODEL.CHECKSUM={}", body.model_checksum));
-    params.push(format!(
-        "MODEL.EMBED={}",
-        if body.embedded { "TRUE" } else { "FALSE" }
-    ));
-    params.push(format!("MODEL.NAME={}", body.model_name));
-    params.push(format!("MODEL.2D.X={}", format_mil_coord(body.model_2d_x)));
-    params.push(format!("MODEL.2D.Y={}", format_mil_coord(body.model_2d_y)));
-    params.push(format!("MODEL.2D.ROTATION={:.3}", body.model_2d_rotation));
-    params.push(format!("MODEL.3D.ROTX={:.3}", body.rotation_x));
-    params.push(format!("MODEL.3D.ROTY={:.3}", body.rotation_y));
-    params.push(format!("MODEL.3D.ROTZ={:.3}", body.rotation_z));
-    params.push(format!("MODEL.3D.DZ={}", format_mil_coord(body.z_offset)));
-    // MODELTYPE 0 = Extruded (no model file); 1 = generic/STEP model.
-    let model_type = if extruded { "0" } else { "1" };
-    params.push(format!("MODEL.MODELTYPE={model_type}"));
-    if extruded {
-        // The extrusion itself: Z range from standoff (MINZ) to overall (MAXZ).
-        // This is what Altium actually extrudes the outline between; without it
-        // the body has no volume and is discarded on load.
+    // Model reference — only when there IS a model. The golden's extruded
+    // bodies (BODY3D, PRIMPROPS) end at TEXTUREROTATION with no MODEL keys at
+    // all — no MODELID, no MODEL.MODELTYPE, not even an EXTRUDED Z range: the
+    // extrusion derives from STANDOFFHEIGHT/OVERALLHEIGHT. We used to append
+    // the whole group anyway, inventing a fresh MODELID GUID per save, so an
+    // extruded body's record changed on every write and grew keys Altium never
+    // stores. Its STEP-backed EMBSTEP body carries exactly the group below.
+    if !extruded {
+        params.push(format!("MODELID={}", body.model_id));
+        // Round-trip the stored checksum verbatim.
+        params.push(format!("MODEL.CHECKSUM={}", body.model_checksum));
         params.push(format!(
-            "MODEL.EXTRUDED.MINZ={}",
-            format_mil_coord(body.standoff_height)
+            "MODEL.EMBED={}",
+            if body.embedded { "TRUE" } else { "FALSE" }
         ));
-        params.push(format!(
-            "MODEL.EXTRUDED.MAXZ={}",
-            format_mil_coord(body.overall_height)
-        ));
-    } else {
+        params.push(format!("MODEL.NAME={}", body.model_name));
+        params.push(format!("MODEL.2D.X={}", format_mil_coord(body.model_2d_x)));
+        params.push(format!("MODEL.2D.Y={}", format_mil_coord(body.model_2d_y)));
+        params.push(format!("MODEL.2D.ROTATION={:.3}", body.model_2d_rotation));
+        params.push(format!("MODEL.3D.ROTX={:.3}", body.rotation_x));
+        params.push(format!("MODEL.3D.ROTY={:.3}", body.rotation_y));
+        params.push(format!("MODEL.3D.ROTZ={:.3}", body.rotation_z));
+        params.push(format!("MODEL.3D.DZ={}", format_mil_coord(body.z_offset)));
+        params.push("MODEL.MODELTYPE=1".to_string());
         params.push("MODEL.MODELSOURCE=Undefined".to_string());
     }
 
@@ -3351,28 +3337,31 @@ mod tests {
 
     #[test]
     fn test_component_body_extruded_vs_model_params() {
-        // Generic extruded body: no model name, not embedded. Matches a real
-        // Altium-authored extruded body: ISSHAPEBASED=FALSE, MODELTYPE=0, a
-        // synthesized MODELID GUID, and the extrusion Z range via EXTRUDED.MIN/MAXZ.
+        // Generic extruded body: no model name, not embedded. The golden's own
+        // extruded bodies (BODY3D, PRIMPROPS) end at TEXTUREROTATION with NO
+        // MODEL keys at all — the extrusion derives from STANDOFFHEIGHT /
+        // OVERALLHEIGHT, and inventing a MODELID meant a fresh GUID per save.
         let mut extruded = ComponentBody::new("", "");
         extruded.embedded = false;
         extruded.overall_height = 1.0;
         extruded.standoff_height = 0.0;
         let s = build_component_body_params(&extruded);
         assert!(s.contains("ISSHAPEBASED=FALSE"), "got: {s}");
-        assert!(s.contains("MODEL.MODELTYPE=0"), "got: {s}");
-        assert!(s.contains("MODEL.EXTRUDED.MAXZ="), "got: {s}");
         assert!(
-            s.contains("MODELID={") && !s.contains("MODELID=|"),
+            s.ends_with("TEXTUREROTATION= 0.00000000000000E+0000"),
             "got: {s}"
         );
-        assert!(!s.contains("MODELSOURCE"), "got: {s}");
+        assert!(
+            !s.contains("MODEL"),
+            "no MODEL keys on an extruded body: {s}"
+        );
 
-        // Model-backed body (STEP) keeps the legacy shape/type, no extrusion range.
+        // Model-backed body (STEP): exactly the EMBSTEP golden's group.
         let mut model = ComponentBody::new("{GUID}", "part.step");
         model.embedded = true;
         let s = build_component_body_params(&model);
         assert!(s.contains("ISSHAPEBASED=FALSE"), "got: {s}");
+        assert!(s.contains("MODELID={GUID}"), "got: {s}");
         assert!(s.contains("MODEL.MODELTYPE=1"), "got: {s}");
         assert!(s.contains("MODEL.MODELSOURCE=Undefined"), "got: {s}");
         assert!(!s.contains("EXTRUDED"), "got: {s}");

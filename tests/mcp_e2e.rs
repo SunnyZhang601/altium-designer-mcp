@@ -848,7 +848,7 @@ fn write_pcblib_component_body_fields_roundtrip() {
                 { "x": 1.0, "y": 1.0 }, { "x": -1.0, "y": 1.0 },
             ],
             "body_color_3d": 0xFF_0000, "body_opacity_3d": 0.5, "body_projection": 1,
-            "model_2d_rotation": 90.0, "is_shape_based": true, "kind": 2, "name": "BODY_A",
+            "is_shape_based": true, "kind": 2, "name": "BODY_A",
         }],
     });
     let write = h.call_tool(
@@ -873,7 +873,11 @@ fn write_pcblib_component_body_fields_roundtrip() {
     assert_eq!(i(bd, "body_color_3d"), 0xFF_0000, "body_color_3d");
     assert!(near(f(bd, "body_opacity_3d"), 0.5), "body_opacity_3d");
     assert_eq!(i(bd, "body_projection"), 1, "body_projection");
-    assert!(near(f(bd, "model_2d_rotation"), 90.0), "model_2d_rotation");
+    // model_2d_rotation is NOT asserted here: this body is extruded (outline,
+    // no model), and Altium stores the MODEL.* placement group only for
+    // model-backed bodies — the golden's extruded bodies carry no MODEL keys
+    // at all, so the field has nowhere to live in the file. It round-trips for
+    // STEP-backed bodies, where the group exists.
     assert!(b(bd, "is_shape_based"), "is_shape_based");
     assert_eq!(i(bd, "kind"), 2, "body kind");
     assert_eq!(s(bd, "name"), "BODY_A", "body name");

@@ -261,6 +261,17 @@ fn block_divergences(golden: &[u8], ours: &[u8], label: &str) -> Vec<String> {
                 ));
             }
         }
+        // The other direction: a key we emit that Altium did not store is an
+        // invention, not fidelity — an extruded body used to grow a whole
+        // MODEL.* group (including a fresh MODELID GUID per save) that this
+        // loop never saw, because only golden-side keys were compared.
+        for (key, got) in &b[j] {
+            if !is_volatile_key(key) && !a[i].contains_key(key) {
+                out.push(format!(
+                    "{label}: {key} invented; ours={got:?}, golden omits it"
+                ));
+            }
+        }
     }
     for (i, used) in taken_g.iter().enumerate() {
         if !used {

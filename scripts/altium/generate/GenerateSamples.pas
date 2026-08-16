@@ -3052,6 +3052,25 @@ begin
     end;
 
 
+    { DOCUMENTED NEGATIVE (AD24, three runs, 2026-08-16): five of the symbols
+      below (_JV, _BN, _CR, _IU, _SB) are internally inconsistent in the saved
+      library NO MATTER how their words are constructed, and the damage is the
+      script ENGINE's, not this file's:
+
+      1. Source literals (this file's encoding is clean UTF-8): the engine
+         mis-decodes exactly these five sequences -- the CFB storage name comes
+         out correct while the text records hold a shifted string.
+      2. Wide Chr() (Chr($A997) + ...): Chr truncates to its LOW BYTE -- the
+         engine's strings are ANSI -- so every field degrades to byte garbage.
+      3. UTF-8 byte Chr() (Chr($EA) + Chr($A6) + ...): storage names and
+         SectionKeys come out byte-perfect, but every TEXT record re-encodes
+         the byte-chars as UTF-8, double-widening the name.
+
+      There is no scripted construction left to try: the engine either
+      mis-decodes the source or double-encodes the string. Fixing these five
+      requires renaming the symbols once by hand in the AD UI. Until then the
+      Rust side excuses exactly these five, by suffix, in
+      tests/golden_fidelity.rs (FIXTURE_INCONSISTENT). Do NOT retry Chr(). }
     { ---- I18N — one symbol per writing system, so a non-Latin name is a
       tested case rather than an assumption. See AddI18nSymbol for why the
       list is shaped the way it is. ---- }
@@ -3273,6 +3292,40 @@ begin
     // IServerDocument has no DoFileSaveAs; use DoSafeChangeFileNameAndSave.
     Doc.SetModified(True);
     Doc.DoSafeChangeFileNameAndSave(OUT_DIR + 'symbols.SchLib', 'SCHLIB');
+end;
+
+{ Opens a library previously saved to the bridge dir and resaves it through
+  Altium's own reader and writer, touching no string literals at all.
+
+  DOCUMENTED NEGATIVE (run 4, 2026-08-16): this was hoped to cure the five
+  damaged i18n symbols — their records carry the true name in the %UTF8% twin,
+  so a resave "should" recover it. It does not: the output held a FOURTH
+  mangling variant, worse than the input (replacement characters appearing),
+  proving the broken component is AD's READER itself. That one defect explains
+  every prior failure: the script engine feeds literals through the same
+  decode, and each open+save degrades these five sequences further. The only
+  path that bypasses the broken decode is typing the names in the AD UI (input
+  goes straight to a real wide string; the writer side is faithful, as the 48
+  working symbols prove), done ONCE — the repo never re-opens goldens in AD, so
+  reader-side lossiness never touches the committed file again. }
+procedure ResaveRun;
+var
+    Doc : IServerDocument;
+begin
+    try
+        Doc := Client.OpenDocument('SCHLIB', OUT_DIR + 'resave_input.SchLib');
+        if Doc = nil then
+        begin
+            WriteResponse('error', 'OpenDocument returned nil for resave_input.SchLib');
+            Exit;
+        end;
+        Client.ShowDocument(Doc);
+        Doc.SetModified(True);
+        Doc.DoSafeChangeFileNameAndSave(OUT_DIR + 'resave_output.SchLib', 'SCHLIB');
+        WriteResponse('ok', 'resaved SchLib through Altium reader+writer');
+    except
+        WriteResponse('error', 'exception during resave (see Altium)');
+    end;
 end;
 
 procedure Run;

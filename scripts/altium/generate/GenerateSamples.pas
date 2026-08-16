@@ -622,11 +622,9 @@ begin
                                   PCBM_BoardRegisteration, Rgn.I_ObjectAddress);
 end;
 
-{ STAGED PROBE — not compiled; CavityHeight / BodyColor3D / BodyOpacity3D are
-  unproven on IPCB_ComponentBody. Uncomment the body AND its call site together
-  for a run of its own. Component body with a non-zero standoff, cavity height,
-  colour and opacity. }
-(*
+{ Component body with a non-zero standoff, cavity height, colour and opacity.
+  The plain AddExtrudedBox sits flat in the default grey, so all four are
+  unexercised by any other footprint. }
 procedure AddBodyProps(Comp : IPCB_LibComponent; CX : Integer; CY : Integer;
                        WMils : Integer; HMils : Integer);
 var
@@ -657,7 +655,6 @@ begin
     PCBServer.SendMessageToRobots(Comp.I_ObjectAddress, c_Broadcast,
                                   PCBM_BoardRegisteration, Body.I_ObjectAddress);
 end;
-*)
 
 { STAGED PROBE — not compiled. A via's mask expansion must go through TPadCache
   (GetState_Cache -> SetState_Cache), the same route AddPadMask uses; the direct
@@ -1327,8 +1324,8 @@ begin
         AddRegionNamed(Comp,   20, -50, 120,  50, 'CavityRgn', eRegionKind_Cavity);
         AddRegionNamed(Comp,  140, -50, 240,  50, 'BoardCut',  eRegionKind_BoardCutout);
         AddRegionNamed(Comp,  260, -50, 360,  50, 'PlainCut',  eRegionKind_Cutout);
-        { STAGED, one unproven interface per run — see each helper's note:
-          AddBodyProps(Comp, 200, 0, 80, 60);
+        AddBodyProps(Comp, 200, 0, 80, 60);
+        { STAGED, one unproven interface per run — see the helper's note:
           AddViaMask(Comp, 400, 0, 50, 25); }
         PCBServer.PostProcess;
     except

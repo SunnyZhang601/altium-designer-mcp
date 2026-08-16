@@ -506,6 +506,7 @@ impl McpServer {
                                             "properties": {
                                                 "overall_height": { "type": "number", "description": "Total body height above the board, in mm (top of extrusion)" },
                                                 "standoff_height": { "type": "number", "description": "Standoff from the board to the bottom of the body, in mm. Default: 0" },
+                                                "cavity_height": { "type": "number", "description": "Cavity depth in mm for a body embedded into a board cavity. Default: 0" },
                                                 "outline": {
                                                     "type": "array",
                                                     "description": "Optional 2D outline polygon as {x,y} vertices in mm. If omitted, a bounding box is auto-generated from the footprint pads.",

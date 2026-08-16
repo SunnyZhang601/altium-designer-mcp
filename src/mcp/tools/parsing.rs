@@ -893,6 +893,7 @@ impl McpServer {
             z_offset: f("z_offset"),
             overall_height: f("overall_height"),
             standoff_height: f("standoff_height"),
+            cavity_height: f("cavity_height"),
             layer,
             outline,
             unique_id: body_json

@@ -866,6 +866,46 @@ fn samples_pcblib_text_style() {
 }
 
 #[test]
+fn samples_pcblib_component_body_placement_and_appearance() {
+    let lib = PcbLib::open(sample("footprints.PcbLib")).expect("failed to open footprints.PcbLib");
+    let fp = lib.get("PRIMPROPS").expect("PRIMPROPS footprint not found");
+
+    // The only body in the library that is not flat, grey and opaque. Without it
+    // the standoff, cavity, colour and opacity arms read nothing but defaults.
+    assert_eq!(fp.component_bodies.len(), 1, "PRIMPROPS has one body");
+    let b = &fp.component_bodies[0];
+
+    // 10 mil standoff, 50 mil overall, 5 mil cavity.
+    assert!(
+        approx_eq(b.standoff_height, 0.254, 1e-6),
+        "standoff height, got {}",
+        b.standoff_height
+    );
+    assert!(
+        approx_eq(b.overall_height, 1.27, 1e-6),
+        "overall height, got {}",
+        b.overall_height
+    );
+    // CAVITYHEIGHT was on the reader's modelled-keys list — and so excluded from
+    // the unknown-key passthrough — while no field parsed it, and the writer
+    // emitted a hard-coded `CAVITYHEIGHT=0mil`. A non-zero value was therefore
+    // lost in both directions until this fixture caught it.
+    assert!(
+        approx_eq(b.cavity_height, 0.127, 1e-6),
+        "cavity height, got {}",
+        b.cavity_height
+    );
+
+    // Red at half opacity, against the grey opaque default every other body has.
+    assert_eq!(b.body_color_3d, 255, "3D body colour (BGR red)");
+    assert!(
+        approx_eq(b.body_opacity_3d, 0.5, 1e-6),
+        "3D body opacity, got {}",
+        b.body_opacity_3d
+    );
+}
+
+#[test]
 fn samples_pcblib_region_kinds_and_naming() {
     let lib = PcbLib::open(sample("footprints.PcbLib")).expect("failed to open footprints.PcbLib");
     let fp = lib.get("PRIMPROPS").expect("PRIMPROPS footprint not found");

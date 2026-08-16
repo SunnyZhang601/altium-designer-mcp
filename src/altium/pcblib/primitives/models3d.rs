@@ -114,6 +114,11 @@ pub struct ComponentBody {
     #[serde(default, serialize_with = "crate::altium::serde_round::serialize")]
     pub standoff_height: f64,
 
+    /// Cavity depth in mm (`CAVITYHEIGHT`), for a body embedded into a board
+    /// cavity. Altium writes the key on every body, `0mil` when unused.
+    #[serde(default, serialize_with = "crate::altium::serde_round::serialize")]
+    pub cavity_height: f64,
+
     /// Layer the body outline is on.
     #[serde(default)]
     pub layer: Layer,
@@ -259,6 +264,7 @@ impl ComponentBody {
             z_offset: 0.0,
             overall_height: 0.0,
             standoff_height: 0.0,
+            cavity_height: 0.0,
             layer: Layer::Top3DBody,
             outline: Vec::new(),
             unique_id: None,

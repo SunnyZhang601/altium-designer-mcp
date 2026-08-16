@@ -1611,7 +1611,10 @@ fn build_component_body_params(body: &ComponentBody) -> String {
         "ISSHAPEBASED={}",
         if body.is_shape_based { "TRUE" } else { "FALSE" }
     ));
-    params.push("CAVITYHEIGHT=0mil".to_string());
+    params.push(format!(
+        "CAVITYHEIGHT={}",
+        format_mil_coord(body.cavity_height)
+    ));
     // Use the canonical trimmed mil formatting (as the region encoder does) rather
     // than raw {} float formatting, so body heights match Altium's own output shape.
     params.push(format!(

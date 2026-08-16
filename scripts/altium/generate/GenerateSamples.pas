@@ -3052,6 +3052,25 @@ begin
     end;
 
 
+    { DOCUMENTED NEGATIVE (AD24, three runs, 2026-08-16): five of the symbols
+      below (_JV, _BN, _CR, _IU, _SB) are internally inconsistent in the saved
+      library NO MATTER how their words are constructed, and the damage is the
+      script ENGINE's, not this file's:
+
+      1. Source literals (this file's encoding is clean UTF-8): the engine
+         mis-decodes exactly these five sequences -- the CFB storage name comes
+         out correct while the text records hold a shifted string.
+      2. Wide Chr() (Chr($A997) + ...): Chr truncates to its LOW BYTE -- the
+         engine's strings are ANSI -- so every field degrades to byte garbage.
+      3. UTF-8 byte Chr() (Chr($EA) + Chr($A6) + ...): storage names and
+         SectionKeys come out byte-perfect, but every TEXT record re-encodes
+         the byte-chars as UTF-8, double-widening the name.
+
+      There is no scripted construction left to try: the engine either
+      mis-decodes the source or double-encodes the string. Fixing these five
+      requires renaming the symbols once by hand in the AD UI. Until then the
+      Rust side excuses exactly these five, by suffix, in
+      tests/golden_fidelity.rs (FIXTURE_INCONSISTENT). Do NOT retry Chr(). }
     { ---- I18N — one symbol per writing system, so a non-Latin name is a
       tested case rather than an assumption. See AddI18nSymbol for why the
       list is shaped the way it is. ---- }

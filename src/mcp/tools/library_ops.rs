@@ -3407,6 +3407,27 @@ mod tests {
         }
 
         #[test]
+        fn a_nameless_component_cannot_be_stored_in_the_first_place() {
+            // The validator carries "component has empty name" checks in four
+            // places (validate_pcblib, validate_schlib and both post-write
+            // passes), but none of them can fire on a library read from disk:
+            // the component name IS the OLE storage name, so an empty one
+            // collides with the root and the save is refused before a file
+            // exists to validate. Pinning that here so the checks are
+            // understood as unreachable-by-construction rather than untested.
+            let dir = test_temp_dir();
+
+            let mut fp = Footprint::new("");
+            fp.add_pad(Pad::smd("1", 0.0, 0.0, 1.0, 1.0));
+            let mut lib = PcbLib::new();
+            lib.add(fp);
+            let err = lib
+                .save(dir.path().join("Nameless.PcbLib"))
+                .expect_err("a nameless footprint has no storage name");
+            assert!(err.to_string().contains("storage"), "{err}");
+        }
+
+        #[test]
         fn validate_reports_a_footprint_with_no_pads() {
             // A pad-less footprint is legal to store (a fiducial outline, say)
             // but is a warning rather than an error, so it must not be silent.

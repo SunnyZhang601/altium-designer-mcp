@@ -1428,6 +1428,188 @@ mod tests {
     use super::super::primitives::PinOrientation;
     use super::*;
 
+    // ==================== encoder rejections and flag arms ==================
+    //
+    // The writer refuses anything the on-disk record cannot hold. Every one of
+    // these limits is a silent-corruption guard: the field it protects is
+    // length-prefixed or fixed-width, so an oversize value would not fail at
+    // the write, it would truncate and desync every record after it.
+
+    mod rejections {
+        use super::*;
+
+        /// A pin that encodes cleanly, so a test can push one field past its
+        /// limit and leave the rest valid.
+        fn pin() -> Pin {
+            Pin::new("NAME", "1", 0, 0, 10, PinOrientation::Left)
+        }
+
+        /// Asserts the encode failed and named `field`.
+        fn rejects(result: crate::altium::error::AltiumResult<()>, field: &str) {
+            let err = result.expect_err("expected the encoder to refuse this pin");
+            let message = err.to_string();
+            assert!(
+                message.contains(field),
+                "expected the error to name {field:?}, got: {message}"
+            );
+        }
+
+        #[test]
+        fn a_record_larger_than_the_header_can_describe_is_refused() {
+            // The record length is a 24-bit field. A u32 cast would truncate it
+            // and every following record would be read from the wrong offset,
+            // so the whole library after this point would decode as garbage.
+            let mut data = Vec::new();
+            let oversize = vec![0_u8; 0x0100_0000];
+            let err = write_record_frame(&mut data, &oversize, 0)
+                .expect_err("a 16 MiB record must be refused");
+            assert!(err.to_string().contains("16 MiB"), "{err}");
+            assert!(data.is_empty(), "nothing should be written on refusal");
+
+            // One byte under the limit still writes, header included.
+            let mut ok = Vec::new();
+            let at_limit = vec![0_u8; 0x00FF_FFFF];
+            write_record_frame(&mut ok, &at_limit, 0).expect("the limit itself is writable");
+            assert_eq!(ok.len(), at_limit.len() + 4);
+        }
+
+        #[test]
+        fn pin_coordinates_past_the_i16_range_are_refused_by_name() {
+            // Coordinates are stored as i16. A cast would wrap a far-off-sheet
+            // pin round to the opposite side of the symbol rather than failing.
+            for (field, mutate) in [
+                ("pin.x", (|p: &mut Pin| p.x = 40_000) as fn(&mut Pin)),
+                ("pin.y", |p: &mut Pin| p.y = -40_000),
+                ("pin.length", |p: &mut Pin| p.length = 40_000),
+                ("pin.owner_part_id", |p: &mut Pin| {
+                    p.owner_part_id = 40_000;
+                }),
+            ] {
+                let mut subject = pin();
+                mutate(&mut subject);
+                rejects(write_binary_pin(&mut Vec::new(), &subject), field);
+            }
+        }
+
+        #[test]
+        fn pin_strings_longer_than_the_length_prefix_are_refused_by_field() {
+            // Each string is a Pascal short string: one byte of length. Over
+            // 255 the prefix wraps and the reader takes the wrong byte count,
+            // desyncing the rest of the record.
+            let long = "x".repeat(256);
+            for (field, mutate) in [
+                (
+                    "pin.name",
+                    (|p: &mut Pin, s: String| p.name = s) as fn(&mut Pin, String),
+                ),
+                ("pin.designator", |p: &mut Pin, s: String| p.designator = s),
+                ("pin.description", |p: &mut Pin, s: String| {
+                    p.description = s;
+                }),
+                ("pin.swap_id_group", |p: &mut Pin, s: String| {
+                    p.swap_id_group = s;
+                }),
+                ("pin.part_and_sequence", |p: &mut Pin, s: String| {
+                    p.part_and_sequence = s;
+                }),
+                ("pin.default_value", |p: &mut Pin, s: String| {
+                    p.default_value = s;
+                }),
+            ] {
+                let mut subject = pin();
+                mutate(&mut subject, long.clone());
+                rejects(write_binary_pin(&mut Vec::new(), &subject), field);
+            }
+        }
+
+        #[test]
+        fn the_limit_is_encoded_bytes_not_characters() {
+            // Windows-1252 is single-byte, so 255 non-ASCII characters fit
+            // where a UTF-8 length check would have wrongly rejected them.
+            let mut subject = pin();
+            subject.name = "\u{b5}".repeat(255); // 255 x MICRO SIGN
+            write_binary_pin(&mut Vec::new(), &subject)
+                .expect("255 encoded bytes is within the prefix");
+
+            subject.name = "\u{b5}".repeat(256);
+            rejects(write_binary_pin(&mut Vec::new(), &subject), "pin.name");
+        }
+
+        #[test]
+        fn display_flag_keys_are_pushed_only_when_they_differ_from_the_default() {
+            // These ride in a `|`-joined list, so a key emitted at its default
+            // value is not harmless: it changes the bytes of every shape that
+            // carries it and breaks byte-identity against Altium's own output.
+            let mut parts = Vec::new();
+            push_display_flags(&mut parts, ShapeDisplayFlags::default());
+            assert!(parts.is_empty(), "defaults emit nothing: {parts:?}");
+
+            let flags = ShapeDisplayFlags {
+                owner_part_display_mode: 1,
+                graphically_locked: true,
+                disabled: true,
+                dimmed: true,
+            };
+            let mut parts = Vec::new();
+            push_display_flags(&mut parts, flags);
+            assert_eq!(
+                parts,
+                vec![
+                    "OwnerPartDisplayMode=1",
+                    "GraphicallyLocked=T",
+                    "Disabled=T",
+                    "Dimmed=T",
+                ]
+            );
+        }
+
+        #[test]
+        fn every_justification_maps_to_its_own_altium_id() {
+            // Nine anchors, nine ids: a duplicated arm would silently re-anchor
+            // a label to a different corner on save.
+            let ids: Vec<u8> = [
+                TextJustification::BottomLeft,
+                TextJustification::BottomCenter,
+                TextJustification::BottomRight,
+                TextJustification::MiddleLeft,
+                TextJustification::MiddleCenter,
+                TextJustification::MiddleRight,
+                TextJustification::TopLeft,
+                TextJustification::TopCenter,
+                TextJustification::TopRight,
+            ]
+            .into_iter()
+            .map(justification_to_id)
+            .collect();
+            assert_eq!(ids, (0..=8).collect::<Vec<u8>>());
+        }
+
+        #[test]
+        fn pin_display_flags_ride_in_their_own_bits() {
+            // The flag byte packs four independent booleans; a shared or
+            // swapped bit would turn "locked" into "hidden" on the next save.
+            let encoded = |mutate: fn(&mut Pin)| {
+                let mut subject = pin();
+                mutate(&mut subject);
+                let mut data = Vec::new();
+                write_binary_pin(&mut data, &subject).expect("pin should encode");
+                data
+            };
+
+            let plain = encoded(|_| {});
+            for mutate in [
+                (|p: &mut Pin| p.graphically_locked = true) as fn(&mut Pin),
+                |p: &mut Pin| p.is_not_accessible = true,
+            ] {
+                assert_ne!(
+                    encoded(mutate),
+                    plain,
+                    "a display flag left no trace in the record"
+                );
+            }
+        }
+    }
+
     #[test]
     fn single_part_symbol_emits_partcount_one() {
         // internal part_count 0 (single part) must re-emit PartCount=1, not the old

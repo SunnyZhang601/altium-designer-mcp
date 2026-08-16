@@ -39,7 +39,20 @@ const VOLATILE_KEYS: &[&str] = &[
     "FILENAME",
     "MODELID",
     "MODEL.CHECKSUM",
+    "VP.HX",
 ];
+
+/// Key *prefix/suffix* patterns whose values are regenerated identities: the
+/// per-layer GUID caches Altium rewrites on every save.
+fn is_volatile_key(key: &str) -> bool {
+    if VOLATILE_KEYS.contains(&key) {
+        return true;
+    }
+    (key.starts_with("V9_CACHE_LAYER")
+        || key.starts_with("V9_STACK_LAYER")
+        || key.starts_with("LAYER_V8_"))
+        && key.ends_with("ID")
+}
 
 /// Differences that are correct by design and will not change.
 const BY_DESIGN: &[(&str, &str)] = &[
@@ -93,6 +106,10 @@ const KNOWN_DEFECTS: &[(&str, &str)] = &[
         "TEXTURESIZE",
         "the component-body texture size is 0mil in an Altium file; our writer \
          hard-codes 0.0001mil",
+    ),
+    (
+        "Library:",
+        "our writer rebuilds the library layer stack rather than preserving it:          mechanical layers are renamed to their alias names (Mechanical 2 -> Top          Assembly), disabled layers are enabled, USEDBYPRIMS is recomputed and          LAYERSET1LAYERS gains every layer we know about. A library with custom          mechanical layer names loses them on a read-modify-write",
     ),
     (
         "INDEXINSHEET",
@@ -210,7 +227,7 @@ fn block_divergences(golden: &[u8], ours: &[u8], label: &str) -> Vec<String> {
     let mut out = Vec::new();
     for (i, j) in matched {
         for (key, want) in &a[i] {
-            if VOLATILE_KEYS.contains(&key.as_str()) {
+            if is_volatile_key(key) {
                 continue;
             }
             let got = b[j].get(key);
@@ -255,7 +272,19 @@ fn pcblib_golden_survives_a_round_trip() {
         }
     }
 
-    // 2. Parameter values inside each footprint's Data stream.
+    // 2. The library-level layer stack and metadata.
+    if let (Some(g), Some(o)) = (
+        stream_bytes(&src, "/Library/Data"),
+        stream_bytes(&out, "/Library/Data"),
+    ) {
+        failures.extend(
+            block_divergences(&g, &o, "Library")
+                .into_iter()
+                .filter(|d| !is_known(d)),
+        );
+    }
+
+    // 3. Parameter values inside each footprint's Data stream.
     for name in lib.names() {
         let stream = format!("/{name}/Data");
         let (Some(g), Some(o)) = (stream_bytes(&src, &stream), stream_bytes(&out, &stream)) else {

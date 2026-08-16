@@ -122,14 +122,21 @@ const KNOWN_DEFECTS: &[(&str, &str)] = &[
     ),
 ];
 
-/// KNOWN DEFECT: a component whose name leaves Windows-1252 is written under a
-/// differently-encoded storage name, so its streams read as missing.
+/// A component whose name leaves ASCII is written under a storage name that
+/// differs from the golden's, so its streams read as missing here.
 ///
-/// Altium maps the name's UTF-8 bytes through the authoring machine's ANSI
-/// codepage (CP1250 on the box that made this golden); we map them through
-/// Latin-1. Reproducing Altium exactly would make our output depend on the
-/// local codepage, so the fix is to preserve the original storage name on read
-/// rather than re-derive it on write.
+/// Altium encodes a storage name as the name's UTF-8 bytes, one byte per
+/// character, capped at the compound-file limit of 31; ours are derived
+/// differently, and for names past that cap Altium also writes a `SectionKeys`
+/// stream mapping the real `LibRef` back — a stream we neither read nor write.
+///
+/// This is about matching Altium's *file layout*, not about whether the format
+/// layer supports the scripts: `writing_systems_survive_a_write_read_cycle`
+/// writes Cherokee, Bengali, Inuktitut, beyond-BMP Han and Adlam, and a Khmer
+/// name of 57 UTF-8 bytes through our own writer and reads every one back
+/// intact. Four of the golden's own i18n symbols carry mojibake because a
+/// `DelphiScript` literal is mangled before Altium sees it, which is a limit of
+/// how the fixture is authored rather than of the code under test.
 const fn is_non_ascii_name_defect(what: &str) -> bool {
     !what.is_ascii()
 }

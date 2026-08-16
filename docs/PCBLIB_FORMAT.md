@@ -38,10 +38,10 @@ PcbLib files are OLE Compound Documents (CFB format, **OLE v3 with 512-byte sect
 > **Note:** OLE version MUST be V3 (512-byte sectors). Altium Designer rejects V4 (4096-byte) files.
 >
 > Real Altium libraries also carry `FileVersionInfo`, `EmbeddedFonts`, `LayerKindMapping`,
-> `PadViaLibrary`, `ComponentParamsTOC`, `Textures`, `ModelsNoEmbed`, `PrimitiveGuids` and
-> `UniqueIdPrimitiveInformation`. All of these are read and written back. `SectionKeys` (root,
-> for names past the 31-character storage limit) is **unmodelled**: the reader ignores it and
-> the writer does not emit it.
+> `PadViaLibrary`, `ComponentParamsTOC`, `Textures`, `ModelsNoEmbed`, `PrimitiveGuids`,
+> `UniqueIdPrimitiveInformation` and — when a component name exceeds the 31-unit storage cap —
+> a root `SectionKeys` stream mapping each real name to its plain-truncated storage name. All of
+> these are read and written back (`SectionKeys` format: see `SCHLIB_FORMAT.md`, identical here).
 
 ## Encoding Primitives (Building Blocks)
 

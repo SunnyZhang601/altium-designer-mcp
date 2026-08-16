@@ -46,12 +46,39 @@ impl SchLib {
             .collect();
 
         // Header order first (so `list_components` keeps the library's own
-        // ordering), then any storage the header does not mention.
+        // ordering), then any storage the header does not mention. A header
+        // name is matched to its storage three ways, in decreasing directness:
+        // as-is (ASCII names), through its wire form (a non-Windows-1252 name
+        // is stored under its UTF-8 bytes one char per byte), and through the
+        // root SectionKeys stream (a name past the 31-unit storage cap is
+        // stored truncated, and SectionKeys is the authoritative map back).
+        // An Altium file authored on a non-1252 locale can still widen its
+        // storage names through a code page we cannot reconstruct; such
+        // storages simply fall through to the extras pass below.
+        let section_keys: std::collections::HashMap<String, String> =
+            crate::altium::read_stream_opt(&mut cfb, "/SectionKeys")
+                .map(|data| {
+                    crate::altium::parse_section_keys(&data)
+                        .into_iter()
+                        .collect()
+                })
+                .unwrap_or_default();
         let mut ordered: Vec<String> = header
             .component_names
             .iter()
-            .filter(|n| storages.contains(n))
-            .cloned()
+            .filter_map(|n| {
+                if storages.contains(n) {
+                    return Some(n.clone());
+                }
+                let wire = crate::altium::to_wire_text(n);
+                if storages.contains(&wire) {
+                    return Some(wire);
+                }
+                section_keys
+                    .get(&wire)
+                    .filter(|sk| storages.contains(*sk))
+                    .cloned()
+            })
             .collect();
         let extras: Vec<String> = storages
             .iter()

@@ -19,7 +19,7 @@
 
 use altium_designer_mcp::altium::pcblib::PcbLib;
 use altium_designer_mcp::altium::schlib::SchLib;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 fn sample(name: &str) -> PathBuf {
@@ -48,7 +48,13 @@ const VOLATILE_KEYS: &[&str] = &[
 ];
 
 fn is_volatile_key(key: &str) -> bool {
-    VOLATILE_KEYS.contains(&key)
+    // A %UTF8% twin's content depends on the ANSI code page of the machine
+    // that wrote the file — Altium builds it by decoding the value's UTF-8
+    // bytes through the authoring locale (Windows-1250 for the golden), we
+    // write the raw bytes — while the plain key beside it carries the
+    // authoritative value on every machine. The plain key is still compared,
+    // so the value itself cannot silently change.
+    VOLATILE_KEYS.contains(&key) || key.starts_with("%UTF8%")
 }
 
 /// Differences that are correct by design and will not change.
@@ -73,52 +79,105 @@ const BY_DESIGN: &[(&str, &str)] = &[
 /// so the cost is visible in code review instead of being discovered in a
 /// corrupted library.
 const KNOWN_DEFECTS: &[(&str, &str)] = &[(
-    "sectionkeys",
-    "Altium emits a SectionKeys stream mapping LibRef -> storage name for \
-         every component whose name does not fit the CFB 31-character cap once \
-         encoded; we neither read nor write it, so those components lose their \
-         real name and keep only the truncated storage name",
+    "pinwidetext",
+    "Altium writes a per-symbol PinWideText stream for pins whose text leaves \
+     Windows-1252 — the icon-storage container framing, one zlib entry per pin \
+     ordinal; we neither read nor write it, so a read-modify-write drops it",
 )];
 
-/// A component whose name leaves ASCII is written under a storage name that
-/// differs from the golden's, so its streams read as missing here.
+/// The five fixture symbols `DelphiScript` mangled before Altium saw them.
 ///
-/// Altium encodes a storage name as the name's UTF-8 bytes, one byte per
-/// character, capped at the compound-file limit of 31; ours are derived
-/// differently, and for names past that cap Altium also writes a `SectionKeys`
-/// stream mapping the real `LibRef` back — a stream we neither read nor write.
-///
-/// This is about matching Altium's *file layout*, not about whether the format
-/// layer supports the scripts: `writing_systems_survive_a_write_read_cycle`
-/// writes Cherokee, Bengali, Inuktitut, beyond-BMP Han and Adlam, and a Khmer
-/// name of 57 UTF-8 bytes through our own writer and reads every one back
-/// intact. Four of the golden's own i18n symbols carry mojibake because a
-/// `DelphiScript` literal is mangled before Altium sees it, which is a limit of
-/// how the fixture is authored rather than of the code under test.
-const fn is_non_ascii_name_defect(what: &str) -> bool {
-    !what.is_ascii()
+/// Each is internally inconsistent IN THE GOLDEN ITSELF: the CFB storage name
+/// folds to the correct word (Javanese, Bengali, Cherokee, Inuktitut,
+/// beyond-BMP Han) while the record inside stores a different, shifted string —
+/// so no self-consistent writer can reproduce both at once. The cure is
+/// regenerating these five with literals built from character codes rather than
+/// source-file text; until then their storage names cannot match and their
+/// stream paths are excused here, precisely, by suffix.
+const FIXTURE_INCONSISTENT: &[&str] = &["_jv", "_bn", "_cr", "_iu", "_sb"];
+
+/// Whether a canonical path belongs to one of the five damaged fixtures.
+fn is_fixture_inconsistent(what: &str) -> bool {
+    let component = what.split('/').next().unwrap_or(what);
+    FIXTURE_INCONSISTENT
+        .iter()
+        .any(|suffix| component.ends_with(suffix))
 }
 
 fn is_known(what: &str) -> bool {
     let lower = what.to_lowercase();
-    is_non_ascii_name_defect(what)
+    is_fixture_inconsistent(&lower)
         || BY_DESIGN
             .iter()
             .chain(KNOWN_DEFECTS)
             .any(|(key, _)| lower.contains(&key.to_lowercase()))
 }
 
-/// Every stream path in an OLE file, lower-cased for case-insensitive compare.
-fn stream_paths(path: &Path) -> BTreeSet<String> {
+/// Folds one path segment to a locale-independent form.
+///
+/// A CFB storage name for a non-Windows-1252 component is the name's UTF-8
+/// bytes widened one-per-byte through the ANSI code page of the machine that
+/// wrote the file — the golden was authored on a Windows-1250 box, we widen
+/// through Windows-1252 — so the same component gets different UTF-16 storage
+/// names on different machines while the underlying bytes are identical. This
+/// inverts the widening by trying each plausible code page and keeping the
+/// first whose bytes decode as UTF-8, which recovers the real name; the lossy
+/// decode also absorbs a name the 31-unit cap cut mid-codepoint (the golden's
+/// Sinhala symbol), identically on both sides.
+fn canonical_segment(seg: &str) -> String {
+    if seg.is_ascii() {
+        return seg.to_lowercase();
+    }
+    for enc in [
+        encoding_rs::WINDOWS_1252,
+        encoding_rs::WINDOWS_1250,
+        encoding_rs::WINDOWS_1251,
+        encoding_rs::WINDOWS_1253,
+        encoding_rs::WINDOWS_1254,
+        encoding_rs::WINDOWS_1255,
+        encoding_rs::WINDOWS_1256,
+        encoding_rs::WINDOWS_1257,
+        encoding_rs::WINDOWS_1258,
+        encoding_rs::WINDOWS_874,
+    ] {
+        let (bytes, _, had_errors) = enc.encode(seg);
+        if had_errors {
+            continue;
+        }
+        let sound = match std::str::from_utf8(&bytes) {
+            Ok(s) => !s.is_ascii(),
+            // A tail the 31-unit cap cut mid-codepoint is not an arbitrary
+            // decode failure: accept the fold when everything up to the cut is
+            // sound UTF-8 and only the end is incomplete.
+            Err(e) => e.error_len().is_none() && e.valid_up_to() > 0,
+        };
+        if sound {
+            return String::from_utf8_lossy(&bytes).to_lowercase();
+        }
+    }
+    seg.to_lowercase()
+}
+
+/// Folds a whole stream path segment-by-segment.
+fn canonical_path(path: &str) -> String {
+    path.trim_start_matches('/')
+        .split(['/', '\\'])
+        .map(canonical_segment)
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+/// Every stream in an OLE file, keyed by its canonical path (see
+/// [`canonical_segment`]) with the actual path as the value, so two files can
+/// be compared component-by-component regardless of the authoring locale.
+fn stream_map(path: &Path) -> BTreeMap<String, String> {
     let file = std::fs::File::open(path).expect("open library");
     let cfb = cfb::CompoundFile::open(file).expect("parse OLE");
     cfb.walk()
         .filter(cfb::Entry::is_stream)
         .map(|e| {
-            e.path()
-                .to_string_lossy()
-                .trim_start_matches('/')
-                .to_lowercase()
+            let actual = e.path().to_string_lossy().into_owned();
+            (canonical_path(&actual), actual)
         })
         .collect()
 }
@@ -233,9 +292,10 @@ fn pcblib_golden_survives_a_round_trip() {
 
     let mut failures = Vec::new();
 
-    // 1. Streams the golden has that we did not write back.
-    let (before, after) = (stream_paths(&src), stream_paths(&out));
-    for missing in before.difference(&after) {
+    // 1. Streams the golden has that we did not write back, compared by
+    //    canonical path so a locale-widened storage name meets its twin.
+    let (before, after) = (stream_map(&src), stream_map(&out));
+    for missing in before.keys().filter(|k| !after.contains_key(*k)) {
         if !is_known(missing) {
             failures.push(format!("stream dropped entirely: {missing}"));
         }
@@ -253,14 +313,24 @@ fn pcblib_golden_survives_a_round_trip() {
         );
     }
 
-    // 3. Parameter values inside each footprint's Data stream.
-    for name in lib.names() {
-        let stream = format!("/{name}/Data");
-        let (Some(g), Some(o)) = (stream_bytes(&src, &stream), stream_bytes(&out, &stream)) else {
+    // 3. Parameter values inside each footprint's Data stream — every
+    //    footprint the two files share, including the ones whose storage names
+    //    differ only by authoring locale.
+    for (canonical, g_path) in &before {
+        let Some(fp) = canonical
+            .strip_suffix("/data")
+            .filter(|fp| !fp.contains('/') && *fp != "library")
+        else {
+            continue;
+        };
+        let Some(o_path) = after.get(canonical) else {
+            continue; // already reported as dropped
+        };
+        let (Some(g), Some(o)) = (stream_bytes(&src, g_path), stream_bytes(&out, o_path)) else {
             continue;
         };
         failures.extend(
-            block_divergences(&g, &o, &name)
+            block_divergences(&g, &o, fp)
                 .into_iter()
                 .filter(|d| !is_known(d)),
         );
@@ -272,25 +342,24 @@ fn pcblib_golden_survives_a_round_trip() {
     //    equality there means the replay is intact; the unique-id records are
     //    rebuilt from the write sequence, so equality there means the order the
     //    ordinals refer to survived.
-    for name in lib.names() {
-        for stream in ["PrimitiveGuids/Data", "UniqueIDPrimitiveInformation/Data"] {
-            let path = format!("/{name}/{stream}");
-            let Some(g) = stream_bytes(&src, &path) else {
-                continue;
-            };
-            let what = format!("{name}: {stream}");
-            if is_known(&what) {
-                continue;
-            }
-            match stream_bytes(&out, &path) {
-                Some(o) if o == g => {}
-                Some(o) => failures.push(format!(
-                    "{what} differs: {} bytes golden, {} ours",
-                    g.len(),
-                    o.len()
-                )),
-                None => failures.push(format!("{what} was not written back")),
-            }
+    for (canonical, g_path) in &before {
+        if !canonical.ends_with("primitiveguids/data")
+            && !canonical.ends_with("uniqueidprimitiveinformation/data")
+        {
+            continue;
+        }
+        if is_known(canonical) {
+            continue;
+        }
+        let g = stream_bytes(&src, g_path).expect("walked stream exists");
+        match after.get(canonical).and_then(|p| stream_bytes(&out, p)) {
+            Some(o) if o == g => {}
+            Some(o) => failures.push(format!(
+                "{canonical} differs: {} bytes golden, {} ours",
+                g.len(),
+                o.len()
+            )),
+            None => failures.push(format!("{canonical} was not written back")),
         }
     }
 
@@ -345,20 +414,28 @@ fn schlib_golden_survives_a_round_trip() {
 
     let mut failures = Vec::new();
 
-    let (before, after) = (stream_paths(&src), stream_paths(&out));
-    for missing in before.difference(&after) {
+    let (before, after) = (stream_map(&src), stream_map(&out));
+    for missing in before.keys().filter(|k| !after.contains_key(*k)) {
         if !is_known(missing) {
             failures.push(format!("stream dropped entirely: {missing}"));
         }
     }
 
-    for name in lib.names() {
-        let stream = format!("/{name}/Data");
-        let (Some(g), Some(o)) = (stream_bytes(&src, &stream), stream_bytes(&out, &stream)) else {
+    for (canonical, g_path) in &before {
+        let Some(name) = canonical
+            .strip_suffix("/data")
+            .filter(|name| !name.contains('/'))
+        else {
+            continue;
+        };
+        let Some(o_path) = after.get(canonical) else {
+            continue; // already reported as dropped
+        };
+        let (Some(g), Some(o)) = (stream_bytes(&src, g_path), stream_bytes(&out, o_path)) else {
             continue;
         };
         failures.extend(
-            block_divergences(&g, &o, &name)
+            block_divergences(&g, &o, name)
                 .into_iter()
                 .filter(|d| !is_known(d)),
         );
@@ -368,7 +445,7 @@ fn schlib_golden_survives_a_round_trip() {
         // the order does — and a block-level diff pairs records by content, not
         // by position, so it cannot see a reordering on its own.
         let (gk, ok) = (record_kinds(&g), record_kinds(&o));
-        if gk != ok && !is_known(&name) {
+        if gk != ok && !is_known(name) {
             failures.push(format!(
                 "{name}: record order changed\n  golden: {}\n  ours:   {}",
                 gk.join(" "),

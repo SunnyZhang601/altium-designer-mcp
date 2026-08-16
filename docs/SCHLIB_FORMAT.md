@@ -46,13 +46,33 @@ instead of being repeated:
   below).
 - **`IndexInSheet`:** one shared sequential 0-based counter over all content records (see
   [IndexInSheet](#indexinsheet)).
-- **`%UTF8%` keys:** a text value that Windows-1252 cannot represent (Cyrillic, CJK, Greek `Ω`,
-  ...) is stored under a `%UTF8%<Key>` key (e.g. `%UTF8%Text`) holding the raw UTF-8 bytes,
-  INSTEAD of the lossy plain `<Key>` — only one of the two is ever written. Applies to `Text` on
-  Label, Text, Parameter, Designator and TextFrame records.
+- **`%UTF8%` keys:** any **non-ASCII** text value is written twice: the plain `<Key>` carrying
+  the value's raw UTF-8 bytes, plus a `%UTF8%<Key>` companion. The gate is ASCII, not
+  Windows-1252-representability — the golden stores `Résistance` this way even though `é` has a
+  single-byte form. The companion's on-disk content in an Altium-authored file is the UTF-8 bytes
+  re-decoded through the authoring machine's ANSI code page (a locale artefact; Windows-1250 for
+  the golden); this crate writes the same bytes under both keys, which every reader resolves to
+  the same value. Applies to every text field: `LibReference`, `ComponentDescription`, `Text` on
+  Label/Text/Parameter/Designator/TextFrame, and the FileHeader's `LibRef{N}`/`CompDescr{N}`.
 - **`UniqueID`:** 8-character alphanumeric per-record id, emitted as the LAST key.
 - **Encoding:** records are Windows-1252, with a leading `|`, no trailing `|`, and a trailing
   `0x00` (the record length includes the null).
+
+## SectionKeys Stream
+
+A root stream, present only when at least one component's name does not fit the CFB 31-UTF-16-unit
+storage cap. Storage names for such components are the name's wire bytes **plain-truncated at the
+cap** (the golden's Sinhala symbol is cut mid-codepoint, so the cut is bytewise); this stream maps
+each real `LibRef` to its truncated `SectionKey` (storage name):
+
+```text
+[u32 len]["|KeyCount=N|%UTF8%LibRef0=…|||LibRef0=…|%UTF8%SectionKey0=…|||SectionKey0=…" + 0x00]
+```
+
+Values follow the `%UTF8%` twin convention above; the `|||` after each twin value is Altium's own
+separator, reproduced verbatim. The `FileHeader`'s `LibRef{N}` entries hold the **full untruncated
+name** — the golden stores a 33-byte Khmer name there against a 31-unit storage — so lookup for a
+long name goes `FileHeader` → `SectionKeys` → storage.
 
 ## FileHeader Stream
 

@@ -289,19 +289,22 @@ fn encode_component_header(symbol: &Symbol) -> String {
 /// the pre-UTF-8 output, so the common case (and everything in the golden library)
 /// is unchanged.
 ///
-/// A value with non-Windows-1252 characters (Cyrillic, CJK, Greek `Ω`, …) would be
-/// corrupted to `?` by the record's Windows-1252 encoder, so it is written **twice**,
-/// as Altium does: the plain `<key>` carrying the value's raw UTF-8 bytes, and a
-/// `%UTF8%<key>` companion. Altium reads the plain key, so omitting it leaves the
-/// name `?`-mangled in Altium even though our own reader recovers it; the companion
-/// is what `AltiumSharp` and older readers look for. Both are the same bytes on the
-/// wire, since the record is encoded as Windows-1252.
+/// A non-ASCII value is written **twice**, as Altium does: the plain `<key>`
+/// carrying the value's raw UTF-8 bytes, and a `%UTF8%<key>` companion. Altium
+/// reads the plain key, so omitting it leaves the name `?`-mangled in Altium
+/// even though our own reader recovers it; the companion is what `AltiumSharp`
+/// and older readers look for. Both are the same bytes on the wire, since the
+/// record is encoded as Windows-1252.
+///
+/// The gate is ASCII, not Windows-1252-representability: the golden stores
+/// `Résistance` as its UTF-8 bytes with a twin, even though `é` has a
+/// perfectly good single-byte form — AD promotes any non-ASCII value.
 fn text_field(key: &str, value: &str) -> String {
-    if crate::altium::requires_utf8(value) {
+    if value.is_ascii() {
+        format!("{key}={value}")
+    } else {
         let bytes = crate::altium::encode_utf8_param_value(value);
         format!("{key}={bytes}|%UTF8%{key}={bytes}")
-    } else {
-        format!("{key}={value}")
     }
 }
 
@@ -1387,11 +1390,16 @@ pub fn encode_file_header(symbols: &[&Symbol], ole_names: &[String]) -> Vec<u8> 
         format!("CompCount={}", symbols.len()),
     ];
 
-    // Add component references using OLE-safe names for storage lookup
-    for (i, (symbol, ole_name)) in symbols.iter().zip(ole_names.iter()).enumerate() {
-        // LibRef uses the OLE-safe name (for storage path lookup)
-        parts.push(format!("LibRef{i}={ole_name}"));
-        parts.push(format!("CompDescr{}={}", i, symbol.description));
+    // LibRef{i} is the component's REAL name — the golden stores the full
+    // 33-byte Khmer name here while its storage name is cut at 31 — with a
+    // %UTF8% twin when the name leaves Windows-1252. The root SectionKeys
+    // stream, not this list, is what maps a truncated storage name back.
+    // `ole_names` still decides which entries need that map; it is unused here
+    // beyond keeping the two lists in lockstep by construction.
+    debug_assert_eq!(symbols.len(), ole_names.len());
+    for (i, symbol) in symbols.iter().enumerate() {
+        parts.push(text_field(&format!("LibRef{i}"), &symbol.name));
+        parts.push(text_field(&format!("CompDescr{i}"), &symbol.description));
         parts.push(format!("PartCount{}={}", i, symbol.part_count + 1));
     }
 
@@ -1944,17 +1952,22 @@ mod tests {
 
     #[test]
     fn test_encode_file_header_long_name() {
+        // LibRef carries the REAL name however long — the golden stores the
+        // full 33-byte Khmer name here against a 31-unit storage. The map from
+        // name to truncated storage lives in the root SectionKeys stream, not
+        // in this list.
         let long_name = "A".repeat(64);
         let symbol = Symbol::new(&long_name);
         let symbols = vec![&symbol];
-        // OLE name is truncated
-        let ole_names = vec!["AAAAAAAAAAAAAAAAAAAAAAAAAAA~001".to_string()];
+        let ole_names = vec!["A".repeat(31)];
 
         let data = encode_file_header(&symbols, &ole_names);
 
-        // LibRef should use the OLE-safe name
         let text = String::from_utf8_lossy(&data[4..]);
-        assert!(text.contains("LibRef0=AAAAAAAAAAAAAAAAAAAAAAAAAAA~001"));
+        assert!(
+            text.contains(&format!("LibRef0={long_name}")),
+            "LibRef must hold the untruncated name"
+        );
     }
 
     #[test]
@@ -2410,24 +2423,29 @@ mod tests {
     }
 
     #[test]
-    fn win1252_text_stays_byte_identical_no_utf8_key() {
-        // A pure-Windows-1252 value (the common case, and everything in the golden
-        // library) must emit the plain `Text=` key exactly as before the UTF-8 fix
-        // — no `%UTF8%Text` key, so the record bytes are unchanged (oracle-clean).
-        // `µ` (U+00B5) is representable in Windows-1252, so it stays plain.
+    fn ascii_text_stays_plain_and_non_ascii_promotes() {
+        // The promotion gate is ASCII, not Windows-1252-representability. The
+        // golden's `Résistance_L1` record stores its LibReference and labels as
+        // raw UTF-8 bytes with a `%UTF8%` twin even though `é` has a
+        // single-byte Windows-1252 form, so `µ`/`é` values promote too; only a
+        // pure-ASCII value keeps the bare single key.
         let mut p = Parameter::new("Value", "10\u{00B5}F"); // "10µF"
         p.unique_id = Some("ABCD1234".to_string());
         let s = encode_parameter(&p, 1);
-        assert!(s.contains("|Text=10\u{00B5}F|"), "plain Text key: {s}");
+        let expected = crate::altium::encode_utf8_param_value("10\u{00B5}F");
         assert!(
-            !s.contains("%UTF8%"),
-            "no %UTF8% key for Win-1252 value: {s}"
+            s.contains(&format!("|Text={expected}|")),
+            "plain Text carries the UTF-8 bytes: {s}"
+        );
+        assert!(
+            s.contains(&format!("%UTF8%Text={expected}")),
+            "non-ASCII value gets the %UTF8% twin: {s}"
         );
 
         let mut label = Label {
             x: 0.0,
             y: 0.0,
-            text: "caf\u{00E9}".to_string(), // "café" — all Windows-1252
+            text: "caf\u{00E9}".to_string(), // "café" — non-ASCII, so promoted
             font_id: 1,
             color: 0,
             justification: TextJustification::BottomLeft,
@@ -2439,13 +2457,9 @@ mod tests {
             unique_id: Some("ABCD1234".to_string()),
         };
         let s = encode_label(&label, 1);
-        assert!(s.contains("|Text=caf\u{00E9}|"), "plain Text key: {s}");
-        assert!(
-            !s.contains("%UTF8%"),
-            "no %UTF8% key for Win-1252 label: {s}"
-        );
+        assert!(s.contains("%UTF8%Text="), "café promotes: {s}");
 
-        // And an ASCII label is byte-identical to the pre-change output.
+        // An ASCII label is byte-identical to the historical output.
         label.text = "R".to_string();
         let s = encode_label(&label, 1);
         assert!(s.contains("|Text=R|"), "plain ASCII Text: {s}");

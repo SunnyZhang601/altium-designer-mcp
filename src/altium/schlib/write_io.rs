@@ -17,20 +17,21 @@ impl SchLib {
 
         let symbols: Vec<&Symbol> = self.symbols.values().collect();
 
-        // A name outside Windows-1252 becomes the storage name in Altium's own
-        // form: its UTF-8 bytes carried one char per byte. That keeps the storage
-        // name and the FileHeader's `LibRef{i}` consistent, because the header is
+        // A non-ASCII name becomes the storage name in Altium's own form: its
+        // UTF-8 bytes carried one char per byte. That keeps the storage name
+        // and the FileHeader's `LibRef{i}` consistent, because the header is
         // a Windows-1252 block and encoding this form back yields exactly those
-        // UTF-8 bytes — which is what Altium's library browser reads. Writing the
-        // real Unicode string instead leaves `LibRef{i}` as `?` per character.
-        // A Windows-1252 name is passed through untouched.
+        // UTF-8 bytes — which is what Altium's library browser reads. The gate
+        // is ASCII to match `text_field`: the golden stores `Résistance` this
+        // way despite `é` having a single-byte form, so the storage name and
+        // the record's `LibReference` stay the same bytes.
         let storage_names: Vec<String> = symbols
             .iter()
             .map(|s| {
-                if crate::altium::requires_utf8(&s.name) {
-                    crate::altium::encode_utf8_param_value(&s.name)
-                } else {
+                if s.name.is_ascii() {
                     s.name.clone()
+                } else {
+                    crate::altium::encode_utf8_param_value(&s.name)
                 }
             })
             .collect();
@@ -43,6 +44,20 @@ impl SchLib {
             "/FileHeader",
             &writer::encode_file_header(&symbols, &ole_names),
         )?;
+
+        // Root SectionKeys stream: the LibRef -> storage-name map for every
+        // symbol whose name did not survive the storage cap, so the real name
+        // stays recoverable by Altium and by our own reader's ordering pass.
+        // With no truncated name the stream is not written, as in Altium.
+        let truncated: Vec<(String, String)> = storage_names
+            .iter()
+            .zip(ole_names.iter())
+            .filter(|(wire, ole)| wire != ole)
+            .map(|(wire, ole)| (wire.clone(), ole.clone()))
+            .collect();
+        if let Some(section_keys) = crate::altium::encode_section_keys(&truncated) {
+            crate::altium::write_stream(&mut cfb, "/SectionKeys", &section_keys)?;
+        }
 
         // One Data stream per symbol, under its own storage.
         for (symbol, ole_name) in symbols.iter().zip(ole_names.iter()) {

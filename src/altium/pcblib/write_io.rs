@@ -40,6 +40,21 @@ impl PcbLib {
         // Write Library storage (Header + Data for Altium compatibility)
         self.write_library(&mut cfb, &ole_names)?;
 
+        // Root SectionKeys stream: the LibRef -> storage-name map for every
+        // footprint whose name did not survive the storage cap. The real name
+        // still travels in the footprint's own PATTERN parameter; this stream
+        // is how Altium maps it to the truncated storage. Not written when no
+        // name was truncated — which includes the whole golden.
+        let truncated: Vec<(String, String)> = wire_names
+            .iter()
+            .zip(ole_names.iter())
+            .filter(|(wire, ole)| wire != ole)
+            .map(|(wire, ole)| (wire.clone(), ole.clone()))
+            .collect();
+        if let Some(section_keys) = crate::altium::encode_section_keys(&truncated) {
+            crate::altium::write_stream(&mut cfb, "/SectionKeys", &section_keys)?;
+        }
+
         // Write embedded 3D models if present (under /Library/Models/)
         self.write_models(&mut cfb)?;
 

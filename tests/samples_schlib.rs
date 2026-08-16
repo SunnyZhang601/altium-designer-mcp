@@ -815,6 +815,43 @@ fn samples_schlib_polyline_styling() {
 }
 
 #[test]
+fn samples_schlib_label_and_parameter_display_props() {
+    let lib = SchLib::open(sample("symbols.SchLib")).expect("failed to open symbols.SchLib");
+    let sym = lib
+        .get("SHAPESTYLE2")
+        .expect("SHAPESTYLE2 symbol not found");
+
+    // A mirrored label. AD24 writes `IsMirrored=T` before `UniqueID` here, and
+    // *after* it on the parameter below — the orders genuinely differ.
+    let label = sym
+        .labels
+        .iter()
+        .find(|l| l.text == "MIRRORED")
+        .expect("SHAPESTYLE2 label not found");
+    assert!(label.is_mirrored, "the label is mirrored");
+
+    // The parameter display properties, none of which any other symbol sets.
+    let param = sym
+        .parameters
+        .iter()
+        .find(|p| p.name == "Rating")
+        .expect("SHAPESTYLE2 Rating parameter not found");
+    assert_eq!(param.value, "10V", "parameter value");
+    assert!(param.show_name, "the name is shown beside the value");
+    assert_eq!(param.read_only_state, 1, "parameter is read-only");
+    assert!(param.is_mirrored, "the parameter text is mirrored");
+
+    // Authored `LineStyle := eLineStyleDotted` on the round rect, which AD24
+    // accepts and then does not persist — the saved record carries no
+    // LineStyle key at all, so it must read back as the 0 default.
+    assert_eq!(sym.round_rects.len(), 1, "SHAPESTYLE2 has one round rect");
+    assert_eq!(
+        sym.round_rects[0].line_style, 0,
+        "AD24 does not persist LineStyle on a library round rect"
+    );
+}
+
+#[test]
 fn samples_schlib_lockflags() {
     let lib = SchLib::open(sample("symbols.SchLib")).expect("failed to open symbols.SchLib");
     let sym = lib.get("LOCKFLAGS").expect("LOCKFLAGS symbol not found");

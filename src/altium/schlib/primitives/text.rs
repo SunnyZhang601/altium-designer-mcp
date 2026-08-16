@@ -310,6 +310,11 @@ pub struct Parameter {
     /// Omit-when-default (see `show_name`). Default `false`.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub hide_name: bool,
+    /// Whether the parameter text is mirrored (`IsMirrored`). AD24 writes the
+    /// key at the very end of the record, after `UniqueID` — unlike a label,
+    /// which carries it before. Omit-when-default. Default `false`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub is_mirrored: bool,
     /// Parameter description text (`DESCRIPTION`). Omit-when-default: emitted only
     /// when non-empty. Default empty.
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -372,6 +377,7 @@ impl Parameter {
             orientation: 0,
             justification: 0,
             show_name: false,
+            is_mirrored: false,
             hide_name: false,
             description: String::new(),
             is_configurable: false,

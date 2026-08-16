@@ -500,6 +500,7 @@ mod tests {
         p.is_system_parameter = true;
         p.text_horz_anchor = 2;
         p.text_vert_anchor = 1;
+        p.is_mirrored = true;
         symbol.add_parameter(p);
         symbol.add_parameter(Parameter::new("Value", "10k"));
 
@@ -524,6 +525,7 @@ mod tests {
         assert!(rule.is_system_parameter);
         assert_eq!(rule.text_horz_anchor, 2);
         assert_eq!(rule.text_vert_anchor, 1);
+        assert!(rule.is_mirrored);
 
         // The second parameter is the control: a reader that set these
         // unconditionally, or leaked them between records, fails here.
@@ -537,6 +539,7 @@ mod tests {
         assert!(!value.is_system_parameter);
         assert_eq!(value.text_horz_anchor, 0);
         assert_eq!(value.text_vert_anchor, 0);
+        assert!(!value.is_mirrored);
     }
 
     #[test]

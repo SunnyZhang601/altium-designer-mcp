@@ -623,6 +623,11 @@ fn encode_parameter(param: &Parameter, index: usize) -> String {
         "UniqueID={}",
         param.unique_id.clone().unwrap_or_else(generate_unique_id)
     ));
+    // After UniqueID, matching the golden: AD24 emits `IsMirrored` last on a
+    // parameter record, though it emits it before UniqueID on a label.
+    if param.is_mirrored {
+        parts.push("IsMirrored=T".to_string());
+    }
     format!("|{}", parts.join("|"))
 }
 

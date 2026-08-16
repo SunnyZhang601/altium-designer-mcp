@@ -2143,12 +2143,11 @@ begin
     SchServer.RobotManager.SendMessage(Comp.I_ObjectAddress, c_BroadCast, SCHM_PrimitiveRegistration, PL.I_ObjectAddress);
 end;
 
-{ STAGED PROBE — not compiled. `LineStyle` is real on ISch_Line but unproven on
-  ISch_RoundRectangle, and an unresolved name is a compile error that costs the
-  whole run, so this waits its turn as the single unproven family of a later
-  run. Uncomment the body AND its call site together; a body alone still
-  compiles. Round rectangle with a non-default LineStyle. }
-(*
+{ DOCUMENTED NEGATIVE (AD24): a round rectangle ACCEPTS LineStyle but does not
+  persist it — unlike ISch_Line and ISch_Polyline, which both save it. The
+  saved RECORD=10 carries no LineStyle key at all, so the read test asserts the
+  0 default. Kept as a living probe in case a later AD version starts writing
+  it; do not assert a non-zero value. }
 procedure AddRoundRectStyled(Comp : ISch_Component; X1 : Integer; Y1 : Integer;
                              X2 : Integer; Y2 : Integer);
 var RR : ISch_RoundRectangle;
@@ -2167,7 +2166,6 @@ begin
     Comp.AddSchObject(RR);
     SchServer.RobotManager.SendMessage(Comp.I_ObjectAddress, c_BroadCast, SCHM_PrimitiveRegistration, RR.I_ObjectAddress);
 end;
-*)
 
 { DOCUMENTED NEGATIVE (AD24): an arc has NO FILL. `Arc.IsSolid := True` is a
   COMPILE error, "Undeclared identifier: IsSolid" — ISch_Arc is a stroked shape
@@ -2181,9 +2179,8 @@ end;
   ISch_Pie, which carries only IsSolid + AreaColor. Do not reintroduce a
   transparent-pie helper. }
 
-{ STAGED PROBE — not compiled; `IsMirrored` is unproven on ISch_Label. See the
-  note on AddRoundRectStyled for why these wait. Label with the mirror flag. }
-(*
+{ Label with the mirror flag. AD24 writes IsMirrored BEFORE UniqueID here and
+  AFTER it on a parameter record — the key orders genuinely differ. }
 procedure AddLabelFlagged(Comp : ISch_Component; X : Integer; Y : Integer; AText : String);
 var L : ISch_Label;
 begin
@@ -2201,12 +2198,9 @@ begin
     Comp.AddSchObject(L);
     SchServer.RobotManager.SendMessage(Comp.I_ObjectAddress, c_BroadCast, SCHM_PrimitiveRegistration, L.I_ObjectAddress);
 end;
-*)
 
-{ STAGED PROBE — not compiled; `ShowName`, `ReadOnlyState` and `IsMirrored` are
-  unproven on ISch_Parameter (ReadOnlyState is at least real on the designator
-  record). See the note on AddRoundRectStyled. Parameter display properties. }
-(*
+{ Parameter display properties the plain AddParameter never sets: the name shown
+  beside the value, a read-only state and mirroring. All three persist. }
 procedure AddParameterProps(Comp : ISch_Component; AName : String; AValue : String;
                             X : Integer; Y : Integer);
 var Par : ISch_Parameter;
@@ -2227,7 +2221,6 @@ begin
     Comp.AddSchObject(Par);
     SchServer.RobotManager.SendMessage(Comp.I_ObjectAddress, c_BroadCast, SCHM_PrimitiveRegistration, Par.I_ObjectAddress);
 end;
-*)
 
 { ---- SchLib authoring -------------------------------------------------------
 
@@ -2629,10 +2622,9 @@ begin
         if Comp <> nil then
         begin
             AddPolylineStyled(Comp, -150, 80, -100, 130, -50, 80);
-            { STAGED, one unproven family per run — see the note on each helper:
-              AddRoundRectStyled(Comp, -150, 0, -50, 50);
-              AddLabelFlagged(Comp, -150, -80, 'MIRRORED');
-              AddParameterProps(Comp, 'Rating', '10V', 50, -80); }
+            AddRoundRectStyled(Comp, -150, 0, -50, 50);
+            AddLabelFlagged(Comp, -150, -80, 'MIRRORED');
+            AddParameterProps(Comp, 'Rating', '10V', 50, -80);
         end;
     except
     end;

@@ -277,6 +277,12 @@ fn encode_component_header(symbol: &Symbol) -> String {
         "Color=128".to_string(),          // Dark red outline
         format!("PartIDLocked={part_id_locked}"),
     ];
+    // Omitted at zero, like every zero-valued integer key: the golden's
+    // pinless symbols carry no AllPinCount key at all.
+    let parts: Vec<String> = parts
+        .into_iter()
+        .filter(|p| !(symbol.pins.is_empty() && p == "AllPinCount=0"))
+        .collect();
 
     // Leading pipe, NO trailing pipe (matches Altium's ParametersToString).
     format!("|{}", parts.join("|"))

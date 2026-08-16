@@ -810,7 +810,7 @@ snap-point or reserved blocks, and there is no `MODEL.SNAPCOUNT` parameter.
 | `BODYOPACITY3D` | 3D body opacity | `1.000` |
 | `IDENTIFIER` | Identifier (comma-separated codepoint list — deferred, emitted empty) | `` |
 | `TEXTURE`, `TEXTURECENTERX/Y`, `TEXTURESIZEX/Y`, `TEXTUREROTATION` | Texture fields (fixed defaults) | |
-| `MODELID` | Model GUID (synthesised for extruded bodies when absent) | `{GUID}` |
+| `MODELID` | Model GUID (model-backed bodies ONLY) | `{GUID}` |
 | `MODEL.CHECKSUM` | Model integrity checksum (round-tripped verbatim, see below) | `0` |
 | `MODEL.EMBED` | `TRUE` / `FALSE` | |
 | `MODEL.NAME` | Model filename | `RESC1005X04L.step` |
@@ -818,15 +818,15 @@ snap-point or reserved blocks, and there is no `MODEL.SNAPCOUNT` parameter.
 | `MODEL.2D.ROTATION` | 2D rotation (degrees, 3 decimals) | `0.000` |
 | `MODEL.3D.ROTX/Y/Z` | 3D rotations (degrees, 3 decimals) | `0.000` |
 | `MODEL.3D.DZ` | Z offset (mil-suffixed) | `15.748mil` |
-| `MODEL.MODELTYPE` | `0` = extruded, `1` = model-backed (STEP) | |
-| `MODEL.EXTRUDED.MINZ` / `MAXZ` | Extrusion Z range (extruded bodies ONLY) | `0mil` / `15.748mil` |
-| `MODEL.MODELSOURCE` | Model source (model-backed bodies ONLY) | `Undefined` |
+| `MODEL.MODELTYPE` | `1` = model-backed (STEP) | |
+| `MODEL.MODELSOURCE` | Model source | `Undefined` |
 
 **Extruded vs model-backed:** a body with no model file (empty `MODEL.NAME`, not embedded) is a
-generic *extruded* body — `MODEL.MODELTYPE=0` plus `MODEL.EXTRUDED.MINZ/MAXZ` (the Z range Altium
-extrudes the outline between; without it the body has no volume and is discarded). A model-backed
-body uses `MODEL.MODELTYPE=1` plus `MODEL.MODELSOURCE=Undefined` instead. `ISSHAPEBASED` stays
-`FALSE` in both cases.
+generic *extruded* body, and its parameter string **ends at `TEXTUREROTATION` — no `MODEL.*`
+keys at all**, `MODELID` included: the golden's extruded bodies (`BODY3D`, `PRIMPROPS`) carry
+none, and the extrusion derives from `STANDOFFHEIGHT`/`OVERALLHEIGHT`. A model-backed body
+carries the whole `MODEL.*` group above with `MODEL.MODELTYPE=1`. `ISSHAPEBASED` stays `FALSE`
+in both cases.
 
 Unmodelled keys captured on read are re-emitted verbatim after the canonical set (with canonical
 duplicates dropped) so read-modify-write round-trips.

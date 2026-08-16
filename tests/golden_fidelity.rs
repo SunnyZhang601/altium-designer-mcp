@@ -112,6 +112,10 @@ const KNOWN_DEFECTS: &[(&str, &str)] = &[
         "our writer rebuilds the library layer stack rather than preserving it:          mechanical layers are renamed to their alias names (Mechanical 2 -> Top          Assembly), disabled layers are enabled, USEDBYPRIMS is recomputed and          LAYERSET1LAYERS gains every layer we know about. A library with custom          mechanical layer names loses them on a read-modify-write",
     ),
     (
+        "sectionkeys",
+        "Altium emits a SectionKeys stream mapping LibRef -> storage name for          every component whose name does not fit the CFB 31-character cap once          encoded; we neither read nor write it, so those components lose their          real name and keep only the truncated storage name",
+    ),
+    (
         "INDEXINSHEET",
         "our SchLib writer emits primitives grouped by type, renumbering them; \
          Altium preserves the original interleaved order",

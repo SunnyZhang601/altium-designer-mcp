@@ -2607,6 +2607,33 @@ begin
     end;
 end;
 
+{ One symbol per writing system, each carrying the script in every
+  text-bearing field: the component name (which becomes the OLE storage
+  name), the description, a pin name, a label and a parameter value.
+
+  The list is broad because the project is used well beyond Latin scripts,
+  but the PROTECTION comes from a handful of behaviours rather than from the
+  count. Most entries are ordinary non-Latin1 BMP text taking one code unit
+  per character and exercising the same path. The ones that genuinely differ:
+  Arabic/Hebrew/Syriac/Thaana/N'Ko/Adlam run right to left; Devanagari,
+  Tamil, Khmer and Myanmar carry combining marks, so a character is not a
+  code point; Telugu and Sinhala use zero-width joiners; Thai has no word
+  spacing; Vietnamese appears both precomposed and decomposed, which are
+  different byte sequences for the same word; Mongolian is written
+  vertically; and the last three sit beyond the BMP, so each character needs
+  a SURROGATE PAIR in UTF-16 — the case most likely to break a length or
+  index calculation, since a CFB storage name is UTF-16 and capped at 31
+  code units. The ASCII entry is the control. }
+procedure AddI18nSymbol(Lib : ISch_Lib; ARef : String; ADesc : String; AWord : String);
+var Comp : ISch_Component;
+begin
+    Comp := NewSymbol(Lib, ARef, ADesc, 1);
+    if Comp = nil then Exit;
+    AddPinEx(Comp, -300, 0, 200, eRotate180, eElectricPassive, '1', AWord, True, True, False);
+    AddLabel(Comp, -100, 60, AWord, eJustify_BottomLeft, eRotate0);
+    AddParameter(Comp, 'Value', AWord, -100, -60, True, eJustify_BottomLeft, eRotate0);
+end;
+
 { ---- SchLib authoring -------------------------------------------------------
 
   Build order step 1: PINS_ETYPE — one pin per PinElectricalType, the densest
@@ -3021,6 +3048,223 @@ begin
             AddLabelFlagged(Comp, -150, -80, 'MIRRORED');
             AddParameterProps(Comp, 'Rating', '10V', 50, -80);
         end;
+    except
+    end;
+
+
+    { ---- I18N — one symbol per writing system, so a non-Latin name is a
+      tested case rather than an assumption. See AddI18nSymbol for why the
+      list is shaped the way it is. ---- }
+    try
+        AddI18nSymbol(Lib, 'Resistor_LA', 'Script: Latin, ASCII control', 'Resistor');
+    except
+    end;
+    try
+        AddI18nSymbol(Lib, 'Résistance_L1', 'Script: Latin-1 supplement, precomposed', 'Résistance');
+    except
+    end;
+    try
+        AddI18nSymbol(Lib, 'Điện trở_VI', 'Script: Latin, Vietnamese diacritic stacking (NFC)', 'Điện trở');
+    except
+    end;
+    try
+        AddI18nSymbol(Lib, 'Điện trở_VD', 'Script: Latin, Vietnamese decomposed (NFD)', 'Điện trở');
+    except
+    end;
+    try
+        AddI18nSymbol(Lib, 'Резистор_RU', 'Script: Cyrillic', 'Резистор');
+    except
+    end;
+    try
+        AddI18nSymbol(Lib, 'Αντίσταση_EL', 'Script: Greek', 'Αντίσταση');
+    except
+    end;
+    try
+        AddI18nSymbol(Lib, 'Դիմադրիչ_HY', 'Script: Armenian', 'Դիմադրիչ');
+    except
+    end;
+    try
+        AddI18nSymbol(Lib, 'რეზისტორი_KA', 'Script: Georgian', 'რეზისტორი');
+    except
+    end;
+    try
+        AddI18nSymbol(Lib, '电阻_ZH', 'Script: Han, simplified', '电阻');
+    except
+    end;
+    try
+        AddI18nSymbol(Lib, '電阻_TW', 'Script: Han, traditional', '電阻');
+    except
+    end;
+    try
+        AddI18nSymbol(Lib, '抵抗器カナ_JA', 'Script: Japanese, kanji and kana', '抵抗器カナ');
+    except
+    end;
+    try
+        AddI18nSymbol(Lib, '저항기_KO', 'Script: Hangul', '저항기');
+    except
+    end;
+    try
+        AddI18nSymbol(Lib, 'ㄉㄧㄢˋㄗㄨˇ_BO', 'Script: Bopomofo', 'ㄉㄧㄢˋㄗㄨˇ');
+    except
+    end;
+    try
+        AddI18nSymbol(Lib, 'مقاومة_AR', 'Script: Arabic, right to left', 'مقاومة');
+    except
+    end;
+    try
+        AddI18nSymbol(Lib, 'مقاومت_FA', 'Script: Arabic, Persian letters', 'مقاومت');
+    except
+    end;
+    try
+        AddI18nSymbol(Lib, 'נגד_HE', 'Script: Hebrew, right to left', 'נגד');
+    except
+    end;
+    try
+        AddI18nSymbol(Lib, 'ܣܘܪܝܝܐ_SY', 'Script: Syriac, right to left', 'ܣܘܪܝܝܐ');
+    except
+    end;
+    try
+        AddI18nSymbol(Lib, 'ދިވެހި_DV', 'Script: Thaana, right to left', 'ދިވެހި');
+    except
+    end;
+    try
+        AddI18nSymbol(Lib, 'ߒߞߏ_NK', 'Script: N''Ko, right to left', 'ߒߞߏ');
+    except
+    end;
+    try
+        AddI18nSymbol(Lib, 'प्रतिरोधक_HI', 'Script: Devanagari, combining marks', 'प्रतिरोधक');
+    except
+    end;
+    try
+        AddI18nSymbol(Lib, 'রোধক_BN', 'Script: Bengali', 'রোধক');
+    except
+    end;
+    try
+        AddI18nSymbol(Lib, 'ਰੋਧਕ_PA', 'Script: Gurmukhi', 'ਰੋਧਕ');
+    except
+    end;
+    try
+        AddI18nSymbol(Lib, 'અવરોધક_GU', 'Script: Gujarati', 'અવરોધક');
+    except
+    end;
+    try
+        AddI18nSymbol(Lib, 'ପ୍ରତିରୋଧକ_OR', 'Script: Odia', 'ପ୍ରତିରୋଧକ');
+    except
+    end;
+    try
+        AddI18nSymbol(Lib, 'மின்தடை_TA', 'Script: Tamil', 'மின்தடை');
+    except
+    end;
+    try
+        AddI18nSymbol(Lib, 'నిరోధకం_TE', 'Script: Telugu, zero-width joiner', 'నిరోధకం');
+    except
+    end;
+    try
+        AddI18nSymbol(Lib, 'ಪ್ರತಿರೋಧಕ_KN', 'Script: Kannada', 'ಪ್ರತಿರೋಧಕ');
+    except
+    end;
+    try
+        AddI18nSymbol(Lib, 'പ്രതിരോധകം_ML', 'Script: Malayalam', 'പ്രതിരോധകം');
+    except
+    end;
+    try
+        AddI18nSymbol(Lib, 'ප්‍රතිරෝධකය_SI', 'Script: Sinhala', 'ප්‍රතිරෝධකය');
+    except
+    end;
+    try
+        AddI18nSymbol(Lib, 'ᱚᱞ ᱪᱤᱠᱤ_SA', 'Script: Ol Chiki, Santali', 'ᱚᱞ ᱪᱤᱠᱤ');
+    except
+    end;
+    try
+        AddI18nSymbol(Lib, 'ꯃꯤꯇꯩ_MN', 'Script: Meetei Mayek, Manipuri', 'ꯃꯤꯇꯩ');
+    except
+    end;
+    try
+        AddI18nSymbol(Lib, 'ตัวต้านทาน_TH', 'Script: Thai, no word spacing', 'ตัวต้านทาน');
+    except
+    end;
+    try
+        AddI18nSymbol(Lib, 'ຕົວຕ້ານທານ_LO', 'Script: Lao', 'ຕົວຕ້ານທານ');
+    except
+    end;
+    try
+        AddI18nSymbol(Lib, 'រេស៊ីស្ទ័រ_KM', 'Script: Khmer, stacked consonants', 'រេស៊ីស្ទ័រ');
+    except
+    end;
+    try
+        AddI18nSymbol(Lib, 'လျှပ်ခုခံ_MY', 'Script: Myanmar', 'လျှပ်ခုခံ');
+    except
+    end;
+    try
+        AddI18nSymbol(Lib, 'ꦗꦮ_JV', 'Script: Javanese', 'ꦗꦮ');
+    except
+    end;
+    try
+        AddI18nSymbol(Lib, 'ᬩᬮᬶ_BA', 'Script: Balinese', 'ᬩᬮᬶ');
+    except
+    end;
+    try
+        AddI18nSymbol(Lib, 'ᮞᮥᮔ᮪ᮓ_SU', 'Script: Sundanese', 'ᮞᮥᮔ᮪ᮓ');
+    except
+    end;
+    try
+        AddI18nSymbol(Lib, 'ᨅᨔ_BU', 'Script: Buginese, Lontara', 'ᨅᨔ');
+    except
+    end;
+    try
+        AddI18nSymbol(Lib, 'ᜊᜌ᜔ᜊᜌᜒᜈ᜔_TL', 'Script: Tagalog, Baybayin', 'ᜊᜌ᜔ᜊᜌᜒᜈ᜔');
+    except
+    end;
+    try
+        AddI18nSymbol(Lib, 'ꨌꨩꩌ_CH', 'Script: Cham', 'ꨌꨩꩌ');
+    except
+    end;
+    try
+        AddI18nSymbol(Lib, 'བོད་ཡིག_BD', 'Script: Tibetan', 'བོད་ཡིག');
+    except
+    end;
+    try
+        AddI18nSymbol(Lib, 'ᠮᠣᠩᠭᠣᠯ_MO', 'Script: Mongolian, written vertically', 'ᠮᠣᠩᠭᠣᠯ');
+    except
+    end;
+    try
+        AddI18nSymbol(Lib, 'አማርኛ_AM', 'Script: Ethiopic, Amharic', 'አማርኛ');
+    except
+    end;
+    try
+        AddI18nSymbol(Lib, 'ⵜⵉⴼⵉⵏⴰⵖ_TI', 'Script: Tifinagh, Berber', 'ⵜⵉⴼⵉⵏⴰⵖ');
+    except
+    end;
+    try
+        AddI18nSymbol(Lib, 'ꕙꔤ_VA', 'Script: Vai', 'ꕙꔤ');
+    except
+    end;
+    try
+        AddI18nSymbol(Lib, 'ꆈꌠ_YI', 'Script: Yi', 'ꆈꌠ');
+    except
+    end;
+    try
+        AddI18nSymbol(Lib, 'ᏣᎳᎩ_CR', 'Script: Cherokee', 'ᏣᎳᎩ');
+    except
+    end;
+    try
+        AddI18nSymbol(Lib, 'ᐃᓄᒃᑎᑐᑦ_IU', 'Script: Canadian Aboriginal Syllabics, Inuktitut', 'ᐃᓄᒃᑎᑐᑦ');
+    except
+    end;
+    try
+        AddI18nSymbol(Lib, 'ⲕⲟⲡⲧⲓⲕⲟⲛ_CO', 'Script: Coptic', 'ⲕⲟⲡⲧⲓⲕⲟⲛ');
+    except
+    end;
+    try
+        AddI18nSymbol(Lib, '𠮷野_SB', 'Script: Han beyond the BMP: surrogate pair', '𠮷野');
+    except
+    end;
+    try
+        AddI18nSymbol(Lib, '𞤀𞤣𞤤𞤢𞤥_AD', 'Script: Adlam beyond the BMP, right to left', '𞤀𞤣𞤤𞤢𞤥');
+    except
+    end;
+    try
+        AddI18nSymbol(Lib, '𐒰𐓑𐓘_OS', 'Script: Osage beyond the BMP', '𐒰𐓑𐓘');
     except
     end;
 

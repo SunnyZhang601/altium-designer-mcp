@@ -92,20 +92,10 @@ const KNOWN_DEFECTS: &[(&str, &str)] = &[
          populate them from this stream, so authored ids are lost",
     ),
     (
-        "NAME golden=\" \"",
-        "regions and component bodies carry NAME=<space> in an Altium file; our \
-         writer emits an empty value",
-    ),
-    (
         "V7_LAYER",
         "Altium writes the short layer name (TOP); we write the long form \
          (TOPLAYER), and for a board cutout we write the resolved keep-out layer \
          rather than the stored one",
-    ),
-    (
-        "TEXTURESIZE",
-        "the component-body texture size is 0mil in an Altium file; our writer \
-         hard-codes 0.0001mil",
     ),
     (
         "Library:",

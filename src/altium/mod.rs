@@ -398,10 +398,12 @@ pub(crate) fn parse_pipe_params_raw(text: &str) -> std::collections::HashMap<Str
     let mut map = std::collections::HashMap::new();
     for part in text.split('|') {
         if let Some((key, value)) = part.split_once('=') {
-            map.insert(
-                key.to_string(),
-                value.trim_end_matches('\0').trim().to_string(),
-            );
+            // Only the NUL terminator is stripped. Surrounding spaces are
+            // significant: Altium writes `NAME= ` (a single space) on a default
+            // region and component body, and trimming turned that into an empty
+            // name which the writer then emitted, changing the record on every
+            // read-modify-write. Numeric readers trim at their own call sites.
+            map.insert(key.to_string(), value.trim_end_matches('\0').to_string());
         }
     }
     map

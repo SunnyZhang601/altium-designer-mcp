@@ -473,9 +473,13 @@ fn samples_pcblib_regions() {
             region.layer,
         );
         assert_eq!(region.kind, RegionKind::Copper, "golden regions are copper");
-        assert!(
-            region.name.is_empty(),
-            "golden region NAME is blank, got {:?}",
+        // A single space, not empty: Altium writes `NAME= ` on a default region.
+        // This read blank until the parameter reader stopped trimming values,
+        // and the writer then emitted `NAME=`, altering the record on every
+        // read-modify-write.
+        assert_eq!(
+            region.name, " ",
+            "golden region NAME is a single space, got {:?}",
             region.name
         );
         // ARCRESOLUTION=0.5mil = 0.0127 mm.

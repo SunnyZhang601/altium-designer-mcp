@@ -467,6 +467,156 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)] // a flat per-field case list, like the code it covers
+    fn each_coordinate_within_a_family_is_checked_on_its_own() {
+        // The families above are checked one field at a time, so covering one
+        // corner of a rectangle says nothing about the other three. A field
+        // that slipped through would saturate on save while its neighbours
+        // were caught — a shape anchored correctly at one end and folded flat
+        // at the other.
+        use crate::mcp::tools::test_support::{create_test_server, get_result_text, test_temp_dir};
+        use serde_json::json;
+
+        let dir = test_temp_dir();
+        let server = create_test_server(dir.path());
+        let path = dir.path().join("Corners.SchLib");
+
+        let cases: [(&str, serde_json::Value, &str); 16] = [
+            (
+                // Pin coordinates are integers, so this mirrors FAR rather
+                // than casting it.
+                "pins",
+                json!([{ "name": "1", "designator": "1", "x": 0, "y": 99_999, "length": 10, "orientation": "left" }]),
+                "pin 0 y",
+            ),
+            (
+                "pins",
+                json!([{ "name": "1", "designator": "1", "x": 0, "y": 0, "length": 99_999, "orientation": "left" }]),
+                "pin 0 length",
+            ),
+            (
+                "rectangles",
+                json!([{ "x1": FAR, "y1": 0, "x2": 10, "y2": 10 }]),
+                "rectangle 0 x1",
+            ),
+            (
+                "rectangles",
+                json!([{ "x1": 0, "y1": FAR, "x2": 10, "y2": 10 }]),
+                "rectangle 0 y1",
+            ),
+            (
+                "rectangles",
+                json!([{ "x1": 0, "y1": 0, "x2": 10, "y2": FAR }]),
+                "rectangle 0 y2",
+            ),
+            (
+                "polylines",
+                json!([{ "points": [{ "x": 0, "y": 0 }, { "x": 0, "y": FAR }] }]),
+                "polyline 0 point 1 y",
+            ),
+            (
+                "ellipses",
+                json!([{ "x": 0, "y": 0, "radius_x": 5, "radius_y": FAR }]),
+                "ellipse 0 radius_y",
+            ),
+            (
+                "round_rects",
+                json!([{
+                    "x1": 0, "y1": 0, "x2": 10, "y2": 10,
+                    "corner_x_radius": 2, "corner_y_radius": FAR,
+                }]),
+                "round_rect 0 corner_y_radius",
+            ),
+            (
+                "polygons",
+                json!([{ "points": [{ "x": 0, "y": 0 }, { "x": 10, "y": 0 }, { "x": 5, "y": FAR }] }]),
+                "polygon 0 point 2 y",
+            ),
+            (
+                "text_frames",
+                json!([{ "x1": 0, "y1": FAR, "x2": 10, "y2": 10, "text": "F" }]),
+                "text_frame 0 y1",
+            ),
+            (
+                "text_frames",
+                json!([{ "x1": 0, "y1": 0, "x2": 10, "y2": FAR, "text": "F" }]),
+                "text_frame 0 y2",
+            ),
+            (
+                "text_frames",
+                json!([{ "x1": 0, "y1": 0, "x2": 10, "y2": 10, "text": "F", "text_margin": FAR }]),
+                "text_frame 0 text_margin",
+            ),
+            (
+                "beziers",
+                json!([{
+                    "x1": 0, "y1": 0, "x2": 10, "y2": 0,
+                    "x3": 20, "y3": 0, "x4": 30, "y4": FAR,
+                }]),
+                "bezier 0 point 3 y",
+            ),
+            (
+                "elliptical_arcs",
+                json!([{
+                    "x": 0, "y": FAR, "radius": 5, "secondary_radius": 5,
+                    "start_angle": 0, "end_angle": 90,
+                }]),
+                "elliptical_arc 0 y",
+            ),
+            (
+                "elliptical_arcs",
+                json!([{
+                    "x": 0, "y": 0, "radius": 5, "secondary_radius": FAR,
+                    "start_angle": 0, "end_angle": 90,
+                }]),
+                "elliptical_arc 0 secondary_radius",
+            ),
+            (
+                "text",
+                json!([{ "x": 0, "y": FAR, "text": "T" }]),
+                "text 0 y",
+            ),
+        ];
+
+        for (family, payload, expected) in cases {
+            let mut symbol = json!({ "name": "FAR" });
+            symbol[family] = payload;
+            let r = server.call_write_schlib(&json!({
+                "filepath": path.to_string_lossy(),
+                "symbols": [symbol],
+            }));
+            let text = get_result_text(&r);
+            assert!(r.is_error, "{expected} was not range-checked: {text}");
+            assert!(
+                text.contains(expected),
+                "expected the error to name {expected:?}, got: {text}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_footprint_text_height_out_of_range_is_caught() {
+        // The PcbLib side has the same per-field shape; text height is the one
+        // field there that is neither a coordinate nor a width.
+        use crate::mcp::tools::test_support::{create_test_server, get_result_text, test_temp_dir};
+        use serde_json::json;
+
+        let dir = test_temp_dir();
+        let server = create_test_server(dir.path());
+        let r = server.call_write_pcblib(&json!({
+            "filepath": dir.path().join("Tall.PcbLib").to_string_lossy(),
+            "footprints": [{
+                "name": "FP",
+                "pads": [{ "designator": "1", "x": 0.0, "y": 0.0, "width": 1.0, "height": 1.0 }],
+                "text": [{ "x": 0.0, "y": 0.0, "text": "REF", "height": 99_999.0, "layer": "Top Overlay" }],
+            }],
+        }));
+        let text = get_result_text(&r);
+        assert!(r.is_error, "{text}");
+        assert!(text.contains("text 0 height"), "{text}");
+    }
+
+    #[test]
     fn validate_coordinate_accepts_finite_in_range() {
         assert!(McpServer::validate_coordinate(1234.5, "x").is_ok());
         assert!(McpServer::validate_coordinate(0.0, "x").is_ok());

@@ -3211,24 +3211,29 @@ mod tests {
 
         /// Flips a file's read-only bit, used to make a save fail without
         /// depending on the caller running unprivileged.
-        /// Makes the library un-writable through the atomic-save path on
-        /// every platform. The save writes a sibling temp file and renames it
-        /// over the target, so on Unix the DIRECTORY must refuse new entries
-        /// (file permission bits do not gate rename-over), while on Windows it
-        /// is the read-only FILE attribute that makes the replace fail.
-        fn set_readonly(path: &std::path::Path, readonly: bool) {
-            #[cfg(unix)]
+        /// Fails the library's next save — and ONLY the save — by occupying
+        /// the deterministic temp path `save_atomic` must create beside the
+        /// target (`<name>.pcblib.tmp` / `<name>.schlib.tmp`) with a
+        /// directory: `File::create` over a directory fails on every platform,
+        /// while the `.bak` backup (a plain copy) is untouched. Same mechanism
+        /// as `BlockedSave` in `library_ops.rs`. Permissions cannot do this
+        /// portably: a read-only FILE only blocks the rename-over on Windows
+        /// (on Unix that permission belongs to the parent directory), and a
+        /// read-only DIRECTORY fails the backup before the save is reached.
+        fn block_save(path: &std::path::Path, blocked: bool) {
+            let tmp_ext = if path
+                .extension()
+                .is_some_and(|e| e.eq_ignore_ascii_case("schlib"))
             {
-                use std::os::unix::fs::PermissionsExt as _;
-                let dir = path.parent().expect("library sits in a directory");
-                let mode = if readonly { 0o555 } else { 0o755 };
-                std::fs::set_permissions(dir, std::fs::Permissions::from_mode(mode)).unwrap();
-            }
-            #[cfg(not(unix))]
-            {
-                let mut perms = std::fs::metadata(path).unwrap().permissions();
-                perms.set_readonly(readonly);
-                std::fs::set_permissions(path, perms).unwrap();
+                "schlib.tmp"
+            } else {
+                "pcblib.tmp"
+            };
+            let tmp = path.with_extension(tmp_ext);
+            if blocked {
+                std::fs::create_dir(&tmp).expect("occupy the save temp path");
+            } else {
+                let _ = std::fs::remove_dir(&tmp);
             }
         }
 
@@ -3562,20 +3567,20 @@ mod tests {
             }));
             assert_error_mentions(&backup, "backup");
 
-            // A read-only library still backs up cleanly — copying only reads
-            // the original — so the save is what fails, and the failure is
-            // reported as a structured result rather than a panic.
+            // With the save temp path blocked, the backup still succeeds —
+            // it is a plain copy — so the save is what fails, and the failure
+            // is reported as a structured result rather than a panic.
             let locked = dir.path().join("ReadOnly.PcbLib");
             server.call_write_pcblib(&json!({
                 "filepath": locked.to_string_lossy(),
                 "footprints": [footprint("A")],
             }));
-            set_readonly(&locked, true);
+            block_save(&locked, true);
             let save = server.call_write_pcblib(&json!({
                 "filepath": locked.to_string_lossy(),
                 "footprints": [footprint("B")],
             }));
-            set_readonly(&locked, false); // so the temp dir can be removed
+            block_save(&locked, false); // frees the squatted temp path
             assert!(save.is_error, "{}", get_result_text(&save));
             assert_eq!(parse_result_json(&save)["status"], "error");
         }
@@ -3789,11 +3794,11 @@ mod tests {
             server.call_write_schlib(&json!({
                 "filepath": locked.to_string_lossy(), "symbols": [symbol("A")],
             }));
-            set_readonly(&locked, true);
+            block_save(&locked, true);
             let save = server.call_write_schlib(&json!({
                 "filepath": locked.to_string_lossy(), "symbols": [symbol("B")],
             }));
-            set_readonly(&locked, false); // so the temp dir can be removed
+            block_save(&locked, false); // frees the squatted temp path
             assert!(save.is_error, "{}", get_result_text(&save));
             assert_eq!(parse_result_json(&save)["status"], "error");
         }

@@ -2384,24 +2384,29 @@ mod tests {
 
         /// A read-only library still opens and still backs up — both only read
         /// it — so the save is what fails.
-        /// Makes the library un-writable through the atomic-save path on
-        /// every platform. The save writes a sibling temp file and renames it
-        /// over the target, so on Unix the DIRECTORY must refuse new entries
-        /// (file permission bits do not gate rename-over), while on Windows it
-        /// is the read-only FILE attribute that makes the replace fail.
-        fn set_readonly(path: &std::path::Path, readonly: bool) {
-            #[cfg(unix)]
+        /// Fails the library's next save — and ONLY the save — by occupying
+        /// the deterministic temp path `save_atomic` must create beside the
+        /// target (`<name>.pcblib.tmp` / `<name>.schlib.tmp`) with a
+        /// directory: `File::create` over a directory fails on every platform,
+        /// while the `.bak` backup (a plain copy) is untouched. Same mechanism
+        /// as `BlockedSave` in `library_ops.rs`. Permissions cannot do this
+        /// portably: a read-only FILE only blocks the rename-over on Windows
+        /// (on Unix that permission belongs to the parent directory), and a
+        /// read-only DIRECTORY fails the backup before the save is reached.
+        fn block_save(path: &std::path::Path, blocked: bool) {
+            let tmp_ext = if path
+                .extension()
+                .is_some_and(|e| e.eq_ignore_ascii_case("schlib"))
             {
-                use std::os::unix::fs::PermissionsExt as _;
-                let dir = path.parent().expect("library sits in a directory");
-                let mode = if readonly { 0o555 } else { 0o755 };
-                std::fs::set_permissions(dir, std::fs::Permissions::from_mode(mode)).unwrap();
-            }
-            #[cfg(not(unix))]
-            {
-                let mut perms = std::fs::metadata(path).unwrap().permissions();
-                perms.set_readonly(readonly);
-                std::fs::set_permissions(path, perms).unwrap();
+                "schlib.tmp"
+            } else {
+                "pcblib.tmp"
+            };
+            let tmp = path.with_extension(tmp_ext);
+            if blocked {
+                std::fs::create_dir(&tmp).expect("occupy the save temp path");
+            } else {
+                let _ = std::fs::remove_dir(&tmp);
             }
         }
 
@@ -2563,11 +2568,11 @@ mod tests {
                 ("Lib.SchLib", "RESISTOR", "PART_A"),
             ] {
                 let path = fx.path(lib);
-                set_readonly(std::path::Path::new(&path), true);
+                block_save(std::path::Path::new(&path), true);
                 let r = server.call_bulk_rename(&json!({
                     "filepath": &path, "pattern": pattern, "replacement": replacement,
                 }));
-                set_readonly(std::path::Path::new(&path), false);
+                block_save(std::path::Path::new(&path), false);
                 assert_error_mentions(&r, "Failed to save library");
             }
         }
@@ -2786,12 +2791,12 @@ mod tests {
                 assert!(changed.contains(&property.to_string()), "{changed:?}");
             }
 
-            set_readonly(std::path::Path::new(&lib), true);
+            block_save(std::path::Path::new(&lib), true);
             let blocked = server.call_update_pad(&json!({
                 "filepath": &lib, "component_name": "CHIP_0402",
                 "designator": "1", "updates": { "x": 0.3 },
             }));
-            set_readonly(std::path::Path::new(&lib), false);
+            block_save(std::path::Path::new(&lib), false);
             assert!(blocked.is_error, "{}", get_result_text(&blocked));
         }
 
@@ -2986,12 +2991,12 @@ mod tests {
             let lib = fx.path("Rich.PcbLib");
             write_rich_library(&server, &lib);
 
-            set_readonly(std::path::Path::new(&lib), true);
+            block_save(std::path::Path::new(&lib), true);
             let r = server.call_update_primitive(&json!({
                 "filepath": &lib, "component_name": "RICH",
                 "primitive_type": "track", "index": 0, "updates": { "width": 0.3 },
             }));
-            set_readonly(std::path::Path::new(&lib), false);
+            block_save(std::path::Path::new(&lib), false);
             assert!(r.is_error, "{}", get_result_text(&r));
         }
     }

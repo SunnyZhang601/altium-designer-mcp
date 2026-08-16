@@ -83,6 +83,29 @@ pub fn decode_windows1252(bytes: &[u8]) -> String {
     encoding_rs::WINDOWS_1252.decode(bytes).0.into_owned()
 }
 
+/// Decodes an Altium binary string, preferring UTF-8 when the bytes are UTF-8.
+///
+/// Altium writes a name that Windows-1252 cannot hold — CJK, Cyrillic, Thai,
+/// any of them — as its raw UTF-8 bytes inside a record that is otherwise
+/// Windows-1252. Decoding such a pin name as Windows-1252 yields mojibake:
+/// `电阻` comes back as `ç”µé˜»`.
+///
+/// Multi-byte UTF-8 is a narrow subset of arbitrary byte pairs, so treating
+/// valid non-ASCII UTF-8 as UTF-8 is safe in practice: a real Windows-1252
+/// string like `Ohm é` is not valid UTF-8 and falls through unchanged. The
+/// ambiguity is Altium's own — the same tradeoff [`decode_utf8_param_value`]
+/// already makes for parameter values — and the `TEXT_WIN1252` golden pins the
+/// Windows-1252 side of it.
+#[must_use]
+pub fn decode_altium_text(bytes: &[u8]) -> String {
+    if !bytes.is_ascii() {
+        if let Ok(text) = std::str::from_utf8(bytes) {
+            return text.to_string();
+        }
+    }
+    decode_windows1252(bytes)
+}
+
 /// Returns `true` when `value` cannot be represented losslessly in Windows-1252,
 /// so it must be stored behind a `%UTF8%` key to avoid silent `?` corruption.
 ///

@@ -86,7 +86,7 @@ pub fn read_pascal_string(data: &[u8], offset: usize) -> (String, usize) {
     let start = offset + 1;
     let end = start + len;
     let s = if len > 0 && end <= data.len() {
-        crate::altium::decode_windows1252(&data[start..end])
+        crate::altium::decode_altium_text(&data[start..end])
     } else {
         String::new()
     };

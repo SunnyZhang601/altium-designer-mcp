@@ -915,6 +915,56 @@ fn samples_schlib_parameter_type() {
 }
 
 #[test]
+fn samples_schlib_writing_systems_decode() {
+    let lib = SchLib::open(sample("symbols.SchLib")).expect("failed to open symbols.SchLib");
+
+    // Altium writes text outside Windows-1252 as its raw UTF-8 bytes inside a
+    // record that is otherwise Windows-1252. Decoding those as Windows-1252
+    // yields mojibake: the pin name of the Han symbol read back as `ç”µé˜»`
+    // rather than `电阻` until the binary string reader learned to prefer UTF-8.
+    //
+    // Expectations are spelled out here rather than derived from the file. A
+    // check that compares the file against itself passes even when every field
+    // is mojibake, which is exactly the mistake this table avoids.
+    let cases: &[(&str, &str)] = &[
+        ("Resistor_LA", "Resistor"),     // ASCII control
+        ("Résistance_L1", "Résistance"), // Latin-1 supplement
+        ("Điện trở_VI", "Điện trở"),     // Latin, precomposed diacritics
+        ("Резистор_RU", "Резистор"),     // Cyrillic
+        ("Αντίσταση_EL", "Αντίσταση"),   // Greek
+        ("电阻_ZH", "电阻"),             // Han
+        ("저항기_KO", "저항기"),         // Hangul
+        ("مقاومة_AR", "مقاومة"),         // Arabic, right to left
+        ("נגד_HE", "נגד"),               // Hebrew, right to left
+        ("प्रतिरोधक_HI", "प्रतिरोधक"),     // Devanagari, combining marks
+        ("ตัวต้านทาน_TH", "ตัวต้านทาน"),     // Thai, no word spacing
+        ("រេស៊ីស្ទ័រ_KM", "រេស៊ីស្ទ័រ"),           // Khmer, stacked consonants
+        ("𞤀𞤣𞤤𞤢𞤥_AD", "𞤀𞤣𞤤𞤢𞤥"),           // Adlam, beyond the BMP
+    ];
+
+    for (symbol, word) in cases {
+        let sym = lib
+            .get(symbol)
+            .unwrap_or_else(|| panic!("symbol {symbol:?} not found"));
+
+        // The pin name is a length-prefixed string in the binary pin record —
+        // a different decode path from the parameter blocks below.
+        let pin = sym.pins.first().expect("one pin");
+        assert_eq!(&pin.name.as_str(), word, "{symbol}: pin name");
+
+        let label = sym.labels.first().expect("one label");
+        assert_eq!(&label.text.as_str(), word, "{symbol}: label text");
+
+        let param = sym
+            .parameters
+            .iter()
+            .find(|p| p.name == "Value")
+            .unwrap_or_else(|| panic!("{symbol}: no Value parameter"));
+        assert_eq!(&param.value.as_str(), word, "{symbol}: parameter value");
+    }
+}
+
+#[test]
 fn samples_schlib_lockflags() {
     let lib = SchLib::open(sample("symbols.SchLib")).expect("failed to open symbols.SchLib");
     let sym = lib.get("LOCKFLAGS").expect("LOCKFLAGS symbol not found");

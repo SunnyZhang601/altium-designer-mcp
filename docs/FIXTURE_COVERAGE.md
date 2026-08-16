@@ -80,13 +80,13 @@ distinction stays visible: this is not an authoring gap waiting on an Altium run
 | Rectangle | plain rects; ✅ transparent (`SHAPESTYLE`), ✅ GraphicallyLocked (`LOCKFLAGS`); ✅ `_Frac` coords incl. negatives (`FRACSHAPES`: (-5.45, -2.45)–(5.55, 2.55)); ✅ non-default border + fill colour (`SHAPECOLOR`) | line_style; 🚫 Disabled/Dimmed (authored but not persisted by AD24) |
 | RoundRect | plain rounded rects; ✅ non-default border colour (`SHAPECOLOR`) | display flags; 🚫 line_style and 🚫 transparent — both accepted by AD24 and neither written to a library round-rect |
 | Ellipse | plain ellipses; ✅ transparent (batch 3); ✅ non-default border colour (`SHAPECOLOR`) | display flags |
-| Polyline | plain polylines; ✅ non-default colour (`SHAPECOLOR`); ✅ line_style + start/end shapes + shape size (`SHAPESTYLE2`: dashed, arrow → solid arrow, eLarge — all four persist) | transparent, display flags |
+| Polyline | plain polylines; ✅ non-default colour (`SHAPECOLOR`); ✅ line_style + start/end shapes + shape size (`SHAPESTYLE2`: dashed, arrow → solid arrow, eLarge — all four persist) | display flags; 🚫 fill/transparency (AreaColor/IsSolid/Transparent compile on `ISch_Polyline` and none is written) |
 | Polygon | plain polygons; ✅ transparent (`SHAPESTYLE` triangle); ✅ non-default border colour (`SHAPECOLOR`) | display flags (line_style: N/A — `ISch_Polygon` has no LineStyle in AD24); 🔒 is_not_accessible=false |
 | Pie | ✅ authored (`PIESYM`: 30–210°, radius 5 units, yellow fill, exact-asserted); ✅ non-default border + fill colour (`SHAPECOLOR`) | display flags, `_Frac` coords; 🚫 transparent (`ISch_Pie` has none — `Pie.Transparent` does not compile) |
-| Image | ✅ authored (`IMAGESYM`: bounding box, `logo.bmp`, KeepAspect, non-embedded); ✅ embedded image bytes in the `/Storage` stream (`EMBIMGSYM`, exact-asserted against the committed `embed.bmp`) | show_border non-default, display flags |
+| Image | ✅ authored (`IMAGESYM`: bounding box, `logo.bmp`, KeepAspect, non-embedded); ✅ embedded image bytes in the `/Storage` stream (`EMBIMGSYM`, exact-asserted against the committed `embed.bmp`) | display flags; 🚫 show_border (not on `ISch_Image` — does not compile) |
 | Bezier | ✅ authored (`BEZIERSYM`, four control points exact-asserted); ✅ non-default colour + eMedium width (`SHAPECOLOR`) | display flags |
 | Label | plain labels; ✅ justification variants + rotation (`JUSTIFY`); ✅ non-default colour (`SHAPECOLOR`); ✅ mirrored (`SHAPESTYLE2`) | display flags |
-| Parameter | Value etc.; ✅ justification + orientation (`JUSTIFY`: `Justification=8` on Value, `Justification=4` + `Orientation=1` on the hidden Tol); ✅ autoposition + justification from the hand-authored `manual/parameters.SchLib`; ✅ show_name + read_only_state + is_mirrored (`SHAPESTYLE2` — `is_mirrored` was not modelled at all until this fixture exposed it) | param_type, area colour; 🚫 is_rule / is_system_parameter / is_configurable / text anchors — read-only or never written into a library |
+| Parameter | Value etc.; ✅ justification + orientation (`JUSTIFY`: `Justification=8` on Value, `Justification=4` + `Orientation=1` on the hidden Tol); ✅ autoposition + justification from the hand-authored `manual/parameters.SchLib`; ✅ show_name + read_only_state + is_mirrored + param_type (`SHAPESTYLE2` — `is_mirrored` was not modelled at all until this fixture exposed it) | area colour; 🚫 is_rule / is_system_parameter / is_configurable / text anchors — read-only or never written into a library |
 
 ### Cross-cutting (both formats)
 
@@ -118,9 +118,8 @@ identifier in a modal dialog, so several may go in one run provided that dialog 
 rather than waited out — otherwise keep it to one unproven interface, or a timeout will
 not say which name was at fault.
 
-**SchLib, not yet attempted:** polyline/text-frame transparency, image `ShowBorder`,
-parameter `ParamType` and area colour, per-shape display flags, `*_Frac` coordinates on
-the remaining shapes.
+**SchLib, not yet attempted:** parameter area colour, per-shape display flags, and
+`*_Frac` coordinates on the shapes that still lack them.
 
 **PcbLib:** Region net and cavity/subpoly params, Text stroke-font variants and
 `UseTTFonts=False`, ComponentBody model 2D placement and raw-outline precision, Pad slot

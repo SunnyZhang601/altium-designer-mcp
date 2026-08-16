@@ -806,8 +806,14 @@ fn samples_schlib_polyline_styling() {
     // A polyline carries four styling properties no other primitive family has,
     // and AD24 persists all four. Authored as dashed with an open arrow at the
     // start, a solid arrow at the end, and the large end-shape size.
-    assert_eq!(sym.polylines.len(), 1, "SHAPESTYLE2 has one polyline");
-    let pl = &sym.polylines[0];
+    // Two polylines: this styled one, and an unstyled control that documents the
+    // fill properties AD24 refuses to persist.
+    assert_eq!(sym.polylines.len(), 2, "SHAPESTYLE2 has two polylines");
+    let pl = sym
+        .polylines
+        .iter()
+        .find(|p| p.start_line_shape != 0)
+        .expect("the styled polyline");
     assert_eq!(pl.line_style, 1, "dashed");
     assert_eq!(pl.start_line_shape, 1, "start is an arrow");
     assert_eq!(pl.end_line_shape, 2, "end is a solid arrow");
@@ -849,6 +855,59 @@ fn samples_schlib_label_and_parameter_display_props() {
         sym.round_rects[0].line_style, 0,
         "AD24 does not persist LineStyle on a library round rect"
     );
+}
+
+#[test]
+fn samples_schlib_polyline_and_frame_fill_are_not_persisted() {
+    let lib = SchLib::open(sample("symbols.SchLib")).expect("failed to open symbols.SchLib");
+    let sym = lib
+        .get("SHAPESTYLE2")
+        .expect("SHAPESTYLE2 symbol not found");
+
+    // Both were authored with a fill and transparency and AD24 accepted both
+    // without complaint, then wrote neither. Asserting the defaults keeps the
+    // negative honest: if a later AD version starts writing them, this fails
+    // rather than quietly passing.
+    let plain = sym
+        .polylines
+        .iter()
+        .find(|p| p.line_style == 0)
+        .expect("the unstyled polyline");
+    assert!(
+        !plain.transparent,
+        "AD24 does not persist polyline Transparent"
+    );
+
+    assert_eq!(sym.text_frames.len(), 1, "SHAPESTYLE2 has one text frame");
+    let frame = &sym.text_frames[0];
+    assert!(
+        !frame.transparent,
+        "AD24 does not persist text-frame Transparent"
+    );
+    // A whole-mil margin: every other frame's is sub-mil, so the record carries
+    // only TextMargin_Frac and the integer key goes unread.
+    assert!(
+        approx_eq(frame.text_margin, 3.0),
+        "whole-mil text margin, got {}",
+        frame.text_margin
+    );
+}
+
+#[test]
+fn samples_schlib_parameter_type() {
+    let lib = SchLib::open(sample("symbols.SchLib")).expect("failed to open symbols.SchLib");
+    let sym = lib
+        .get("SHAPESTYLE2")
+        .expect("SHAPESTYLE2 symbol not found");
+
+    // eParameterType_Integer. Every other parameter in the library leaves the
+    // type at its default, which Altium omits.
+    let param = sym
+        .parameters
+        .iter()
+        .find(|p| p.name == "Rating")
+        .expect("Rating parameter not found");
+    assert_eq!(param.param_type, 2, "eParameterType_Integer");
 }
 
 #[test]

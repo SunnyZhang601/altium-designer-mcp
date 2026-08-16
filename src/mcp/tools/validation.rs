@@ -350,6 +350,122 @@ mod tests {
 
     // ---- validate_coordinate ------------------------------------------------
 
+    /// Well past `MAX_SCHLIB_COORDINATE`, so any family that range-checks its
+    /// coordinates rejects it.
+    const FAR: f64 = 99_999.0;
+
+    #[test]
+    #[allow(clippy::too_many_lines)] // a flat per-family case list, like the code it covers
+    fn every_symbol_shape_family_has_its_coordinates_range_checked() {
+        // A schematic coordinate past the safe range saturates on save, so a
+        // shape drawn far off-sheet would be written silently wrong. Each
+        // family is checked by its own loop, so each needs its own case or a
+        // family could go unchecked without any test noticing.
+        use crate::mcp::tools::test_support::{create_test_server, get_result_text, test_temp_dir};
+        use serde_json::json;
+
+        let dir = test_temp_dir();
+        let server = create_test_server(dir.path());
+        let path = dir.path().join("Far.SchLib");
+
+        let cases: [(&str, serde_json::Value, &str); 14] = [
+            (
+                "rectangles",
+                json!([{ "x1": 0, "y1": 0, "x2": FAR, "y2": 10 }]),
+                "rectangle 0 x2",
+            ),
+            (
+                "lines",
+                json!([{ "x1": 0, "y1": 0, "x2": FAR, "y2": 0 }]),
+                "line 0 x2",
+            ),
+            (
+                "polylines",
+                json!([{ "points": [{ "x": 0, "y": 0 }, { "x": FAR, "y": 0 }] }]),
+                "polyline 0 point 1 x",
+            ),
+            (
+                "arcs",
+                json!([{ "x": 0, "y": 0, "radius": FAR, "start_angle": 0, "end_angle": 90 }]),
+                "arc 0 radius",
+            ),
+            (
+                "ellipses",
+                json!([{ "x": 0, "y": 0, "radius_x": FAR, "radius_y": 5 }]),
+                "ellipse 0 radius_x",
+            ),
+            (
+                "labels",
+                json!([{ "x": FAR, "y": 0, "text": "L" }]),
+                "label 0 x",
+            ),
+            (
+                "round_rects",
+                json!([{
+                    "x1": 0, "y1": 0, "x2": 10, "y2": 10,
+                    "corner_x_radius": FAR, "corner_y_radius": 2,
+                }]),
+                "round_rect 0 corner_x_radius",
+            ),
+            (
+                "polygons",
+                json!([{ "points": [{ "x": 0, "y": 0 }, { "x": 10, "y": 0 }, { "x": FAR, "y": 10 }] }]),
+                "polygon 0 point 2 x",
+            ),
+            (
+                "pies",
+                json!([{ "x": 0, "y": 0, "radius": FAR, "start_angle": 0, "end_angle": 90 }]),
+                "pie 0 radius",
+            ),
+            (
+                "images",
+                json!([{ "x1": 0, "y1": 0, "x2": FAR, "y2": 10, "file_name": "logo.bmp" }]),
+                "image 0 x2",
+            ),
+            (
+                "text_frames",
+                json!([{ "x1": 0, "y1": 0, "x2": FAR, "y2": 10, "text": "F" }]),
+                "text_frame 0 x2",
+            ),
+            (
+                "beziers",
+                json!([{
+                    "x1": 0, "y1": 0, "x2": 10, "y2": 0,
+                    "x3": 20, "y3": 0, "x4": FAR, "y4": 0,
+                }]),
+                "bezier 0 point 3 x",
+            ),
+            (
+                "elliptical_arcs",
+                json!([{
+                    "x": 0, "y": 0, "radius": FAR, "secondary_radius": 5,
+                    "start_angle": 0, "end_angle": 90,
+                }]),
+                "elliptical_arc 0 radius",
+            ),
+            (
+                "text",
+                json!([{ "x": FAR, "y": 0, "text": "T" }]),
+                "text 0 x",
+            ),
+        ];
+
+        for (family, payload, expected) in cases {
+            let mut symbol = json!({ "name": "FAR" });
+            symbol[family] = payload;
+            let r = server.call_write_schlib(&json!({
+                "filepath": path.to_string_lossy(),
+                "symbols": [symbol],
+            }));
+            let text = get_result_text(&r);
+            assert!(r.is_error, "{family} was not range-checked: {text}");
+            assert!(
+                text.contains(expected),
+                "{family}: expected the error to name {expected:?}, got: {text}"
+            );
+        }
+    }
+
     #[test]
     fn validate_coordinate_accepts_finite_in_range() {
         assert!(McpServer::validate_coordinate(1234.5, "x").is_ok());

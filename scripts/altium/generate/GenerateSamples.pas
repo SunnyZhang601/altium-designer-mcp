@@ -3294,6 +3294,40 @@ begin
     Doc.DoSafeChangeFileNameAndSave(OUT_DIR + 'symbols.SchLib', 'SCHLIB');
 end;
 
+{ Opens a library previously saved to the bridge dir and resaves it through
+  Altium's own reader and writer, touching no string literals at all.
+
+  DOCUMENTED NEGATIVE (run 4, 2026-08-16): this was hoped to cure the five
+  damaged i18n symbols — their records carry the true name in the %UTF8% twin,
+  so a resave "should" recover it. It does not: the output held a FOURTH
+  mangling variant, worse than the input (replacement characters appearing),
+  proving the broken component is AD's READER itself. That one defect explains
+  every prior failure: the script engine feeds literals through the same
+  decode, and each open+save degrades these five sequences further. The only
+  path that bypasses the broken decode is typing the names in the AD UI (input
+  goes straight to a real wide string; the writer side is faithful, as the 48
+  working symbols prove), done ONCE — the repo never re-opens goldens in AD, so
+  reader-side lossiness never touches the committed file again. }
+procedure ResaveRun;
+var
+    Doc : IServerDocument;
+begin
+    try
+        Doc := Client.OpenDocument('SCHLIB', OUT_DIR + 'resave_input.SchLib');
+        if Doc = nil then
+        begin
+            WriteResponse('error', 'OpenDocument returned nil for resave_input.SchLib');
+            Exit;
+        end;
+        Client.ShowDocument(Doc);
+        Doc.SetModified(True);
+        Doc.DoSafeChangeFileNameAndSave(OUT_DIR + 'resave_output.SchLib', 'SCHLIB');
+        WriteResponse('ok', 'resaved SchLib through Altium reader+writer');
+    except
+        WriteResponse('error', 'exception during resave (see Altium)');
+    end;
+end;
+
 procedure Run;
 begin
     if not DirectoryExists(OUT_DIR) then ForceDirectories(OUT_DIR);

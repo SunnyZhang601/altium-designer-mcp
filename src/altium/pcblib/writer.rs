@@ -17,7 +17,7 @@ use super::primitives::{
     Arc, ComponentBody, Fill, HoleShape, Layer, Pad, PadShape, PadStackMode, PcbFlags, Region,
     StrokeFont, Text, TextJustification, TextKind, Track, Via, ViaStackMode,
 };
-use super::Footprint;
+use super::{Footprint, PrimitiveKind};
 
 use super::units::{from_mm, mm_to_mil};
 
@@ -310,58 +310,53 @@ pub fn encode_data_stream(footprint: &Footprint) -> crate::altium::error::Altium
         "footprint.name",
     )?;
 
-    // Write primitives
-    // Order: Arcs, Pads, Tracks (following typical Altium ordering)
+    // Primitives go out in the footprint's own order, which is Altium's
+    // authoring order for anything read from a file (see
+    // `Footprint::primitive_order`) and the canonical kind order otherwise.
+    //
+    // `WideStrings` is indexed over `footprint.text` alone, so the index each
+    // text record carries is resolved up front rather than counted along the
+    // way — the sequence below may put other kinds between two texts, but it
+    // never reorders the texts themselves.
+    let wide_indices = wide_string_indices(footprint);
 
-    for arc in &footprint.arcs {
-        data.push(0x01); // Arc record type
-        encode_arc(&mut data, arc);
-    }
-
-    for pad in &footprint.pads {
-        data.push(0x02); // Pad record type
-        encode_pad(&mut data, pad)?;
-    }
-
-    for via in &footprint.vias {
-        data.push(0x03); // Via record type
-        encode_via(&mut data, via);
-    }
-
-    for track in &footprint.tracks {
-        data.push(0x04); // Track record type
-        encode_track(&mut data, track);
-    }
-
-    // Counts only the texts `encode_component_wide_strings` emits an entry for,
-    // so the index stamped in each record addresses the right one.
-    let mut wide_index: u32 = 0;
-    for text in &footprint.text {
-        data.push(0x05); // Text record type
-        let index = if text.text.starts_with('.') || text.text.is_empty() {
-            None
-        } else {
-            let current = wide_index;
-            wide_index += 1;
-            Some(current)
-        };
-        encode_text(&mut data, text, index);
-    }
-
-    for region in &footprint.regions {
-        data.push(0x0B); // Region record type
-        encode_region(&mut data, region);
-    }
-
-    for fill in &footprint.fills {
-        data.push(0x06); // Fill record type
-        encode_fill(&mut data, fill);
-    }
-
-    for body in &footprint.component_bodies {
-        data.push(0x0C); // ComponentBody record type
-        let outline = resolve_body_outline(body, footprint);
-        encode_component_body(&mut data, body, &outline);
+    for (kind, index) in footprint.write_sequence() {
+        match kind {
+            PrimitiveKind::Arc => {
+                data.push(0x01);
+                encode_arc(&mut data, &footprint.arcs[index]);
+            }
+            PrimitiveKind::Pad => {
+                data.push(0x02);
+                encode_pad(&mut data, &footprint.pads[index])?;
+            }
+            PrimitiveKind::Via => {
+                data.push(0x03);
+                encode_via(&mut data, &footprint.vias[index]);
+            }
+            PrimitiveKind::Track => {
+                data.push(0x04);
+                encode_track(&mut data, &footprint.tracks[index]);
+            }
+            PrimitiveKind::Text => {
+                data.push(0x05);
+                encode_text(&mut data, &footprint.text[index], wide_indices[index]);
+            }
+            PrimitiveKind::Region => {
+                data.push(0x0B);
+                encode_region(&mut data, &footprint.regions[index]);
+            }
+            PrimitiveKind::Fill => {
+                data.push(0x06);
+                encode_fill(&mut data, &footprint.fills[index]);
+            }
+            PrimitiveKind::ComponentBody => {
+                let body = &footprint.component_bodies[index];
+                data.push(0x0C);
+                let outline = resolve_body_outline(body, footprint);
+                encode_component_body(&mut data, body, &outline);
+            }
+        }
     }
 
     // No end marker: Altium reads exactly the primitive count from the component
@@ -1853,32 +1848,17 @@ pub fn encode_unique_id_stream(footprint: &Footprint) -> Option<Vec<u8>> {
     let mut data = Vec::new();
     let mut has_any_id = false;
 
-    // `PRIMITIVEINDEX` is a single global 0-based ordinal over ALL primitives in
-    // `Data`-stream emit order (see `encode_data_stream`): Arc, Pad, Via, Track,
-    // Text, Region, Fill, ComponentBody. Every primitive consumes an ordinal whether
-    // or not it carries a unique id (a record is emitted only when it does) — so e.g.
-    // the first pad behind two silkscreen arcs is `PRIMITIVEINDEX=2`, matching Altium.
-    // `apply_unique_ids` MUST walk this exact order to round-trip.
-    let mut ordinal: usize = 0;
-    macro_rules! emit {
-        ($iter:expr, $ty:literal) => {
-            for prim in $iter {
-                if let Some(ref uid) = prim.unique_id {
-                    encode_unique_id_record(&mut data, ordinal, $ty, uid);
-                    has_any_id = true;
-                }
-                ordinal += 1;
-            }
-        };
+    // `PRIMITIVEINDEX` is a single global 0-based ordinal over ALL of the
+    // footprint's primitives, in the order the `Data` stream stores them — the
+    // same ordinal a `PrimitiveGuids` record carries. Every primitive consumes
+    // one whether or not it has a record here, so the sequence has to be the
+    // one `encode_data_stream` writes, not a per-kind walk.
+    for (ordinal, (kind, index)) in footprint.write_sequence().into_iter().enumerate() {
+        if let Some(uid) = unique_id_of(footprint, kind, index) {
+            encode_unique_id_record(&mut data, ordinal, kind.object_id(), uid);
+            has_any_id = true;
+        }
     }
-    emit!(&footprint.arcs, "Arc");
-    emit!(&footprint.pads, "Pad");
-    emit!(&footprint.vias, "Via");
-    emit!(&footprint.tracks, "Track");
-    emit!(&footprint.text, "Text");
-    emit!(&footprint.regions, "Region");
-    emit!(&footprint.fills, "Fill");
-    emit!(&footprint.component_bodies, "ComponentBody");
 
     has_any_id.then_some(data)
 }
@@ -1913,7 +1893,7 @@ fn encode_unique_id_record(
 /// identities to write.
 ///
 /// The inverse of `reader::parse_primitive_guids`: 24-byte records of
-/// `[object_kind: u32][index_within_kind: u32][guid: 16 bytes]`, the GUID's
+/// `[object_kind: u32][ordinal: u32][guid: 16 bytes]`, the GUID's
 /// first three fields little-endian. A malformed GUID string is skipped rather
 /// than written as zeroes, which would claim an identity Altium never issued.
 ///
@@ -1962,16 +1942,7 @@ fn parse_guid(text: &str) -> Option<[u8; 16]> {
 /// 4-byte little-endian unsigned integer containing the exact primitive count.
 #[allow(clippy::cast_possible_truncation)]
 pub fn encode_component_header(footprint: &Footprint) -> Vec<u8> {
-    let count = footprint.arcs.len()
-        + footprint.pads.len()
-        + footprint.vias.len()
-        + footprint.tracks.len()
-        + footprint.text.len()
-        + footprint.regions.len()
-        + footprint.fills.len()
-        + footprint.component_bodies.len();
-
-    (count as u32).to_le_bytes().to_vec()
+    (footprint.primitive_count() as u32).to_le_bytes().to_vec()
 }
 
 /// Generates a random GUID as 16 bytes (little-endian UUID format).
@@ -1995,6 +1966,35 @@ fn guid_bytes_from_string(guid: &str) -> Option<[u8; 16]> {
 // Per-Component WideStrings Writing
 // =============================================================================
 
+/// Whether a text primitive gets a `WideStrings` entry of its own.
+///
+/// A special string (`.Designator` and friends) is resolved by Altium at draw
+/// time and an empty one has nothing to carry, so neither is encoded.
+fn carries_wide_string(text: &Text) -> bool {
+    !text.text.starts_with('.') && !text.text.is_empty()
+}
+
+/// The `WideStrings` entry index for each text primitive, positionally.
+///
+/// `None` where the text carries no entry. Kept separate from the emit loop so
+/// the indices stay tied to `footprint.text`'s own order, which is what
+/// [`encode_component_wide_strings`] numbers, however the primitives are
+/// interleaved in the `Data` stream.
+fn wide_string_indices(footprint: &Footprint) -> Vec<Option<u32>> {
+    let mut next = 0u32;
+    footprint
+        .text
+        .iter()
+        .map(|text| {
+            carries_wide_string(text).then(|| {
+                let current = next;
+                next += 1;
+                current
+            })
+        })
+        .collect()
+}
+
 /// Encodes the per-component `WideStrings` stream.
 ///
 /// # Format
@@ -2011,13 +2011,12 @@ pub fn encode_component_wide_strings(footprint: &Footprint) -> Vec<u8> {
     use std::fmt::Write;
 
     // Collect text content from this footprint
-    let mut texts: Vec<&str> = Vec::new();
-
-    for text in &footprint.text {
-        if !text.text.starts_with('.') && !text.text.is_empty() {
-            texts.push(&text.text);
-        }
-    }
+    let texts: Vec<&str> = footprint
+        .text
+        .iter()
+        .filter(|t| carries_wide_string(t))
+        .map(|t| t.text.as_str())
+        .collect();
 
     // Build the parameter string: `|ENCODEDTEXT0=...|ENCODEDTEXT1=...` — a leading
     // pipe per entry and NO trailing pipe (matching AltiumSharp). With no entries the
@@ -2056,52 +2055,29 @@ pub fn encode_unique_id_header(footprint: &Footprint) -> Vec<u8> {
     (count as u32).to_le_bytes().to_vec()
 }
 
-/// Counts primitives with unique IDs.
+/// The unique id one primitive carries, addressed the way
+/// [`Footprint::write_sequence`] names it.
+fn unique_id_of(footprint: &Footprint, kind: PrimitiveKind, index: usize) -> Option<&str> {
+    match kind {
+        PrimitiveKind::Arc => footprint.arcs[index].unique_id.as_deref(),
+        PrimitiveKind::Pad => footprint.pads[index].unique_id.as_deref(),
+        PrimitiveKind::Via => footprint.vias[index].unique_id.as_deref(),
+        PrimitiveKind::Track => footprint.tracks[index].unique_id.as_deref(),
+        PrimitiveKind::Text => footprint.text[index].unique_id.as_deref(),
+        PrimitiveKind::Region => footprint.regions[index].unique_id.as_deref(),
+        PrimitiveKind::Fill => footprint.fills[index].unique_id.as_deref(),
+        PrimitiveKind::ComponentBody => footprint.component_bodies[index].unique_id.as_deref(),
+    }
+}
+
+/// Counts the primitives that carry a unique id, so the header can never
+/// disagree with the records [`encode_unique_id_stream`] writes.
 fn count_unique_ids(footprint: &Footprint) -> usize {
-    let mut count = 0;
-
-    for pad in &footprint.pads {
-        if pad.unique_id.is_some() {
-            count += 1;
-        }
-    }
-    for via in &footprint.vias {
-        if via.unique_id.is_some() {
-            count += 1;
-        }
-    }
-    for track in &footprint.tracks {
-        if track.unique_id.is_some() {
-            count += 1;
-        }
-    }
-    for arc in &footprint.arcs {
-        if arc.unique_id.is_some() {
-            count += 1;
-        }
-    }
-    for text in &footprint.text {
-        if text.unique_id.is_some() {
-            count += 1;
-        }
-    }
-    for region in &footprint.regions {
-        if region.unique_id.is_some() {
-            count += 1;
-        }
-    }
-    for fill in &footprint.fills {
-        if fill.unique_id.is_some() {
-            count += 1;
-        }
-    }
-    for body in &footprint.component_bodies {
-        if body.unique_id.is_some() {
-            count += 1;
-        }
-    }
-
-    count
+    footprint
+        .write_sequence()
+        .into_iter()
+        .filter(|&(kind, index)| unique_id_of(footprint, kind, index).is_some())
+        .count()
 }
 
 #[cfg(test)]

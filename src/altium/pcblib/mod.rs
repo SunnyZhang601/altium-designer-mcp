@@ -142,24 +142,102 @@ pub struct Footprint {
     /// across edits; dropping them makes every primitive look new. They are held
     /// as read rather than attached to the primitives themselves, so a
     /// read-modify-write that leaves the primitive collections alone reproduces
-    /// them exactly. Adding or removing a primitive shifts the indices its kind
-    /// uses, and the writer drops any entry that no longer points at one.
+    /// them exactly. Adding or removing a primitive shifts the ordinals, and the
+    /// writer drops any entry that no longer points at a primitive.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub primitive_guids: Vec<PrimitiveGuid>,
+
+    /// The order the primitives are stored in, one entry per primitive.
+    ///
+    /// Altium interleaves kinds in authoring order — `LOCKFLAGS_PCB` in the
+    /// golden runs pad x6, track, pad x2, track, arc x2, fill x2 — and both
+    /// identity streams key off a primitive's position in that sequence:
+    /// `PrimitiveGuids` stores it as a record's second `u32`, and
+    /// `UniqueIDPrimitiveInformation` as `PRIMITIVEINDEX`. Emitting the kinds
+    /// in blocks would renumber every primitive and detach both.
+    ///
+    /// An entry names one of the lists above; its n-th occurrence refers to
+    /// that list's n-th element, so the sequence alone reconstructs the
+    /// interleaving. It is maintained by the `add_*` methods, which is how
+    /// reading a footprint records the file's order. Empty when the primitive
+    /// lists were populated directly, in which case the writer falls back to
+    /// [`PrimitiveKind::WRITE_ORDER`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub primitive_order: Vec<PrimitiveKind>,
+}
+
+/// One of a [`Footprint`]'s primitive lists, as named by `primitive_order`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PrimitiveKind {
+    /// [`Footprint::arcs`].
+    Arc,
+    /// [`Footprint::pads`].
+    Pad,
+    /// [`Footprint::vias`].
+    Via,
+    /// [`Footprint::tracks`].
+    Track,
+    /// [`Footprint::text`].
+    Text,
+    /// [`Footprint::regions`].
+    Region,
+    /// [`Footprint::fills`].
+    Fill,
+    /// [`Footprint::component_bodies`].
+    ComponentBody,
+}
+
+impl PrimitiveKind {
+    /// The order a footprint with no recorded order of its own is written in.
+    pub const WRITE_ORDER: [Self; 8] = [
+        Self::Arc,
+        Self::Pad,
+        Self::Via,
+        Self::Track,
+        Self::Text,
+        Self::Region,
+        Self::Fill,
+        Self::ComponentBody,
+    ];
+
+    /// The `PRIMITIVEOBJECTID` token Altium writes for this kind in a
+    /// `UniqueIDPrimitiveInformation` record.
+    #[must_use]
+    pub const fn object_id(self) -> &'static str {
+        match self {
+            Self::Arc => "Arc",
+            Self::Pad => "Pad",
+            Self::Via => "Via",
+            Self::Track => "Track",
+            Self::Text => "Text",
+            Self::Region => "Region",
+            Self::Fill => "Fill",
+            Self::ComponentBody => "ComponentBody",
+        }
+    }
 }
 
 /// One `PrimitiveGuids` record: which primitive it names, and its GUID.
 ///
 /// The stream is a `u32` count followed by that many 24-byte records of
-/// `[object_kind: u32][index_within_kind: u32][guid: 16 bytes, little-endian]`.
+/// `[object_kind: u32][ordinal: u32][guid: 16 bytes, little-endian]`.
 /// `object_kind` is Altium's object id — 1 arc, 2 pad, 3 via, 4 track, 5 text,
-/// 6 fill, 85 the footprint itself, 89 region, 90 component body — and `index`
-/// counts within that kind.
+/// 6 fill, 85 the footprint itself, 89 region, 90 component body.
+///
+/// `index` is the primitive's position among **all** the footprint's
+/// primitives, not among its own kind: across the 22 golden footprints the
+/// indices are a permutation of `0..n-1` once the footprint's own record (kind
+/// 85, always index 0) is set aside, and `PRIMPROPS` puts its regions at 0, 4,
+/// 5 and 6 with a pad at 1 and its texts at 2 and 3. It is the same ordinal
+/// `UniqueIDPrimitiveInformation` calls `PRIMITIVEINDEX`, which is why
+/// [`Footprint::primitive_order`] has to survive a write for either to mean
+/// anything.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PrimitiveGuid {
     /// Altium object id of the primitive this GUID belongs to.
     pub object_kind: u32,
-    /// Position of the primitive among others of the same kind.
+    /// Position of the primitive among all of the footprint's primitives.
     pub index: u32,
     /// The GUID, formatted `{XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX}`.
     pub guid: String,
@@ -260,47 +338,116 @@ impl Footprint {
             component_bodies: Vec::new(),
             model_3d: None,
             primitive_guids: Vec::new(),
+            primitive_order: Vec::new(),
         }
     }
 
     /// Adds a pad to the footprint.
     pub fn add_pad(&mut self, pad: Pad) {
         self.pads.push(pad);
+        self.primitive_order.push(PrimitiveKind::Pad);
     }
 
     /// Adds a via to the footprint.
     pub fn add_via(&mut self, via: Via) {
         self.vias.push(via);
+        self.primitive_order.push(PrimitiveKind::Via);
     }
 
     /// Adds a track to the footprint.
     pub fn add_track(&mut self, track: Track) {
         self.tracks.push(track);
+        self.primitive_order.push(PrimitiveKind::Track);
     }
 
     /// Adds an arc to the footprint.
     pub fn add_arc(&mut self, arc: Arc) {
         self.arcs.push(arc);
+        self.primitive_order.push(PrimitiveKind::Arc);
     }
 
     /// Adds a region to the footprint.
     pub fn add_region(&mut self, region: Region) {
         self.regions.push(region);
+        self.primitive_order.push(PrimitiveKind::Region);
     }
 
     /// Adds text to the footprint.
     pub fn add_text(&mut self, text: Text) {
         self.text.push(text);
+        self.primitive_order.push(PrimitiveKind::Text);
     }
 
     /// Adds a fill to the footprint.
     pub fn add_fill(&mut self, fill: primitives::Fill) {
         self.fills.push(fill);
+        self.primitive_order.push(PrimitiveKind::Fill);
     }
 
     /// Adds a component body (3D model) to the footprint.
     pub fn add_component_body(&mut self, body: primitives::ComponentBody) {
         self.component_bodies.push(body);
+        self.primitive_order.push(PrimitiveKind::ComponentBody);
+    }
+
+    /// The footprint's primitives in the order they are written, as
+    /// `(kind, index into that kind's list)` pairs.
+    ///
+    /// [`Self::primitive_order`] is advisory: the primitive lists are public,
+    /// so a caller can push to or truncate one without it. Entries pointing
+    /// past the end of their list are therefore dropped, and any primitive the
+    /// sequence never reaches is appended in [`PrimitiveKind::WRITE_ORDER`] —
+    /// so a footprint with no recorded order, or one edited behind its back,
+    /// still writes every primitive exactly once.
+    #[must_use]
+    pub fn write_sequence(&self) -> Vec<(PrimitiveKind, usize)> {
+        let mut taken: std::collections::HashMap<PrimitiveKind, usize> =
+            std::collections::HashMap::new();
+        let mut sequence = Vec::with_capacity(self.primitive_count());
+
+        for &kind in &self.primitive_order {
+            let next = taken.entry(kind).or_insert(0);
+            if *next < self.count_of(kind) {
+                sequence.push((kind, *next));
+                *next += 1;
+            }
+        }
+        for kind in PrimitiveKind::WRITE_ORDER {
+            let next = taken.entry(kind).or_insert(0);
+            while *next < self.count_of(kind) {
+                sequence.push((kind, *next));
+                *next += 1;
+            }
+        }
+        sequence
+    }
+
+    /// How many primitives of one kind the footprint holds.
+    #[must_use]
+    pub fn count_of(&self, kind: PrimitiveKind) -> usize {
+        match kind {
+            PrimitiveKind::Arc => self.arcs.len(),
+            PrimitiveKind::Pad => self.pads.len(),
+            PrimitiveKind::Via => self.vias.len(),
+            PrimitiveKind::Track => self.tracks.len(),
+            PrimitiveKind::Text => self.text.len(),
+            PrimitiveKind::Region => self.regions.len(),
+            PrimitiveKind::Fill => self.fills.len(),
+            PrimitiveKind::ComponentBody => self.component_bodies.len(),
+        }
+    }
+
+    /// How many primitives the footprint holds in total.
+    #[must_use]
+    pub fn primitive_count(&self) -> usize {
+        self.pads.len()
+            + self.vias.len()
+            + self.tracks.len()
+            + self.arcs.len()
+            + self.regions.len()
+            + self.text.len()
+            + self.fills.len()
+            + self.component_bodies.len()
     }
 }
 

@@ -233,18 +233,20 @@ fn parse_unique_id_record(record: &str) -> Option<UniqueIdEntry> {
     let params = crate::altium::parse_pipe_params_raw(record);
     let primitive_index: usize = params.get("PRIMITIVEINDEX")?.parse().ok()?;
     let primitive_type = params.get("PRIMITIVEOBJECTID")?.clone();
-    let unique_id = params.get("UNIQUEID")?.clone();
-    // Only return if all required fields are present and the id is non-empty.
-    (!unique_id.is_empty()).then_some(UniqueIdEntry {
+    // An empty `UNIQUEID` is not a missing record. Every pad in the golden has
+    // one, value and all, and Altium writes the stream regardless — the record
+    // is what marks the primitive as tracked, so dropping the empty ones threw
+    // the whole stream away.
+    Some(UniqueIdEntry {
         primitive_index,
         primitive_type,
-        unique_id,
+        unique_id: params.get("UNIQUEID")?.clone(),
     })
 }
 
 /// Parses a footprint's `PrimitiveGuids/Data` stream.
 ///
-/// Layout: 24-byte records of `[object_kind: u32][index_within_kind: u32][guid:
+/// Layout: 24-byte records of `[object_kind: u32][ordinal: u32][guid:
 /// 16 bytes]`, packed with no header of their own — the record count lives in
 /// the sibling `PrimitiveGuids/Header` stream, so the data is chunked instead.
 /// The GUID's first three fields are little-endian, the Windows `GUID` struct
@@ -284,47 +286,53 @@ fn format_guid(b: &[u8]) -> String {
 
 /// Applies unique IDs from the `UniqueIDPrimitiveInformation` stream to footprint primitives.
 ///
-/// `PRIMITIVEINDEX` is a single global 0-based ordinal over all primitives in
-/// `Data`-stream emit order (Arc, Pad, Via, Track, Text, Region, Fill,
-/// `ComponentBody`) — NOT a per-type index. This walks that exact order, mirroring
-/// `encode_unique_id_stream`, so a written-then-read footprint round-trips.
+/// `PRIMITIVEINDEX` is a single global 0-based ordinal over all of the
+/// footprint's primitives, in the order the `Data` stream stores them — NOT a
+/// per-type index. This walks `Footprint::write_sequence`, the same order
+/// `encode_unique_id_stream` writes, so a footprint round-trips.
 ///
 /// # Arguments
 ///
 /// * `footprint` - The footprint to update with unique IDs
 /// * `unique_ids` - The parsed unique ID map from `parse_unique_id_stream`
 pub fn apply_unique_ids(footprint: &mut Footprint, unique_ids: &UniqueIdMap) {
+    use crate::altium::pcblib::PrimitiveKind;
+
     // Map global ordinal -> (type, uid). Type is kept only to disambiguate a foreign
     // file whose ordinal base doesn't line up: we skip rather than mis-attach.
-    let mut by_ordinal: HashMap<usize, (&str, &str)> = HashMap::new();
-    for entry in unique_ids {
-        by_ordinal.insert(
-            entry.primitive_index,
-            (entry.primitive_type.as_str(), entry.unique_id.as_str()),
-        );
-    }
+    let by_ordinal: HashMap<usize, (&str, &str)> = unique_ids
+        .iter()
+        .map(|entry| {
+            (
+                entry.primitive_index,
+                (entry.primitive_type.as_str(), entry.unique_id.as_str()),
+            )
+        })
+        .collect();
 
-    let mut ordinal = 0usize;
-    macro_rules! apply {
-        ($iter:expr, $ty:literal) => {
-            for prim in $iter {
-                if let Some(&(ty, uid)) = by_ordinal.get(&ordinal) {
-                    if ty == $ty {
-                        prim.unique_id = Some(uid.to_string());
-                    }
-                }
-                ordinal += 1;
-            }
+    let assignments: Vec<(PrimitiveKind, usize, String)> = footprint
+        .write_sequence()
+        .into_iter()
+        .enumerate()
+        .filter_map(|(ordinal, (kind, index))| {
+            let &(ty, uid) = by_ordinal.get(&ordinal)?;
+            (ty == kind.object_id()).then(|| (kind, index, uid.to_string()))
+        })
+        .collect();
+
+    for (kind, index, uid) in assignments {
+        let slot = match kind {
+            PrimitiveKind::Arc => &mut footprint.arcs[index].unique_id,
+            PrimitiveKind::Pad => &mut footprint.pads[index].unique_id,
+            PrimitiveKind::Via => &mut footprint.vias[index].unique_id,
+            PrimitiveKind::Track => &mut footprint.tracks[index].unique_id,
+            PrimitiveKind::Text => &mut footprint.text[index].unique_id,
+            PrimitiveKind::Region => &mut footprint.regions[index].unique_id,
+            PrimitiveKind::Fill => &mut footprint.fills[index].unique_id,
+            PrimitiveKind::ComponentBody => &mut footprint.component_bodies[index].unique_id,
         };
+        *slot = Some(uid);
     }
-    apply!(footprint.arcs.iter_mut(), "Arc");
-    apply!(footprint.pads.iter_mut(), "Pad");
-    apply!(footprint.vias.iter_mut(), "Via");
-    apply!(footprint.tracks.iter_mut(), "Track");
-    apply!(footprint.text.iter_mut(), "Text");
-    apply!(footprint.regions.iter_mut(), "Region");
-    apply!(footprint.fills.iter_mut(), "Fill");
-    apply!(footprint.component_bodies.iter_mut(), "ComponentBody");
 
     tracing::trace!(
         footprint = %footprint.name,

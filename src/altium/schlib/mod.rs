@@ -489,6 +489,60 @@ mod tests {
     }
 
     #[test]
+    fn writing_systems_survive_a_write_read_cycle() {
+        // Our own writer and reader, deliberately without Altium in the loop.
+        //
+        // The Altium-authored golden cannot cover these: a DelphiScript string
+        // literal is mangled before Altium ever sees it for byte sequences the
+        // scripting host's code page cannot represent, so four of the fixture's
+        // symbols carry mojibake that Altium itself stored faithfully. That is a
+        // limit of how the fixture is authored, not of the format layer — and
+        // this test is what tells the two apart.
+        //
+        // Every entry is a name that cannot be written in Windows-1252, and the
+        // last is long enough that its UTF-8 encoding exceeds the 31-character
+        // cap on a compound-file storage name.
+        let words = [
+            "ᏣᎳᎩ",          // Cherokee
+            "রোধক",         // Bengali
+            "ᐃᓄᒃᑎᑐᑦ",       // Inuktitut syllabics
+            "𠮷野",         // Han beyond the BMP: surrogate pairs
+            "𞤀𞤣𞤤𞤢𞤥",        // Adlam beyond the BMP, right to left
+            "ការធ្វើតេស្តយូនីកូដ", // Khmer, 19 chars and 57 UTF-8 bytes
+        ];
+
+        let mut lib = SchLib::new();
+        for word in words {
+            let mut symbol = Symbol::new(word);
+            symbol.description = format!("desc {word}");
+            symbol.add_parameter(Parameter::new("Value", word));
+            lib.add(symbol);
+        }
+
+        let mut buffer = Cursor::new(Vec::new());
+        lib.write(&mut buffer).expect("write");
+        buffer.set_position(0);
+        let read_lib = SchLib::read(buffer).expect("read");
+
+        for word in words {
+            let symbol = read_lib
+                .get(word)
+                .unwrap_or_else(|| panic!("symbol {word:?} not found; got {:?}", read_lib.names()));
+            assert_eq!(
+                symbol.description,
+                format!("desc {word}"),
+                "{word}: description"
+            );
+            let param = symbol
+                .parameters
+                .iter()
+                .find(|p| p.name == "Value")
+                .unwrap_or_else(|| panic!("{word}: no Value parameter"));
+            assert_eq!(param.value, word, "{word}: parameter value");
+        }
+    }
+
+    #[test]
     fn parameter_display_properties_round_trip() {
         // AUTOPOSITION / ISRULE / ISSYSTEMPARAMETER / TEXTHORZANCHOR / TEXTVERTANCHOR.
         // Written in memory and read back, because no golden carries them: AD24 does

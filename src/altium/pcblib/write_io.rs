@@ -320,12 +320,9 @@ impl PcbLib {
 
         // Build Library/Data content: a C-string parameter block, then the
         // component count + names.
-        let params = Self::build_library_params(self.filepath.as_deref().unwrap_or(""));
+        let params = self.library_params();
         let mut data = Vec::new();
-        crate::altium::framing::write_cstring_param_block(
-            &mut data,
-            &crate::altium::encode_windows1252(&params),
-        );
+        crate::altium::framing::write_cstring_param_block(&mut data, &params);
 
         // Component count
         #[allow(clippy::cast_possible_truncation)]
@@ -456,13 +453,77 @@ impl PcbLib {
         Self::write_meta_storage(cfb, "/FileVersionInfo", 1, &data)
     }
 
-    /// Builds the pipe-delimited parameter string for `/Library/Data`.
+    /// The encoded parameter block for `/Library/Data`.
     ///
     /// Format: `|KEY=VAL|KEY=VAL|...` (leading pipe, NO trailing pipe).
     ///
-    /// Altium Designer requires `VERSION=3.00` plus a minimal V9 layer stack
-    /// definition to consider the file valid.
-    fn build_library_params(filename: &str) -> String {
+    /// A library read from a file replays its own block, so the stack a
+    /// designer configured — custom mechanical layer names, which layers are
+    /// enabled, the layer sets, the view state — comes back out unchanged.
+    /// Only the three keys that describe *this* save are rewritten. A library
+    /// built in memory has no stack to preserve and gets the template one.
+    fn library_params(&self) -> Vec<u8> {
+        // A library path is as free to leave Windows-1252 as any other string
+        // Altium stores, so it goes on the wire the same way.
+        let filename = crate::altium::to_wire_text(self.filepath.as_deref().unwrap_or(""));
+        let now = chrono::Local::now();
+        let (date, time) = (
+            now.format("%d. %m. %Y").to_string(),
+            now.format("%H:%M:%S").to_string(),
+        );
+
+        if let Some(stored) = self.metadata.library_params.as_deref() {
+            let block = Self::override_param(stored, "FILENAME", &filename);
+            let block = Self::override_param(&block, "DATE", &date);
+            return Self::override_param(&block, "TIME", &time);
+        }
+
+        crate::altium::encode_windows1252(&Self::template_library_params(&filename, &date, &time))
+    }
+
+    /// Replaces one key's value inside a raw `|KEY=VALUE|` block, leaving every
+    /// other byte exactly as it was.
+    ///
+    /// Works on bytes rather than text because the block is replayed verbatim:
+    /// decoding and re-encoding it would round a handful of Windows-1252 byte
+    /// values through `?`. A key Altium did not write is appended.
+    fn override_param(block: &[u8], key: &str, value: &str) -> Vec<u8> {
+        let value = crate::altium::encode_windows1252(value);
+        let mut replaced = false;
+
+        let mut segments: Vec<Vec<u8>> = block
+            .split(|&b| b == b'|')
+            .map(|seg| {
+                let matches_key = seg
+                    .iter()
+                    .position(|&b| b == b'=')
+                    .is_some_and(|eq| seg[..eq].eq_ignore_ascii_case(key.as_bytes()));
+                if !matches_key {
+                    return seg.to_vec();
+                }
+                replaced = true;
+                let mut out = key.as_bytes().to_vec();
+                out.push(b'=');
+                out.extend_from_slice(&value);
+                out
+            })
+            .collect();
+
+        if !replaced {
+            let mut appended = key.as_bytes().to_vec();
+            appended.push(b'=');
+            appended.extend_from_slice(&value);
+            segments.push(appended);
+        }
+
+        segments.join(&b'|')
+    }
+
+    /// The parameter block a from-scratch library gets.
+    ///
+    /// Altium Designer requires `VERSION=3.00` plus a V9 layer stack definition
+    /// to consider the file valid.
+    fn template_library_params(filename: &str, date: &str, time: &str) -> String {
         use std::fmt::Write;
 
         let mut p = String::with_capacity(4096);
@@ -471,9 +532,8 @@ impl PcbLib {
         let _ = write!(p, "|FILENAME={filename}");
         p.push_str("|KIND=Protel_Advanced_PCB_Library");
         p.push_str("|VERSION=3.00");
-        let now = chrono::Local::now();
-        let _ = write!(p, "|DATE={}", now.format("%d. %m. %Y"));
-        let _ = write!(p, "|TIME={}", now.format("%H:%M:%S"));
+        let _ = write!(p, "|DATE={date}");
+        let _ = write!(p, "|TIME={time}");
 
         // V9 layer stack + full board configuration. A synthesised stack is
         // rejected by Altium ("Catastrophic failure whilst loading section

@@ -325,6 +325,19 @@ pub struct LibraryMetadata {
 
     /// Component descriptions by index from `CompDescr{N}` fields.
     pub component_descriptions: Vec<String>,
+
+    /// The `/Library/Data` parameter block exactly as it was read, without its
+    /// length prefix or trailing null.
+    ///
+    /// This block is the library's own board configuration: the V9 layer stack,
+    /// every mechanical layer's name, kind and enabled flag, the layer sets and
+    /// the view state. Almost none of it is modelled here, and a library
+    /// routinely carries names a designer chose (`Mechanical 15 = Assembly
+    /// Top`), so it is carried through byte-for-byte on a read-modify-write
+    /// rather than replaced by the template stack a from-scratch library gets.
+    ///
+    /// `None` for a library built in memory, which has no stack to preserve.
+    pub library_params: Option<Vec<u8>>,
 }
 
 /// A `PcbLib` footprint library.

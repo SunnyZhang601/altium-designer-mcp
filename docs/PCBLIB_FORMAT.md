@@ -96,6 +96,16 @@ Contains library-level parameters and the component directory:
 The parameter block uses the standard `WriteCStringParameterBlock` encoding. `VERSION=3.00`
 requires the `V9_MASTERSTACK` + `V9_STACK_LAYER` layer-stack entries in the same block.
 
+Beyond those, the block is the library's whole board configuration: `LAYER_V8_{n}NAME`,
+`…MECHKIND` and `…MECHENABLED` per mechanical layer, `V9_CACHE_LAYER{n}_*` and
+`V9_STACK_LAYER{n}_*` for the stack, `LAYERSET{n}LAYERS` for the layer sets, plus the view
+state. Almost none of it is modelled, and the names in it are a designer's choice
+(`Mechanical 15 = Assembly Top`), so a library read from disk has its block replayed
+byte-for-byte on write — only `FILENAME`, `DATE` and `TIME` are rewritten. A library built
+in memory has no block to replay and gets a template stack captured from a real
+Altium-authored library; a synthesised one is rejected with "Catastrophic failure whilst
+loading section Library".
+
 ## Per-Component Streams
 
 ### `/{component}/Header`

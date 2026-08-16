@@ -1450,6 +1450,85 @@ fn samples_pcblib_golden_survives_a_read_modify_write() {
 }
 
 #[test]
+fn samples_pcblib_layer_stack_survives_a_read_modify_write() {
+    use std::io::Cursor;
+
+    /// The value of one key in a raw `|KEY=VALUE|` parameter block.
+    fn param(block: &[u8], key: &str) -> Option<String> {
+        block.split(|&b| b == b'|').find_map(|seg| {
+            let eq = seg.iter().position(|&b| b == b'=')?;
+            (seg[..eq] == *key.as_bytes())
+                .then(|| String::from_utf8_lossy(&seg[eq + 1..]).into_owned())
+        })
+    }
+
+    /// The block minus the three keys that describe one particular save.
+    fn stack_only(block: &[u8]) -> Vec<Vec<u8>> {
+        block
+            .split(|&b| b == b'|')
+            .filter(|seg| {
+                let key = seg.split(|&b| b == b'=').next().unwrap_or_default();
+                !["FILENAME", "DATE", "TIME"]
+                    .iter()
+                    .any(|k| key == k.as_bytes())
+            })
+            .map(<[u8]>::to_vec)
+            .collect()
+    }
+
+    let mut lib = PcbLib::open(sample("footprints.PcbLib")).expect("failed to open golden");
+    let before = lib
+        .metadata()
+        .library_params
+        .clone()
+        .expect("the golden carries a layer stack");
+
+    // Altium named this layer; our template stack calls slot 12 "Top Assembly".
+    // Keeping the authored name is the point — a designer's "Mechanical 15 =
+    // Assembly Top" must not be renamed by a read-modify-write.
+    assert_eq!(
+        param(&before, "LAYER_V8_12NAME").as_deref(),
+        Some("Mechanical 2"),
+        "the golden's own name for mechanical layer 2"
+    );
+
+    let mut buffer = Cursor::new(Vec::new());
+    lib.write(&mut buffer).expect("write the golden back");
+    buffer.set_position(0);
+    let after = PcbLib::read(&mut buffer)
+        .expect("read back")
+        .metadata()
+        .library_params
+        .clone()
+        .expect("the rewritten library carries a layer stack");
+
+    assert_eq!(
+        stack_only(&after),
+        stack_only(&before),
+        "the library's own board configuration must come back byte-for-byte: \
+         layer names, enabled flags, USEDBYPRIMS, layer sets and per-layer ids"
+    );
+
+    // A library with no stack of its own falls back to the template, which is
+    // what makes the assertion above meaningful rather than tautological.
+    let mut fresh = PcbLib::new();
+    let mut buffer = Cursor::new(Vec::new());
+    fresh.write(&mut buffer).expect("write an empty library");
+    buffer.set_position(0);
+    let template = PcbLib::read(&mut buffer)
+        .expect("read back")
+        .metadata()
+        .library_params
+        .clone()
+        .expect("a written library always has a stack");
+    assert_eq!(
+        param(&template, "LAYER_V8_12NAME").as_deref(),
+        Some("Top Assembly"),
+        "the template stack names slot 12 differently from the golden"
+    );
+}
+
+#[test]
 fn samples_pcblib_padmask_expansions() {
     // Manual paste / solder-mask expansion, authored by Altium.
     //

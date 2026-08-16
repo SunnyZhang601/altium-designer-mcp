@@ -26,11 +26,6 @@ with a long non-ASCII name keeps only its truncated storage name.
 (`TOP`); we write the long form (`TOPLAYER`), and for a board cutout we write the resolved
 keep-out layer rather than the one stored in the record.
 
-**`IndexInSheet` is renumbered (`SchLib`).** Our writer emits a symbol's primitives grouped
-by type; Altium preserves the interleaved authoring order, and `IndexInSheet` records it.
-This is the `SchLib` twin of the `PcbLib` primitive ordering that
-`Footprint::primitive_order` now carries, and it wants the same treatment.
-
 **Identity streams are keyed by ordinal, not attached to the primitive (`PcbLib`).** A
 footprint's `PrimitiveGuids` records and its unique ids both name a primitive by its
 position among all the footprint's primitives. That position is preserved across a

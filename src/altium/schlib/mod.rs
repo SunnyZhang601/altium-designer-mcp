@@ -344,6 +344,90 @@ pub struct Symbol {
     /// Footprint model references.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub footprints: Vec<FootprintModel>,
+
+    /// The order the content records are stored in, one entry per record.
+    ///
+    /// Altium interleaves the record kinds in authoring order — the golden's
+    /// `LOCKFLAGS2` runs line, arc, ellipse, round-rect, polyline, polygon,
+    /// pie, bezier, label — and numbers them with one shared `IndexInSheet`
+    /// counter in exactly that sequence. Emitting the kinds in blocks
+    /// renumbers every record.
+    ///
+    /// An entry names one of the lists above; its n-th occurrence refers to
+    /// that list's n-th element, so the sequence alone reconstructs the
+    /// interleaving. It is maintained by the `add_*` methods, which is how
+    /// reading a symbol records the file's order. Empty when the lists were
+    /// populated directly, in which case the writer falls back to
+    /// [`SchPrimitiveKind::WRITE_ORDER`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub primitive_order: Vec<SchPrimitiveKind>,
+}
+
+/// One of a [`Symbol`]'s content-record lists, as named by `primitive_order`.
+///
+/// Footprint models are absent on purpose: they are written in the
+/// implementation section after the content records and take no `IndexInSheet`
+/// slot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SchPrimitiveKind {
+    /// [`Symbol::rectangles`].
+    Rectangle,
+    /// [`Symbol::pins`].
+    Pin,
+    /// [`Symbol::lines`].
+    Line,
+    /// [`Symbol::polylines`].
+    Polyline,
+    /// [`Symbol::polygons`].
+    Polygon,
+    /// [`Symbol::arcs`].
+    Arc,
+    /// [`Symbol::pies`].
+    Pie,
+    /// [`Symbol::images`].
+    Image,
+    /// [`Symbol::text_frames`].
+    TextFrame,
+    /// [`Symbol::beziers`].
+    Bezier,
+    /// [`Symbol::ellipses`].
+    Ellipse,
+    /// [`Symbol::round_rects`].
+    RoundRect,
+    /// [`Symbol::elliptical_arcs`].
+    EllipticalArc,
+    /// [`Symbol::labels`].
+    Label,
+    /// [`Symbol::text`].
+    Text,
+    /// [`Symbol::parameters`].
+    Parameter,
+}
+
+impl SchPrimitiveKind {
+    /// The order a symbol with no recorded order of its own is written in.
+    ///
+    /// Rectangles lead so a solid-filled body sits behind the pins; emitting
+    /// pins first lets the body paint over the pin names inside it.
+    pub const WRITE_ORDER: [Self; 16] = [
+        Self::Rectangle,
+        Self::Pin,
+        Self::Line,
+        Self::Polyline,
+        Self::Polygon,
+        Self::Arc,
+        Self::Pie,
+        Self::Image,
+        Self::TextFrame,
+        Self::Bezier,
+        Self::Ellipse,
+        Self::RoundRect,
+        Self::EllipticalArc,
+        Self::Label,
+        Self::Text,
+        Self::Parameter,
+    ];
 }
 
 const fn default_part_count() -> u32 {
@@ -389,21 +473,25 @@ impl Symbol {
     /// Adds a pin to the symbol.
     pub fn add_pin(&mut self, pin: Pin) {
         self.pins.push(pin);
+        self.primitive_order.push(SchPrimitiveKind::Pin);
     }
 
     /// Adds a rectangle to the symbol.
     pub fn add_rectangle(&mut self, rect: Rectangle) {
         self.rectangles.push(rect);
+        self.primitive_order.push(SchPrimitiveKind::Rectangle);
     }
 
     /// Adds a line to the symbol.
     pub fn add_line(&mut self, line: Line) {
         self.lines.push(line);
+        self.primitive_order.push(SchPrimitiveKind::Line);
     }
 
     /// Adds a parameter to the symbol.
     pub fn add_parameter(&mut self, param: Parameter) {
         self.parameters.push(param);
+        self.primitive_order.push(SchPrimitiveKind::Parameter);
     }
 
     /// Adds a footprint model reference.
@@ -414,61 +502,128 @@ impl Symbol {
     /// Adds a polyline to the symbol.
     pub fn add_polyline(&mut self, polyline: Polyline) {
         self.polylines.push(polyline);
+        self.primitive_order.push(SchPrimitiveKind::Polyline);
     }
 
     /// Adds a polygon to the symbol.
     pub fn add_polygon(&mut self, polygon: Polygon) {
         self.polygons.push(polygon);
+        self.primitive_order.push(SchPrimitiveKind::Polygon);
     }
 
     /// Adds an arc to the symbol.
     pub fn add_arc(&mut self, arc: Arc) {
         self.arcs.push(arc);
+        self.primitive_order.push(SchPrimitiveKind::Arc);
     }
 
     /// Adds a pie (filled sector) to the symbol.
     pub fn add_pie(&mut self, pie: Pie) {
         self.pies.push(pie);
+        self.primitive_order.push(SchPrimitiveKind::Pie);
     }
 
     /// Adds an image to the symbol.
     pub fn add_image(&mut self, image: Image) {
         self.images.push(image);
+        self.primitive_order.push(SchPrimitiveKind::Image);
     }
 
     /// Adds a text frame to the symbol.
     pub fn add_text_frame(&mut self, text_frame: TextFrame) {
         self.text_frames.push(text_frame);
+        self.primitive_order.push(SchPrimitiveKind::TextFrame);
     }
 
     /// Adds a Bezier curve to the symbol.
     pub fn add_bezier(&mut self, bezier: Bezier) {
         self.beziers.push(bezier);
+        self.primitive_order.push(SchPrimitiveKind::Bezier);
     }
 
     /// Adds an ellipse to the symbol.
     pub fn add_ellipse(&mut self, ellipse: Ellipse) {
         self.ellipses.push(ellipse);
+        self.primitive_order.push(SchPrimitiveKind::Ellipse);
     }
 
     /// Adds a rounded rectangle to the symbol.
     pub fn add_round_rect(&mut self, round_rect: RoundRect) {
         self.round_rects.push(round_rect);
+        self.primitive_order.push(SchPrimitiveKind::RoundRect);
     }
 
     /// Adds an elliptical arc to the symbol.
     pub fn add_elliptical_arc(&mut self, elliptical_arc: EllipticalArc) {
         self.elliptical_arcs.push(elliptical_arc);
+        self.primitive_order.push(SchPrimitiveKind::EllipticalArc);
     }
 
     /// Adds a label to the symbol.
     pub fn add_label(&mut self, label: Label) {
         self.labels.push(label);
+        self.primitive_order.push(SchPrimitiveKind::Label);
     }
 
     /// Adds a text annotation to the symbol.
     pub fn add_text(&mut self, text: Text) {
         self.text.push(text);
+        self.primitive_order.push(SchPrimitiveKind::Text);
+    }
+
+    /// The symbol's content records in the order they are written, as
+    /// `(kind, index into that kind's list)` pairs.
+    ///
+    /// [`Self::primitive_order`] is advisory: the lists are public, so a caller
+    /// can push to or truncate one without it. Entries pointing past the end of
+    /// their list are therefore dropped, and any record the sequence never
+    /// reaches is appended in [`SchPrimitiveKind::WRITE_ORDER`] — so a symbol
+    /// with no recorded order, or one edited behind its back, still writes
+    /// every record exactly once.
+    #[must_use]
+    pub fn write_sequence(&self) -> Vec<(SchPrimitiveKind, usize)> {
+        let mut taken: std::collections::HashMap<SchPrimitiveKind, usize> =
+            std::collections::HashMap::new();
+        let mut sequence = Vec::new();
+
+        for &kind in &self.primitive_order {
+            let next = taken.entry(kind).or_insert(0);
+            if *next < self.count_of(kind) {
+                sequence.push((kind, *next));
+                *next += 1;
+            }
+        }
+        for kind in SchPrimitiveKind::WRITE_ORDER {
+            let next = taken.entry(kind).or_insert(0);
+            while *next < self.count_of(kind) {
+                sequence.push((kind, *next));
+                *next += 1;
+            }
+        }
+        sequence
+    }
+
+    /// How many content records of one kind the symbol holds.
+    #[must_use]
+    pub fn count_of(&self, kind: SchPrimitiveKind) -> usize {
+        match kind {
+            SchPrimitiveKind::Rectangle => self.rectangles.len(),
+            SchPrimitiveKind::Pin => self.pins.len(),
+            SchPrimitiveKind::Line => self.lines.len(),
+            SchPrimitiveKind::Polyline => self.polylines.len(),
+            SchPrimitiveKind::Polygon => self.polygons.len(),
+            SchPrimitiveKind::Arc => self.arcs.len(),
+            SchPrimitiveKind::Pie => self.pies.len(),
+            SchPrimitiveKind::Image => self.images.len(),
+            SchPrimitiveKind::TextFrame => self.text_frames.len(),
+            SchPrimitiveKind::Bezier => self.beziers.len(),
+            SchPrimitiveKind::Ellipse => self.ellipses.len(),
+            SchPrimitiveKind::RoundRect => self.round_rects.len(),
+            SchPrimitiveKind::EllipticalArc => self.elliptical_arcs.len(),
+            SchPrimitiveKind::Label => self.labels.len(),
+            SchPrimitiveKind::Text => self.text.len(),
+            SchPrimitiveKind::Parameter => self.parameters.len(),
+        }
     }
 }
 

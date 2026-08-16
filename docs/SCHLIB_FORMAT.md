@@ -409,7 +409,11 @@ the regenerated fixture and real Altium-authored libraries):
   (RECORD=41, `OwnerPartId=-1`) records carry the `IndexInSheet=-1` sentinel and do **not**
   consume a counter slot (the golden DISPMODE system Comment stores `IndexInSheet=-1` while the
   rectangles keep slots 0 and 1); RECORD=44/46/48 carry no token and RECORD=45 carries `-1`.
-- The value is purely positional, so this crate derives it on write rather than storing it.
+- The value is purely positional, so this crate derives it on write rather than storing it. That
+  makes the counter only as good as the record order: Altium stores the content records in
+  **authoring order**, interleaving the kinds (the golden's `LOCKFLAGS2` runs line, arc, ellipse,
+  round-rect, polyline, polygon, pie, bezier, label), so a symbol read from a file is written back
+  in the order it came in. See [Symbol Writing Order](#symbol-writing-order).
 
 ## Common Text Record Fields
 
@@ -761,9 +765,12 @@ Read-side defaults when properties are absent:
 
 ## Symbol Writing Order
 
-When writing symbol data, this crate encodes records in this specific order (the shared
-`IndexInSheet` counter runs across steps 2-17; the designator and system parameters keep the
-`-1` sentinel and consume no slot):
+A symbol read from a file is written back in **its own record order**, because that is the order
+the shared `IndexInSheet` counter numbers and Altium interleaves the kinds freely.
+
+A symbol with no record order of its own — one built in memory — is written kind by kind, in the
+order below (the shared `IndexInSheet` counter runs across steps 2-17; the designator and system
+parameters keep the `-1` sentinel and consume no slot):
 
 1. Component header (RECORD=1)
 2. Rectangles (RECORD=14) — before the pins so a solid body does not paint over pin names
@@ -787,6 +794,9 @@ When writing symbol data, this crate encodes records in this specific order (the
 19. System parameters (RECORD=41, `OwnerPartId = -1`) — after the designator, as the golden
     orders them
 20. Implementation list (RECORD=44), then per footprint model: RECORD=45 + RECORD=46 + RECORD=48
+
+Steps 18-20 keep their positions either way: the designator, the system parameters and the
+implementation list follow the content records regardless of how those were ordered.
 
 The stream ends with the last record's payload — there is **no** trailing end marker (see the Data
 Stream Format section and issue #68).

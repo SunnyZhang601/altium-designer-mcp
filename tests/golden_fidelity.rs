@@ -86,11 +86,6 @@ const KNOWN_DEFECTS: &[(&str, &str)] = &[
          encoded; we neither read nor write it, so those components lose their \
          real name and keep only the truncated storage name",
     ),
-    (
-        "INDEXINSHEET",
-        "our SchLib writer emits primitives grouped by type, renumbering them; \
-         Altium preserves the original interleaved order",
-    ),
 ];
 
 /// A component whose name leaves ASCII is written under a storage name that
@@ -317,6 +312,37 @@ fn pcblib_golden_survives_a_round_trip() {
     );
 }
 
+/// The kind of every record in a `SchLib` `Data` stream, in stream order.
+///
+/// Framing is `[len: 3 bytes LE][flags: 1]` then the payload; `flags == 1`
+/// marks the binary pin record, which has no `RECORD=` key of its own.
+fn record_kinds(data: &[u8]) -> Vec<String> {
+    let mut kinds = Vec::new();
+    let mut offset = 0;
+    while offset + 4 <= data.len() {
+        let len = usize::from(data[offset])
+            | usize::from(data[offset + 1]) << 8
+            | usize::from(data[offset + 2]) << 16;
+        let flags = data[offset + 3];
+        offset += 4;
+        let Some(payload) = data.get(offset..offset + len) else {
+            break;
+        };
+        offset += len;
+        if flags == 1 {
+            kinds.push("pin".to_string());
+            continue;
+        }
+        let text: String = payload.iter().map(|&b| b as char).collect();
+        let kind = text
+            .split('|')
+            .find_map(|p| p.strip_prefix("RECORD="))
+            .unwrap_or("?");
+        kinds.push(kind.to_string());
+    }
+    kinds
+}
+
 #[test]
 fn schlib_golden_survives_a_round_trip() {
     let src = sample("symbols.SchLib");
@@ -344,6 +370,19 @@ fn schlib_golden_survives_a_round_trip() {
                 .into_iter()
                 .filter(|d| !is_known(d)),
         );
+
+        // The record sequence itself. `IndexInSheet` is one shared counter over
+        // the content records in stream order, so the values only line up if
+        // the order does — and a block-level diff pairs records by content, not
+        // by position, so it cannot see a reordering on its own.
+        let (gk, ok) = (record_kinds(&g), record_kinds(&o));
+        if gk != ok && !is_known(&name) {
+            failures.push(format!(
+                "{name}: record order changed\n  golden: {}\n  ours:   {}",
+                gk.join(" "),
+                ok.join(" ")
+            ));
+        }
     }
 
     assert!(

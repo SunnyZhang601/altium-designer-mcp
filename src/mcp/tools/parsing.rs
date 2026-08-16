@@ -461,6 +461,7 @@ impl McpServer {
             flags: json_flags(json),
             unique_id: json_unique_id(json),
             guid: json_guid(json),
+            raw_tail: None,
             identity_guid,
             identity_guid_b,
         })
@@ -697,7 +698,23 @@ impl McpServer {
             unique_id: text_field("unique_id"),
             guid: text_field("guid"),
             additional_parameters,
+            param_key_order: Self::parse_key_order(json),
         })
+    }
+
+    /// Parses the `param_key_order` list a `read_pcblib` region emits, so a
+    /// tool-level read-modify-write keeps the block's original key order.
+    /// Absent -> empty -> the writer's canonical order.
+    pub(crate) fn parse_key_order(json: &Value) -> Vec<String> {
+        json.get("param_key_order")
+            .and_then(Value::as_array)
+            .map(|a| {
+                a.iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     /// Parses an `additional_parameters` catch-all from a primitive's JSON: an
@@ -827,6 +844,7 @@ impl McpServer {
             component_index: json_component_index(json),
             unique_id: json_unique_id(json),
             guid: json_guid(json),
+            raw_geometry: None,
             barcode_full_width: json_f64(json, "barcode_full_width"),
             barcode_full_height: json_f64(json, "barcode_full_height"),
             barcode_x_margin: json_f64(json, "barcode_x_margin"),

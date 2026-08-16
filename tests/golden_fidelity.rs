@@ -85,10 +85,12 @@ const KNOWN_DEFECTS: &[(&str, &str)] = &[];
 /// Each is internally inconsistent IN THE GOLDEN ITSELF: the CFB storage name
 /// folds to the correct word (Javanese, Bengali, Cherokee, Inuktitut,
 /// beyond-BMP Han) while the record inside stores a different, shifted string —
-/// so no self-consistent writer can reproduce both at once. The cure is
-/// regenerating these five with literals built from character codes rather than
-/// source-file text; until then their storage names cannot match and their
-/// stream paths are excused here, precisely, by suffix.
+/// so no self-consistent writer can reproduce both at once. Root cause is AD's
+/// own reader (four scripted repair attempts each failed differently; see the
+/// `DOCUMENTED NEGATIVE` in `GenerateSamples.pas`). These five scripts get
+/// their real, consistent coverage from the hand-authored
+/// `scripts/samples/manual/i18n5.SchLib` instead; the excusal here stays
+/// because the damaged copies remain in the generated golden.
 const FIXTURE_INCONSISTENT: &[&str] = &["_jv", "_bn", "_cr", "_iu", "_sb"];
 
 /// Whether a canonical path belongs to one of the five damaged fixtures.

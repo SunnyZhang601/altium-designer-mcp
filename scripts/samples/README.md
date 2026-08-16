@@ -21,6 +21,27 @@ Those live in `manual/`, made by hand and committed as-is.
 the two top-level libraries. Equally, nothing regenerates these files: if one is deleted,
 it has to be rebuilt by hand from the recipe below.
 
+### `manual/i18n5.SchLib`
+
+Five symbols, one per script whose *generated* fixture is internally inconsistent
+(`FIXTURE_INCONSISTENT` in `tests/golden_fidelity.rs`): Javanese `ꦗꦮ_JV`, Bengali
+`রোধক_BN`, Cherokee `ᏣᎳᎩ_CR`, Inuktitut `ᐃᓄᒃᑎᑐᑦ_IU` and beyond-BMP Han `𠮷野_SB`. Each
+carries its word in the component name, the description suffix, one pin's name, a text
+label and a `Value` parameter — the same shape as the generated i18n symbols.
+
+Hand-authored in the AD24 UI (2026-08-16) because that is the only route that bypasses
+AD's broken decode of these byte sequences (four scripted attempts failed differently —
+see the `DOCUMENTED NEGATIVE` in `GenerateSamples.pas`). The file is also ground truth
+for the **UI-authoring convention**: plain record keys are ANSI `?` husks, the real names
+live in `%UTF8%` twins as raw UTF-8 bytes, the CFB storage names are real UTF-16
+(surrogate pair included), and pin names travel only in `PinWideText`.
+
+**To rebuild it:** File → New → Library → Schematic Library; for each of the five,
+rename the component by pasting the name, paste the description, place one pin
+(designator `1`) with the word pasted as its Name, place a text string with the word,
+and add a parameter `Value` with the word. Save ONCE as `i18n5.SchLib` and never re-open
+it in Altium (see the load+save warning above).
+
 ### `manual/parameters.SchLib`
 
 One component, `PARAMPROPS`, carrying three `RECORD=41` parameters that between them cover

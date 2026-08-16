@@ -1892,3 +1892,103 @@ fn samples_schlib_pin_wide_text_survives_a_read_modify_write() {
     }
     assert_eq!(checked, 47, "all clean components were compared");
 }
+
+/// The hand-authored `manual/i18n5.SchLib`: the five scripts whose generated
+/// fixtures are internally inconsistent (see `FIXTURE_INCONSISTENT` in
+/// `golden_fidelity.rs`), authored once in the AD24 UI on 2026-08-16 — the
+/// only route that bypasses AD's broken decode of these sequences.
+///
+/// The file doubles as ground truth for the UI-authoring convention: the
+/// record's plain keys are ANSI `?` husks, the real names live in `%UTF8%`
+/// twins as raw UTF-8 bytes (exactly what our writer emits), the CFB storage
+/// names are real UTF-16 (surrogate pair included), and the pin names arrive
+/// only via `PinWideText` applied onto the husks.
+#[test]
+fn samples_manual_i18n5_scripts_read_exactly() {
+    let lib =
+        SchLib::open(sample("manual/i18n5.SchLib")).expect("failed to open manual/i18n5.SchLib");
+    assert_eq!(lib.len(), 5, "five symbols, one per damaged script");
+
+    let cases: [(&str, &str, &str); 5] = [
+        (
+            "\u{A997}\u{A9AE}_JV",
+            "\u{A997}\u{A9AE}",
+            "Script: Javanese",
+        ),
+        (
+            "\u{09B0}\u{09CB}\u{09A7}\u{0995}_BN",
+            "\u{09B0}\u{09CB}\u{09A7}\u{0995}",
+            "Script: Bengali",
+        ),
+        (
+            "\u{13E3}\u{13B3}\u{13A9}_CR",
+            "\u{13E3}\u{13B3}\u{13A9}",
+            "Script: Cherokee",
+        ),
+        (
+            "\u{1403}\u{14C4}\u{1483}\u{144E}\u{1450}\u{1466}_IU",
+            "\u{1403}\u{14C4}\u{1483}\u{144E}\u{1450}\u{1466}",
+            "Script: Canadian Aboriginal Syllabics, Inuktitut",
+        ),
+        (
+            "\u{20BB7}\u{91CE}_SB",
+            "\u{20BB7}\u{91CE}",
+            "Script: Han beyond the BMP: surrogate pair",
+        ),
+    ];
+    for (name, word, desc) in cases {
+        let s = lib
+            .get(name)
+            .unwrap_or_else(|| panic!("symbol {name:?} not found"));
+        assert_eq!(s.description, desc, "{name}: description");
+        assert_eq!(s.pins.len(), 1, "{name}: one pin");
+        assert_eq!(s.pins[0].name, word, "{name}: pin name (via PinWideText)");
+        assert_eq!(s.pins[0].designator, "1", "{name}: pin designator");
+        assert_eq!(s.labels.len(), 1, "{name}: one label");
+        assert_eq!(s.labels[0].text, word, "{name}: label text");
+        let value = s
+            .parameters
+            .iter()
+            .find(|p| p.name == "Value")
+            .unwrap_or_else(|| panic!("{name}: Value parameter"));
+        assert_eq!(value.value, word, "{name}: parameter value");
+    }
+}
+
+/// The manual i18n fixture survives our own write -> read, every field.
+#[test]
+fn samples_manual_i18n5_survives_a_write_read_cycle() {
+    use std::io::Cursor;
+
+    let lib = SchLib::open(sample("manual/i18n5.SchLib")).expect("open manual/i18n5.SchLib");
+    let mut buf = Cursor::new(Vec::new());
+    lib.write(&mut buf).expect("write");
+    buf.set_position(0);
+    let re = SchLib::read(&mut buf).expect("read back");
+
+    assert_eq!(re.len(), lib.len());
+    for s in lib.iter() {
+        let r = re
+            .get(&s.name)
+            .unwrap_or_else(|| panic!("{} missing after rewrite", s.name));
+        assert_eq!(r.description, s.description, "{}: description", s.name);
+        assert_eq!(
+            r.pins.iter().map(|p| &p.name).collect::<Vec<_>>(),
+            s.pins.iter().map(|p| &p.name).collect::<Vec<_>>(),
+            "{}: pin names",
+            s.name
+        );
+        assert_eq!(
+            r.labels.iter().map(|l| &l.text).collect::<Vec<_>>(),
+            s.labels.iter().map(|l| &l.text).collect::<Vec<_>>(),
+            "{}: label texts",
+            s.name
+        );
+        assert_eq!(
+            r.parameters.iter().map(|p| &p.value).collect::<Vec<_>>(),
+            s.parameters.iter().map(|p| &p.value).collect::<Vec<_>>(),
+            "{}: parameter values",
+            s.name
+        );
+    }
+}

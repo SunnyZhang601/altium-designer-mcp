@@ -400,7 +400,7 @@ impl Fill {
 
 #[cfg(test)]
 mod tests {
-    use super::{Fill, Layer, StrokeFont, TextKind};
+    use super::{Fill, Layer, StrokeFont, Text, TextJustification, TextKind};
 
     #[test]
     fn fill_from_center_computes_symmetric_corners() {
@@ -431,5 +431,22 @@ mod tests {
             let s = serde_json::to_string(&font).unwrap();
             assert_eq!(serde_json::from_str::<StrokeFont>(&s).unwrap(), font);
         }
+    }
+
+    #[test]
+    fn omitted_text_fields_fall_back_to_the_template_defaults() {
+        // A caller-supplied text carries only the five required fields. The
+        // omitted font and justification must land on the values that reproduce
+        // the geometry template byte-for-byte: "Arial" and BottomLeft (0x03).
+        let json = serde_json::json!({
+            "x": 1.0,
+            "y": 2.0,
+            "text": "REF",
+            "height": 1.5,
+            "layer": serde_json::to_value(Layer::TopOverlay).unwrap(),
+        });
+        let t: Text = serde_json::from_value(json).unwrap();
+        assert_eq!(t.font_name, "Arial");
+        assert_eq!(t.justification, TextJustification::BottomLeft);
     }
 }

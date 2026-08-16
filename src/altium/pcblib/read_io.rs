@@ -758,4 +758,190 @@ mod tests {
         assert!(library.metadata.header.is_empty());
         assert_eq!(library.len(), 0);
     }
+
+    /// Wraps `payload` in the length-prefixed binary `FileHeader` framing:
+    /// `[block_len:4][str_len:1][payload]`.
+    fn binary_header(payload: &[u8]) -> Vec<u8> {
+        let len = u8::try_from(payload.len()).unwrap();
+        let mut out = u32::try_from(payload.len() + 1)
+            .unwrap()
+            .to_le_bytes()
+            .to_vec();
+        out.push(len);
+        out.extend_from_slice(payload);
+        out
+    }
+
+    #[test]
+    fn a_well_framed_header_that_is_not_a_pcb_version_string_falls_through() {
+        // The binary branch only claims a header that actually names itself a
+        // PCB binary library. Anything else — including bytes that are not
+        // UTF-8 at all — has to reach the key=value reader instead of being
+        // taken as the header or panicking on the slice.
+        let dir = temp_dir();
+
+        let path = dir.path().join("NotPcb.PcbLib");
+        library_with_header(&path, &binary_header(b"Some Other Binary Library File"));
+        let library = PcbLib::open(&path).expect("a non-PCB version string should read");
+        assert!(
+            library.metadata.header.is_empty(),
+            "{:?}",
+            library.metadata.header
+        );
+
+        let path = dir.path().join("NotUtf8.PcbLib");
+        library_with_header(&path, &binary_header(&[0xFF, 0xFE, 0xFD]));
+        let library = PcbLib::open(&path).expect("a non-UTF-8 header should read");
+        assert!(library.metadata.header.is_empty());
+    }
+
+    #[test]
+    fn header_keys_with_unparsable_indices_are_skipped_not_fatal() {
+        // LIBREF/COMPDESCR are positional; a key whose suffix is not a number
+        // has no slot to land in. It must be dropped rather than derailing the
+        // rest of the header, and an unrelated key must simply be ignored.
+        let dir = temp_dir();
+        let path = dir.path().join("BadIndex.PcbLib");
+        library_with_header(
+            &path,
+            b"|HEADER=Protel for Windows - PCB Library|LIBREFX=nope|COMPDESCRY=nope\
+              |SOMETHINGELSE=ignored|LIBREF0=REAL|",
+        );
+
+        let library = PcbLib::open(&path).expect("unparsable indices should not be fatal");
+        assert_eq!(library.metadata.component_names, vec!["REAL"]);
+        assert!(library.metadata.component_descriptions.is_empty());
+    }
+
+    /// Builds a library with a `/Library/Data` stream carrying `library_data`
+    /// verbatim, so its framing can be truncated at each stage.
+    fn library_with_library_data(path: &std::path::Path, library_data: &[u8]) {
+        let mut compound = cfb::create(path).expect("create compound document");
+        {
+            let mut stream = compound
+                .create_stream("/FileHeader")
+                .expect("create FileHeader");
+            stream
+                .write_all(b"|HEADER=Protel for Windows - PCB Library|")
+                .expect("write FileHeader");
+        }
+        compound
+            .create_storage("/Library")
+            .expect("create Library storage");
+        {
+            let mut stream = compound
+                .create_stream("/Library/Data")
+                .expect("create Library/Data");
+            stream.write_all(library_data).expect("write Library/Data");
+        }
+        compound.flush().expect("flush compound document");
+    }
+
+    #[test]
+    fn a_truncated_library_data_stream_stops_where_it_runs_out() {
+        // Each stage of the framing — the parameter block, the component
+        // count, then each name block — can be the point at which a damaged
+        // file ends. Every one has to stop cleanly and keep what was parsed,
+        // because the alternative is refusing to open the library at all.
+        let dir = temp_dir();
+
+        // Too short to hold even the leading parameter block's length word.
+        let path = dir.path().join("NoBlock.PcbLib");
+        library_with_library_data(&path, &[0, 0]);
+        assert_eq!(PcbLib::open(&path).expect("should open").len(), 0);
+
+        // Parameter block present, but the component count is cut off.
+        let mut data = 4u32.to_le_bytes().to_vec();
+        data.extend_from_slice(b"|X=1");
+        let path = dir.path().join("NoCount.PcbLib");
+        library_with_library_data(&path, &data);
+        let library = PcbLib::open(&path).expect("should open");
+        assert!(library.metadata.library_params.is_some());
+
+        // Count claims two names but only one name block follows.
+        let mut data = 4u32.to_le_bytes().to_vec();
+        data.extend_from_slice(b"|X=1");
+        data.extend_from_slice(&2u32.to_le_bytes());
+        data.extend_from_slice(&3u32.to_le_bytes());
+        data.push(2);
+        data.extend_from_slice(b"FP");
+        let path = dir.path().join("ShortNames.PcbLib");
+        library_with_library_data(&path, &data);
+        let library = PcbLib::open(&path).expect("should open");
+        assert_eq!(library.metadata.component_count, 2);
+        assert_eq!(library.metadata.component_names, vec!["FP"]);
+    }
+
+    /// Builds a one-footprint library carrying `parameters`, a minimal `Data`
+    /// stream (the enumerator only treats a storage as a component when one is
+    /// present), and a library-level `/Storage` only when `storage` is given.
+    fn library_with_optional_storage(
+        path: &std::path::Path,
+        parameters: &[u8],
+        storage: Option<&[u8]>,
+    ) {
+        let mut compound = cfb::create(path).expect("create compound document");
+        {
+            let mut stream = compound
+                .create_stream("/FileHeader")
+                .expect("create FileHeader");
+            stream
+                .write_all(b"|HEADER=Protel for Windows - PCB Library|COMPCOUNT=1|LIBREF0=FP")
+                .expect("write FileHeader");
+        }
+        compound.create_storage("/FP").expect("create FP storage");
+        {
+            let mut stream = compound
+                .create_stream("/FP/Parameters")
+                .expect("create Parameters");
+            stream.write_all(parameters).expect("write Parameters");
+        }
+        {
+            let mut stream = compound.create_stream("/FP/Data").expect("create Data");
+            stream
+                .write_all(&[3, 0, 0, 0, 2, b'F', b'P'])
+                .expect("write Data");
+        }
+        if let Some(storage) = storage {
+            let mut stream = compound.create_stream("/Storage").expect("create Storage");
+            stream.write_all(storage).expect("write Storage");
+        }
+        compound.flush().expect("flush compound document");
+    }
+
+    #[test]
+    fn parameters_missing_their_keys_leave_the_footprint_defaults_alone() {
+        // A block with neither PATTERN nor DESCRIPTION, and one too short to
+        // even carry a length prefix, both have to leave the storage name
+        // standing rather than blanking the footprint out.
+        let dir = temp_dir();
+
+        let path = dir.path().join("NoKeys.PcbLib");
+        library_with_optional_storage(&path, b"|SOMETHING=else|", None);
+        let library = PcbLib::open(&path).expect("the library should open");
+        let fp = library.iter().next().expect("one footprint");
+        assert_eq!(fp.name, "FP");
+        assert!(fp.description.is_empty(), "{:?}", fp.description);
+
+        // Shorter than the 4-byte length prefix the block may carry.
+        let path = dir.path().join("Tiny.PcbLib");
+        library_with_optional_storage(&path, b"|X=", None);
+        let library = PcbLib::open(&path).expect("the library should open");
+        assert_eq!(library.iter().next().expect("one footprint").name, "FP");
+    }
+
+    #[test]
+    fn a_storage_stream_without_unique_id_entries_is_read_without_complaint() {
+        // The stream is advisory: entries absent, or bytes that are not UTF-8
+        // at all, must both leave the library readable.
+        let dir = temp_dir();
+
+        let path = dir.path().join("PlainStorage.PcbLib");
+        library_with_optional_storage(&path, b"|PATTERN=FP|", Some(b"|NOTHING=here|"));
+        assert_eq!(PcbLib::open(&path).expect("should open").len(), 1);
+
+        let path = dir.path().join("BinaryStorage.PcbLib");
+        library_with_optional_storage(&path, b"|PATTERN=FP|", Some(&[0xFF, 0xFE, 0xFD]));
+        assert_eq!(PcbLib::open(&path).expect("should open").len(), 1);
+    }
 }

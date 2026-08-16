@@ -693,3 +693,36 @@ impl PcbLib {
         writer::encode_data_stream(footprint)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::PcbLib;
+
+    #[test]
+    fn overriding_a_parameter_leaves_every_other_byte_alone() {
+        // The block is replayed verbatim, so a rewrite must touch only the one
+        // key. Matching is case-insensitive because Altium's own casing varies.
+        let block = b"|VERSION=3.00|UNITS=mm|DATE=2020-01-01|";
+        let out = PcbLib::override_param(block, "DATE", "2026-08-16");
+        assert_eq!(
+            String::from_utf8(out).unwrap(),
+            "|VERSION=3.00|UNITS=mm|DATE=2026-08-16|"
+        );
+
+        let out = PcbLib::override_param(block, "version", "4.00");
+        assert!(
+            String::from_utf8(out).unwrap().contains("version=4.00"),
+            "a differently-cased key must still be replaced, not appended"
+        );
+    }
+
+    #[test]
+    fn a_key_altium_did_not_write_is_appended_rather_than_dropped() {
+        // Silently dropping it would write a library missing the parameter the
+        // caller asked for, with no error to show for it.
+        let out = PcbLib::override_param(b"|VERSION=3.00|", "UNITS", "mm");
+        let text = String::from_utf8(out).unwrap();
+        assert!(text.starts_with("|VERSION=3.00|"), "{text}");
+        assert!(text.ends_with("UNITS=mm"), "{text}");
+    }
+}

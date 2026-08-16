@@ -2543,6 +2543,66 @@ mod tests {
         }
 
         #[test]
+        fn include_geometry_false_keeps_the_counts_and_drops_the_detail() {
+            let dir = test_temp_dir();
+            let server = create_test_server(dir.path());
+            let path = dir.path().join("NoGeom.PcbLib");
+
+            let base = one_of_each("BASE");
+            let mut rich = one_of_each("RICH");
+            rich.add_pad(Pad::smd("2", 5.0, 5.0, 1.0, 1.0));
+            rich.add_via(Via::new(5.0, 5.0, 0.6, 0.3));
+            rich.add_track(Track::new(-9.0, 9.0, 9.0, 9.0, 0.2, Layer::TopOverlay));
+            rich.add_arc(Arc::circle(9.0, 9.0, 1.0, 0.2, Layer::TopOverlay));
+            rich.add_region(Region::rectangle(8.0, 8.0, 9.0, 9.0, Layer::TopCourtyard));
+            rich.add_text(make_text("EXTRA", 9.0, 9.0));
+            rich.add_fill(Fill::new(8.0, 8.0, 9.0, 9.0, Layer::TopOverlay));
+
+            let mut lib = PcbLib::new();
+            lib.add(base);
+            lib.add(rich);
+            lib.save(&path).unwrap();
+
+            let r = server.call_compare_components(&json!({
+                "filepath_a": path.to_string_lossy(), "component_a": "BASE",
+                "filepath_b": path.to_string_lossy(), "component_b": "RICH",
+                "include_geometry": false,
+            }));
+            assert!(!r.is_error, "{}", get_result_text(&r));
+            let parsed = parse_result_json(&r);
+
+            let fields: Vec<&str> = parsed["differences"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter_map(|d| d["field"].as_str())
+                .collect();
+
+            // The per-family counts still differ and must be reported...
+            for expected in [
+                "pad_count",
+                "via_count",
+                "track_count",
+                "arc_count",
+                "region_count",
+                "text_count",
+                "fill_count",
+            ] {
+                assert!(
+                    fields.contains(&expected),
+                    "missing {expected:?}: {fields:?}"
+                );
+            }
+            // ...but the primitive-by-primitive detail is suppressed.
+            for suppressed in ["pads", "vias", "tracks", "arcs", "regions", "text", "fills"] {
+                assert!(
+                    !fields.contains(&suppressed),
+                    "{suppressed:?} leaked with include_geometry=false: {fields:?}"
+                );
+            }
+        }
+
+        #[test]
         fn compare_footprints_reports_3d_model_presence_then_path() {
             let dir = test_temp_dir();
             let server = create_test_server(dir.path());

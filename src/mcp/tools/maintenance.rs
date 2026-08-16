@@ -2363,4 +2363,621 @@ mod tests {
             );
         }
     }
+
+    // ==================== rejection paths across the six tools ===============
+    //
+    // Each tool guards its arguments, its file type, the read, the lookup and
+    // the write. The fixtures above cover the happy paths; these cover what
+    // happens when any of those guards trips.
+
+    mod rejections {
+        use crate::mcp::tools::test_support::{
+            create_test_pcblib, create_test_schlib, create_test_server, get_result_text,
+            parse_result_json, test_temp_dir,
+        };
+        use serde_json::json;
+        use tempfile::TempDir;
+
+        fn write_garbage(path: &std::path::Path) {
+            std::fs::write(path, b"not an OLE compound document").unwrap();
+        }
+
+        /// A read-only library still opens and still backs up — both only read
+        /// it — so the save is what fails.
+        fn set_readonly(path: &std::path::Path, readonly: bool) {
+            let mut perms = std::fs::metadata(path).unwrap().permissions();
+            perms.set_readonly(readonly);
+            std::fs::set_permissions(path, perms).unwrap();
+        }
+
+        struct Fixtures {
+            dir: TempDir,
+        }
+
+        impl Fixtures {
+            fn new() -> Self {
+                let dir = test_temp_dir();
+                create_test_pcblib(&dir.path().join("Lib.PcbLib"));
+                create_test_schlib(&dir.path().join("Lib.SchLib"));
+                write_garbage(&dir.path().join("Bad.PcbLib"));
+                write_garbage(&dir.path().join("Bad.SchLib"));
+                Self { dir }
+            }
+
+            fn path(&self, name: &str) -> String {
+                self.dir.path().join(name).to_string_lossy().into_owned()
+            }
+        }
+
+        /// Writes a footprint carrying one of every primitive family, so
+        /// `update_primitive` can be driven through each of its arms.
+        fn write_rich_library(server: &crate::mcp::server::McpServer, path: &str) {
+            let r = server.call_write_pcblib(&json!({
+                "filepath": path,
+                "footprints": [{
+                    "name": "RICH",
+                    "pads": [{ "designator": "1", "x": 0.0, "y": 0.0, "width": 1.0, "height": 1.0 }],
+                    "tracks": [{ "x1": -1.0, "y1": 0.0, "x2": 1.0, "y2": 0.0, "width": 0.2, "layer": "Top Overlay" }],
+                    "arcs": [{ "x": 0.0, "y": 0.0, "radius": 2.0, "start_angle": 0.0, "end_angle": 90.0, "width": 0.2, "layer": "Top Overlay" }],
+                    "text": [{ "x": 0.0, "y": 3.0, "text": "REF", "height": 1.0, "layer": "Top Overlay" }],
+                    "fills": [{ "x1": -1.0, "y1": -1.0, "x2": 1.0, "y2": 1.0, "layer": "Top Layer" }],
+                    "regions": [{
+                        "layer": "Mechanical 1",
+                        "vertices": [
+                            { "x": -1.0, "y": -1.0 }, { "x": 1.0, "y": -1.0 }, { "x": 0.0, "y": 1.0 },
+                        ],
+                    }],
+                    "vias": [{ "x": 0.0, "y": 0.0, "diameter": 0.6, "hole_size": 0.3 }],
+                }],
+            }));
+            assert!(!r.is_error, "{}", get_result_text(&r));
+        }
+
+        fn assert_error_mentions(result: &crate::mcp::server::ToolCallResult, needle: &str) {
+            let text = get_result_text(result);
+            assert!(result.is_error, "expected an error, got: {text}");
+            assert!(
+                text.contains(needle),
+                "expected the error to mention {needle:?}, got: {text}"
+            );
+        }
+
+        // ---- repair_library ----------------------------------------------------
+
+        #[test]
+        fn repair_library_guards_its_path_file_type_and_read() {
+            let fx = Fixtures::new();
+            let outside = test_temp_dir();
+            let server = create_test_server(fx.dir.path());
+
+            let escaped = server.call_repair_library(&json!({
+                "filepath": outside.path().join("X.PcbLib").to_string_lossy(),
+            }));
+            assert!(escaped.is_error, "{}", get_result_text(&escaped));
+
+            // Orphaned models are a PcbLib concept, so a symbol library has
+            // nothing for this tool to do and is refused rather than no-op'd.
+            let schlib = server.call_repair_library(&json!({ "filepath": fx.path("Lib.SchLib") }));
+            assert_error_mentions(&schlib, "only supports .PcbLib");
+
+            let unreadable =
+                server.call_repair_library(&json!({ "filepath": fx.path("Bad.PcbLib") }));
+            assert_error_mentions(&unreadable, "Failed to read library");
+        }
+
+        // ---- bulk_rename -------------------------------------------------------
+
+        #[test]
+        fn bulk_rename_names_each_missing_argument_and_bad_input() {
+            let fx = Fixtures::new();
+            let outside = test_temp_dir();
+            let server = create_test_server(fx.dir.path());
+
+            let no_pattern = server.call_bulk_rename(&json!({
+                "filepath": fx.path("Lib.PcbLib"), "replacement": "X",
+            }));
+            assert_error_mentions(&no_pattern, "pattern");
+
+            let no_replacement = server.call_bulk_rename(&json!({
+                "filepath": fx.path("Lib.PcbLib"), "pattern": "CHIP",
+            }));
+            assert_error_mentions(&no_replacement, "replacement");
+
+            let escaped = server.call_bulk_rename(&json!({
+                "filepath": outside.path().join("X.PcbLib").to_string_lossy(),
+                "pattern": "A", "replacement": "B",
+            }));
+            assert!(escaped.is_error, "{}", get_result_text(&escaped));
+
+            // An unbalanced bracket is a caller error, not a panic.
+            let bad_regex = server.call_bulk_rename(&json!({
+                "filepath": fx.path("Lib.PcbLib"), "pattern": "CHIP_[0-9", "replacement": "X",
+            }));
+            assert_error_mentions(&bad_regex, "Invalid regex pattern");
+
+            let wrong_ext = server.call_bulk_rename(&json!({
+                "filepath": fx.path("Lib.txt"), "pattern": "A", "replacement": "B",
+            }));
+            assert_error_mentions(&wrong_ext, "Unsupported file type");
+        }
+
+        #[test]
+        fn bulk_rename_reports_unreadable_libraries_of_both_types() {
+            let fx = Fixtures::new();
+            let server = create_test_server(fx.dir.path());
+            for lib in ["Bad.PcbLib", "Bad.SchLib"] {
+                let r = server.call_bulk_rename(&json!({
+                    "filepath": fx.path(lib), "pattern": "A", "replacement": "B",
+                }));
+                assert_error_mentions(&r, "Failed to read library");
+            }
+        }
+
+        #[test]
+        fn bulk_rename_refuses_to_collide_two_components_into_one_name() {
+            let fx = Fixtures::new();
+            let server = create_test_server(fx.dir.path());
+
+            // Renaming onto a name the library already holds, where that name
+            // is not itself moving out of the way.
+            for (lib, pattern, replacement) in [
+                ("Lib.PcbLib", "CHIP_0402", "CHIP_0603"),
+                ("Lib.SchLib", "RESISTOR", "CAPACITOR"),
+            ] {
+                let r = server.call_bulk_rename(&json!({
+                    "filepath": fx.path(lib), "pattern": pattern, "replacement": replacement,
+                }));
+                assert_error_mentions(&r, "already exists");
+            }
+
+            // Two components collapsing onto the same new name is caught even
+            // though neither target exists yet.
+            let collapse = server.call_bulk_rename(&json!({
+                "filepath": fx.path("Lib.PcbLib"), "pattern": r"CHIP_\d+", "replacement": "CHIP",
+            }));
+            assert_error_mentions(&collapse, "conflict");
+        }
+
+        #[test]
+        fn bulk_rename_reports_a_failed_write_for_both_types() {
+            let fx = Fixtures::new();
+            let server = create_test_server(fx.dir.path());
+
+            for (lib, pattern, replacement) in [
+                ("Lib.PcbLib", "CHIP_0402", "PART_A"),
+                ("Lib.SchLib", "RESISTOR", "PART_A"),
+            ] {
+                let path = fx.path(lib);
+                set_readonly(std::path::Path::new(&path), true);
+                let r = server.call_bulk_rename(&json!({
+                    "filepath": &path, "pattern": pattern, "replacement": replacement,
+                }));
+                set_readonly(std::path::Path::new(&path), false);
+                assert_error_mentions(&r, "Failed to save library");
+            }
+        }
+
+        // ---- list_backups / restore_backup -------------------------------------
+
+        #[test]
+        fn list_backups_reports_only_properly_stamped_files_newest_first() {
+            let fx = Fixtures::new();
+            let server = create_test_server(fx.dir.path());
+            let lib = fx.path("Lib.PcbLib");
+
+            // Two real backups, plus three near-misses that must not be listed:
+            // no timestamp segment, a malformed stamp, and a different library.
+            for name in [
+                "Lib.PcbLib.20260101_010101.bak",
+                "Lib.PcbLib.20260202_020202.bak",
+                "Lib.PcbLib.bak",
+                "Lib.PcbLib.not-a-stamp.bak",
+                "Other.PcbLib.20260303_030303.bak",
+            ] {
+                std::fs::write(fx.dir.path().join(name), b"backup").unwrap();
+            }
+
+            let r = server.call_list_backups(&json!({ "filepath": &lib }));
+            assert!(!r.is_error, "{}", get_result_text(&r));
+            let parsed = parse_result_json(&r);
+            assert_eq!(parsed["backup_count"], 2, "{parsed}");
+            // Sorted newest first, so the caller can restore [0] blindly.
+            assert_eq!(parsed["backups"][0]["timestamp"], "20260202_020202");
+            assert_eq!(parsed["backups"][1]["timestamp"], "20260101_010101");
+            assert!(parsed["backups"][0]["size_bytes"].as_u64().unwrap() > 0);
+        }
+
+        #[test]
+        fn list_backups_rejects_a_path_outside_the_allowlist() {
+            let fx = Fixtures::new();
+            let outside = test_temp_dir();
+            let server = create_test_server(fx.dir.path());
+            let r = server.call_list_backups(&json!({
+                "filepath": outside.path().join("X.PcbLib").to_string_lossy(),
+            }));
+            assert!(r.is_error, "{}", get_result_text(&r));
+        }
+
+        #[test]
+        fn restore_backup_picks_the_newest_stamp_when_none_is_named() {
+            let fx = Fixtures::new();
+            let server = create_test_server(fx.dir.path());
+            let lib = fx.path("Lib.PcbLib");
+
+            std::fs::write(
+                fx.dir.path().join("Lib.PcbLib.20260101_010101.bak"),
+                b"older",
+            )
+            .unwrap();
+            std::fs::write(
+                fx.dir.path().join("Lib.PcbLib.20260202_020202.bak"),
+                b"newer",
+            )
+            .unwrap();
+            // Skipped: no stamp segment, and a stamp of the wrong shape.
+            std::fs::write(fx.dir.path().join("Lib.PcbLib.bak"), b"unstamped").unwrap();
+            std::fs::write(fx.dir.path().join("Lib.PcbLib.xxxxxxxxxxxxxxx.bak"), b"bad").unwrap();
+
+            let r = server.call_restore_backup(&json!({ "filepath": &lib }));
+            assert!(!r.is_error, "{}", get_result_text(&r));
+            assert_eq!(std::fs::read(&lib).unwrap(), b"newer");
+        }
+
+        #[test]
+        fn restore_backup_reports_when_there_is_nothing_to_restore() {
+            let fx = Fixtures::new();
+            let outside = test_temp_dir();
+            let server = create_test_server(fx.dir.path());
+
+            let escaped = server.call_restore_backup(&json!({
+                "filepath": outside.path().join("X.PcbLib").to_string_lossy(),
+            }));
+            assert!(escaped.is_error, "{}", get_result_text(&escaped));
+
+            // A named backup is gated separately from the library path, since
+            // it is read from disk too.
+            let escaped_backup = server.call_restore_backup(&json!({
+                "filepath": fx.path("Lib.PcbLib"),
+                "backup_path": outside.path().join("X.bak").to_string_lossy(),
+            }));
+            assert!(
+                escaped_backup.is_error,
+                "{}",
+                get_result_text(&escaped_backup)
+            );
+
+            let none = server.call_restore_backup(&json!({ "filepath": fx.path("Lib.PcbLib") }));
+            assert_error_mentions(&none, "No backup files found");
+
+            let missing = server.call_restore_backup(&json!({
+                "filepath": fx.path("Lib.PcbLib"), "backup_path": fx.path("Nope.bak"),
+            }));
+            assert_error_mentions(&missing, "does not exist");
+        }
+
+        // ---- update_pad ---------------------------------------------------------
+
+        #[test]
+        fn update_pad_names_each_missing_argument() {
+            let fx = Fixtures::new();
+            let outside = test_temp_dir();
+            let server = create_test_server(fx.dir.path());
+            let lib = fx.path("Lib.PcbLib");
+
+            let no_component = server.call_update_pad(&json!({
+                "filepath": &lib, "designator": "1", "updates": { "x": 1.0 },
+            }));
+            assert_error_mentions(&no_component, "component_name");
+
+            let no_designator = server.call_update_pad(&json!({
+                "filepath": &lib, "component_name": "CHIP_0402", "updates": { "x": 1.0 },
+            }));
+            assert_error_mentions(&no_designator, "designator");
+
+            let no_updates = server.call_update_pad(&json!({
+                "filepath": &lib, "component_name": "CHIP_0402", "designator": "1",
+            }));
+            assert_error_mentions(&no_updates, "updates");
+
+            let escaped = server.call_update_pad(&json!({
+                "filepath": outside.path().join("X.PcbLib").to_string_lossy(),
+                "component_name": "A", "designator": "1", "updates": { "x": 1.0 },
+            }));
+            assert!(escaped.is_error, "{}", get_result_text(&escaped));
+        }
+
+        #[test]
+        fn update_pad_reports_an_unreadable_library_and_a_missing_target() {
+            let fx = Fixtures::new();
+            let server = create_test_server(fx.dir.path());
+
+            let unreadable = server.call_update_pad(&json!({
+                "filepath": fx.path("Bad.PcbLib"), "component_name": "A",
+                "designator": "1", "updates": { "x": 1.0 },
+            }));
+            assert_error_mentions(&unreadable, "Failed to read library");
+
+            // Both lookups list what was available, so the caller can correct
+            // the request without a second round trip.
+            let no_footprint = server.call_update_pad(&json!({
+                "filepath": fx.path("Lib.PcbLib"), "component_name": "GHOST",
+                "designator": "1", "updates": { "x": 1.0 },
+            }));
+            assert_error_mentions(&no_footprint, "Available");
+
+            let no_pad = server.call_update_pad(&json!({
+                "filepath": fx.path("Lib.PcbLib"), "component_name": "CHIP_0402",
+                "designator": "99", "updates": { "x": 1.0 },
+            }));
+            assert_error_mentions(&no_pad, "not found in footprint");
+        }
+
+        #[test]
+        fn update_pad_rejects_geometry_the_create_path_would_have_refused() {
+            // `update` bypasses the create-path checks, so it repeats them:
+            // otherwise a degenerate pad or an out-of-range coordinate would
+            // saturate silently on save.
+            let fx = Fixtures::new();
+            let server = create_test_server(fx.dir.path());
+            let lib = fx.path("Lib.PcbLib");
+
+            let update = |updates: serde_json::Value| {
+                server.call_update_pad(&json!({
+                    "filepath": &lib, "component_name": "CHIP_0402",
+                    "designator": "1", "updates": updates, "dry_run": true,
+                }))
+            };
+
+            assert_error_mentions(&update(json!({ "width": 0.0 })), "must be positive");
+            assert_error_mentions(&update(json!({ "height": -1.0 })), "must be positive");
+            assert_error_mentions(&update(json!({ "hole_size": -0.5 })), "must be >= 0");
+            assert_error_mentions(&update(json!({ "shape": "trapezoid" })), "Invalid shape");
+            assert_error_mentions(&update(json!({ "unknown_key": 1 })), "No valid updates");
+            assert_error_mentions(
+                &update(json!({ "x": 99_999.0 })),
+                "exceeds the maximum safe range",
+            );
+        }
+
+        #[test]
+        fn update_pad_applies_every_property_and_reports_a_failed_write() {
+            let fx = Fixtures::new();
+            let server = create_test_server(fx.dir.path());
+            let lib = fx.path("Lib.PcbLib");
+
+            let applied = server.call_update_pad(&json!({
+                "filepath": &lib, "component_name": "CHIP_0402", "designator": "1",
+                "updates": {
+                    "x": 0.1, "y": 0.2, "width": 0.7, "height": 0.6,
+                    "rotation": 90.0, "hole_size": 0.4, "shape": "round",
+                },
+            }));
+            assert!(!applied.is_error, "{}", get_result_text(&applied));
+            let changed: Vec<String> = parse_result_json(&applied)["changes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|c| c["property"].as_str().unwrap().to_string())
+                .collect();
+            for property in [
+                "x",
+                "y",
+                "width",
+                "height",
+                "rotation",
+                "hole_size",
+                "shape",
+            ] {
+                assert!(changed.contains(&property.to_string()), "{changed:?}");
+            }
+
+            set_readonly(std::path::Path::new(&lib), true);
+            let blocked = server.call_update_pad(&json!({
+                "filepath": &lib, "component_name": "CHIP_0402",
+                "designator": "1", "updates": { "x": 0.3 },
+            }));
+            set_readonly(std::path::Path::new(&lib), false);
+            assert!(blocked.is_error, "{}", get_result_text(&blocked));
+        }
+
+        // ---- update_primitive ---------------------------------------------------
+
+        #[test]
+        fn update_primitive_names_each_missing_argument() {
+            let fx = Fixtures::new();
+            let outside = test_temp_dir();
+            let server = create_test_server(fx.dir.path());
+            let lib = fx.path("Lib.PcbLib");
+
+            let no_component = server.call_update_primitive(&json!({
+                "filepath": &lib, "primitive_type": "track", "index": 0, "updates": { "width": 1.0 },
+            }));
+            assert_error_mentions(&no_component, "component_name");
+
+            let no_type = server.call_update_primitive(&json!({
+                "filepath": &lib, "component_name": "CHIP_0402", "index": 0, "updates": { "width": 1.0 },
+            }));
+            assert_error_mentions(&no_type, "primitive_type");
+
+            let no_index = server.call_update_primitive(&json!({
+                "filepath": &lib, "component_name": "CHIP_0402",
+                "primitive_type": "track", "updates": { "width": 1.0 },
+            }));
+            assert_error_mentions(&no_index, "index");
+
+            let no_updates = server.call_update_primitive(&json!({
+                "filepath": &lib, "component_name": "CHIP_0402",
+                "primitive_type": "track", "index": 0,
+            }));
+            assert_error_mentions(&no_updates, "updates");
+
+            let escaped = server.call_update_primitive(&json!({
+                "filepath": outside.path().join("X.PcbLib").to_string_lossy(),
+                "component_name": "A", "primitive_type": "track", "index": 0,
+                "updates": { "width": 1.0 },
+            }));
+            assert!(escaped.is_error, "{}", get_result_text(&escaped));
+        }
+
+        #[test]
+        fn update_primitive_reports_an_unreadable_library_and_a_missing_footprint() {
+            let fx = Fixtures::new();
+            let server = create_test_server(fx.dir.path());
+
+            let unreadable = server.call_update_primitive(&json!({
+                "filepath": fx.path("Bad.PcbLib"), "component_name": "A",
+                "primitive_type": "track", "index": 0, "updates": { "width": 1.0 },
+            }));
+            assert_error_mentions(&unreadable, "Failed to read library");
+
+            let missing = server.call_update_primitive(&json!({
+                "filepath": fx.path("Lib.PcbLib"), "component_name": "GHOST",
+                "primitive_type": "track", "index": 0, "updates": { "width": 1.0 },
+            }));
+            assert_error_mentions(&missing, "Available");
+        }
+
+        #[test]
+        fn update_primitive_bounds_checks_every_family_and_rejects_unknown_ones() {
+            let fx = Fixtures::new();
+            let server = create_test_server(fx.dir.path());
+            let lib = fx.path("Rich.PcbLib");
+            write_rich_library(&server, &lib);
+
+            // Each family is addressed positionally, so each keeps its own
+            // range check naming the family.
+            for family in ["track", "arc", "text", "fill", "region", "via"] {
+                let r = server.call_update_primitive(&json!({
+                    "filepath": &lib, "component_name": "RICH",
+                    "primitive_type": family, "index": 99, "updates": { "layer": "Top Layer" },
+                }));
+                assert_error_mentions(&r, "out of range");
+            }
+
+            let unknown = server.call_update_primitive(&json!({
+                "filepath": &lib, "component_name": "RICH",
+                "primitive_type": "polygon", "index": 0, "updates": { "layer": "Top Layer" },
+            }));
+            assert_error_mentions(&unknown, "Invalid primitive_type");
+        }
+
+        #[test]
+        fn update_primitive_rejects_an_unknown_layer_on_every_family() {
+            let fx = Fixtures::new();
+            let server = create_test_server(fx.dir.path());
+            let lib = fx.path("Rich.PcbLib");
+            write_rich_library(&server, &lib);
+
+            for family in ["track", "arc", "text", "fill", "region"] {
+                let r = server.call_update_primitive(&json!({
+                    "filepath": &lib, "component_name": "RICH",
+                    "primitive_type": family, "index": 0,
+                    "updates": { "layer": "Nowhere" }, "dry_run": true,
+                }));
+                assert_error_mentions(&r, "Invalid layer");
+            }
+
+            // A via spans two layers, so both ends are parsed and both reject.
+            for key in ["from_layer", "to_layer"] {
+                let r = server.call_update_primitive(&json!({
+                    "filepath": &lib, "component_name": "RICH",
+                    "primitive_type": "via", "index": 0,
+                    "updates": { key: "Nowhere" }, "dry_run": true,
+                }));
+                assert_error_mentions(&r, "Invalid layer");
+            }
+        }
+
+        #[test]
+        fn update_primitive_moves_a_track_and_reports_every_change() {
+            let fx = Fixtures::new();
+            let server = create_test_server(fx.dir.path());
+            let lib = fx.path("Rich.PcbLib");
+            write_rich_library(&server, &lib);
+
+            let r = server.call_update_primitive(&json!({
+                "filepath": &lib, "component_name": "RICH", "primitive_type": "track", "index": 0,
+                "updates": {
+                    "x1": -2.0, "y1": -0.5, "x2": 2.0, "y2": 0.5,
+                    "width": 0.3, "layer": "Bottom Overlay",
+                },
+            }));
+            assert!(!r.is_error, "{}", get_result_text(&r));
+            let changed: Vec<String> = parse_result_json(&r)["changes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|c| c["property"].as_str().unwrap().to_string())
+                .collect();
+            for property in ["x1", "y1", "x2", "y2", "width", "layer"] {
+                assert!(changed.contains(&property.to_string()), "{changed:?}");
+            }
+        }
+
+        #[test]
+        fn update_primitive_rejects_degenerate_geometry_per_family() {
+            // The same reasoning as update_pad: these checks mirror the create
+            // path, which the update route bypasses.
+            let fx = Fixtures::new();
+            let server = create_test_server(fx.dir.path());
+            let lib = fx.path("Rich.PcbLib");
+            write_rich_library(&server, &lib);
+
+            let update = |family: &str, updates: serde_json::Value| {
+                server.call_update_primitive(&json!({
+                    "filepath": &lib, "component_name": "RICH",
+                    "primitive_type": family, "index": 0, "updates": updates, "dry_run": true,
+                }))
+            };
+
+            assert_error_mentions(
+                &update("track", json!({ "width": 0.0 })),
+                "must be positive",
+            );
+            assert_error_mentions(&update("arc", json!({ "radius": 0.0 })), "must be positive");
+            assert_error_mentions(&update("arc", json!({ "width": -1.0 })), "must be >= 0");
+            assert_error_mentions(
+                &update("text", json!({ "height": 0.0 })),
+                "must be positive",
+            );
+            assert_error_mentions(
+                &update("via", json!({ "diameter": 0.0 })),
+                "must be positive",
+            );
+            assert_error_mentions(
+                &update("via", json!({ "hole_size": 0.0 })),
+                "must be positive",
+            );
+            assert_error_mentions(
+                &update("via", json!({ "hole_size": 0.9 })),
+                "smaller than diameter",
+            );
+
+            // Nothing recognised in `updates` is a caller error rather than a
+            // silent no-op write.
+            assert_error_mentions(&update("track", json!({ "nope": 1 })), "No valid updates");
+
+            // And the whole-footprint coordinate check still applies.
+            assert_error_mentions(
+                &update("track", json!({ "x1": 99_999.0 })),
+                "exceeds the maximum safe range",
+            );
+        }
+
+        #[test]
+        fn update_primitive_reports_a_failed_write() {
+            let fx = Fixtures::new();
+            let server = create_test_server(fx.dir.path());
+            let lib = fx.path("Rich.PcbLib");
+            write_rich_library(&server, &lib);
+
+            set_readonly(std::path::Path::new(&lib), true);
+            let r = server.call_update_primitive(&json!({
+                "filepath": &lib, "component_name": "RICH",
+                "primitive_type": "track", "index": 0, "updates": { "width": 0.3 },
+            }));
+            set_readonly(std::path::Path::new(&lib), false);
+            assert!(r.is_error, "{}", get_result_text(&r));
+        }
+    }
 }

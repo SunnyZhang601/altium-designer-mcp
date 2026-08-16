@@ -1749,4 +1749,394 @@ mod tests {
             }
         }
     }
+
+    // ==================== rejection paths across the four tools ==============
+
+    mod rejections {
+        use crate::mcp::tools::test_support::{
+            create_test_pcblib, create_test_schlib, create_test_server, get_result_text,
+            parse_result_json, test_temp_dir,
+        };
+        use serde_json::json;
+        use tempfile::TempDir;
+
+        fn write_garbage(path: &std::path::Path) {
+            std::fs::write(path, b"not an OLE compound document").unwrap();
+        }
+
+        fn set_readonly(path: &std::path::Path, readonly: bool) {
+            let mut perms = std::fs::metadata(path).unwrap().permissions();
+            perms.set_readonly(readonly);
+            std::fs::set_permissions(path, perms).unwrap();
+        }
+
+        struct Fixtures {
+            dir: TempDir,
+        }
+
+        impl Fixtures {
+            fn new() -> Self {
+                let dir = test_temp_dir();
+                create_test_pcblib(&dir.path().join("Lib.PcbLib"));
+                create_test_schlib(&dir.path().join("Lib.SchLib"));
+                write_garbage(&dir.path().join("Bad.PcbLib"));
+                write_garbage(&dir.path().join("Bad.SchLib"));
+                Self { dir }
+            }
+
+            fn path(&self, name: &str) -> String {
+                self.dir.path().join(name).to_string_lossy().into_owned()
+            }
+        }
+
+        fn assert_error_mentions(result: &crate::mcp::server::ToolCallResult, needle: &str) {
+            let text = get_result_text(result);
+            assert!(result.is_error, "expected an error, got: {text}");
+            assert!(
+                text.contains(needle),
+                "expected the error to mention {needle:?}, got: {text}"
+            );
+        }
+
+        // ---- update_component ---------------------------------------------------
+
+        #[test]
+        fn update_component_names_each_missing_argument_and_bad_extension() {
+            let fx = Fixtures::new();
+            let outside = test_temp_dir();
+            let server = create_test_server(fx.dir.path());
+
+            let escaped = server.call_update_component(&json!({
+                "filepath": outside.path().join("X.PcbLib").to_string_lossy(),
+                "component_name": "A", "footprint": {},
+            }));
+            assert!(escaped.is_error, "{}", get_result_text(&escaped));
+
+            let no_component = server.call_update_component(&json!({
+                "filepath": fx.path("Lib.PcbLib"), "footprint": {},
+            }));
+            assert_error_mentions(&no_component, "component_name");
+
+            // The replacement body is keyed by file type, so each dispatch arm
+            // demands its own key rather than a generic one.
+            let no_footprint = server.call_update_component(&json!({
+                "filepath": fx.path("Lib.PcbLib"), "component_name": "CHIP_0402",
+            }));
+            assert_error_mentions(&no_footprint, "footprint");
+
+            let no_symbol = server.call_update_component(&json!({
+                "filepath": fx.path("Lib.SchLib"), "component_name": "RESISTOR",
+            }));
+            assert_error_mentions(&no_symbol, "symbol");
+
+            let wrong_ext = server.call_update_component(&json!({
+                "filepath": fx.path("Lib.txt"), "component_name": "A", "footprint": {},
+            }));
+            assert_error_mentions(&wrong_ext, "Unknown file type");
+        }
+
+        #[test]
+        fn update_component_reports_unreadable_libraries_and_missing_components() {
+            let fx = Fixtures::new();
+            let server = create_test_server(fx.dir.path());
+
+            let bad_pcb = server.call_update_component(&json!({
+                "filepath": fx.path("Bad.PcbLib"), "component_name": "A", "footprint": {},
+            }));
+            assert_error_mentions(&bad_pcb, "Failed to read library");
+
+            let bad_sch = server.call_update_component(&json!({
+                "filepath": fx.path("Bad.SchLib"), "component_name": "A", "symbol": {},
+            }));
+            assert_error_mentions(&bad_sch, "Failed to read library");
+
+            // The rejection lists what the library does hold, so the caller can
+            // correct the name without a second call.
+            let missing_fp = server.call_update_component(&json!({
+                "filepath": fx.path("Lib.PcbLib"), "component_name": "GHOST", "footprint": {},
+            }));
+            assert_error_mentions(&missing_fp, "Available");
+
+            let missing_sym = server.call_update_component(&json!({
+                "filepath": fx.path("Lib.SchLib"), "component_name": "GHOST", "symbol": {},
+            }));
+            assert_error_mentions(&missing_sym, "Available");
+        }
+
+        #[test]
+        fn update_component_reports_which_primitive_failed_to_parse() {
+            let fx = Fixtures::new();
+            let server = create_test_server(fx.dir.path());
+
+            // The update path mirrors the create path's parsing, so a malformed
+            // primitive is named and indexed the same way rather than dropped.
+            let cases: [(&str, serde_json::Value, &str); 5] = [
+                (
+                    "pads",
+                    json!([{ "x": 0.0, "y": 0.0, "width": 1.0, "height": 1.0 }]),
+                    "Pad 0",
+                ),
+                (
+                    "tracks",
+                    json!([{ "y1": 0.0, "x2": 1.0, "y2": 0.0, "width": 0.2 }]),
+                    "Track 0",
+                ),
+                (
+                    "arcs",
+                    json!([{ "x": 0.0, "y": 0.0, "radius": 1.0, "start_angle": 0.0, "end_angle": 90.0 }]),
+                    "Arc 0",
+                ),
+                (
+                    "vias",
+                    json!([{ "x": 0.0, "y": 0.0, "diameter": 0.0, "hole_size": 0.3 }]),
+                    "Via 0",
+                ),
+                (
+                    "fills",
+                    json!([{ "y1": 0.0, "x2": 1.0, "y2": 1.0 }]),
+                    "Fill 0",
+                ),
+            ];
+
+            for (key, payload, expected) in cases {
+                let mut footprint = json!({ "name": "CHIP_0402" });
+                footprint[key] = payload;
+                let r = server.call_update_component(&json!({
+                    "filepath": fx.path("Lib.PcbLib"),
+                    "component_name": "CHIP_0402",
+                    "footprint": footprint,
+                }));
+                assert_error_mentions(&r, expected);
+            }
+        }
+
+        #[test]
+        fn update_component_reports_a_failed_write_for_both_types() {
+            let fx = Fixtures::new();
+            let server = create_test_server(fx.dir.path());
+
+            let pcb = fx.path("Lib.PcbLib");
+            set_readonly(std::path::Path::new(&pcb), true);
+            let pcb_result = server.call_update_component(&json!({
+                "filepath": &pcb, "component_name": "CHIP_0402",
+                "footprint": { "name": "CHIP_0402", "description": "changed" },
+            }));
+            set_readonly(std::path::Path::new(&pcb), false);
+            assert!(pcb_result.is_error, "{}", get_result_text(&pcb_result));
+
+            let sch = fx.path("Lib.SchLib");
+            set_readonly(std::path::Path::new(&sch), true);
+            let sch_result = server.call_update_component(&json!({
+                "filepath": &sch, "component_name": "RESISTOR",
+                "symbol": { "name": "RESISTOR", "description": "changed" },
+            }));
+            set_readonly(std::path::Path::new(&sch), false);
+            assert!(sch_result.is_error, "{}", get_result_text(&sch_result));
+        }
+
+        #[test]
+        fn update_component_dry_run_describes_the_change_without_writing() {
+            let fx = Fixtures::new();
+            let server = create_test_server(fx.dir.path());
+            let pcb = fx.path("Lib.PcbLib");
+
+            let r = server.call_update_component(&json!({
+                "filepath": &pcb, "component_name": "CHIP_0402",
+                "footprint": { "name": "CHIP_0402_NEW", "description": "renamed" },
+                "dry_run": true,
+            }));
+            assert!(!r.is_error, "{}", get_result_text(&r));
+            let parsed = parse_result_json(&r);
+            assert_eq!(parsed["would_rename"], true);
+            assert!(!parsed["changes"].as_array().unwrap().is_empty());
+
+            // Nothing was written, so the original name is still the one there.
+            let lib = crate::altium::PcbLib::open(&pcb).unwrap();
+            assert!(lib.get("CHIP_0402").is_some());
+            assert!(lib.get("CHIP_0402_NEW").is_none());
+        }
+
+        // ---- search_components --------------------------------------------------
+
+        #[test]
+        fn search_names_its_missing_arguments_and_bad_pattern() {
+            let fx = Fixtures::new();
+            let outside = test_temp_dir();
+            let server = create_test_server(fx.dir.path());
+
+            let no_paths = server.call_search_components(&json!({ "pattern": "*" }));
+            assert_error_mentions(&no_paths, "filepaths");
+
+            // Present but carrying nothing usable.
+            let empty_paths = server.call_search_components(&json!({
+                "filepaths": [], "pattern": "*",
+            }));
+            assert_error_mentions(&empty_paths, "at least one path");
+
+            let no_pattern = server.call_search_components(&json!({
+                "filepaths": [fx.path("Lib.PcbLib")],
+            }));
+            assert_error_mentions(&no_pattern, "pattern");
+
+            let bad_type = server.call_search_components(&json!({
+                "filepaths": [fx.path("Lib.PcbLib")], "pattern": "*", "pattern_type": "fuzzy",
+            }));
+            assert_error_mentions(&bad_type, "must be one of");
+
+            let escaped = server.call_search_components(&json!({
+                "filepaths": [outside.path().join("X.PcbLib").to_string_lossy()], "pattern": "*",
+            }));
+            assert!(escaped.is_error, "{}", get_result_text(&escaped));
+
+            let bad_regex = server.call_search_components(&json!({
+                "filepaths": [fx.path("Lib.PcbLib")], "pattern": "CHIP[", "pattern_type": "regex",
+            }));
+            assert_error_mentions(&bad_regex, "Invalid pattern");
+        }
+
+        #[test]
+        fn search_collects_per_library_errors_instead_of_failing_the_whole_call() {
+            // One unreadable library among several must not lose the results
+            // from the others, so the failures come back alongside the matches.
+            let fx = Fixtures::new();
+            let server = create_test_server(fx.dir.path());
+
+            let r = server.call_search_components(&json!({
+                "filepaths": [
+                    fx.path("Lib.PcbLib"),
+                    fx.path("Bad.PcbLib"),
+                    fx.path("Bad.SchLib"),
+                    fx.path("Notes.txt"),
+                    fx.path("NoExtension"),
+                ],
+                "pattern": "*",
+            }));
+            assert!(!r.is_error, "{}", get_result_text(&r));
+            let parsed = parse_result_json(&r);
+            assert_eq!(parsed["status"], "partial");
+            assert!(parsed["matches_found"].as_u64().unwrap() >= 2);
+
+            let errors = parsed["errors"].as_array().unwrap();
+            let joined = errors
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert!(joined.contains("Unsupported file type"), "{joined}");
+            assert!(joined.contains("No file extension"), "{joined}");
+        }
+
+        // ---- get_component ------------------------------------------------------
+
+        #[test]
+        fn get_component_names_its_missing_arguments_and_bad_extension() {
+            let fx = Fixtures::new();
+            let outside = test_temp_dir();
+            let server = create_test_server(fx.dir.path());
+
+            let no_name = server.call_get_component(&json!({ "filepath": fx.path("Lib.PcbLib") }));
+            assert_error_mentions(&no_name, "component_name");
+
+            let escaped = server.call_get_component(&json!({
+                "filepath": outside.path().join("X.PcbLib").to_string_lossy(),
+                "component_name": "A",
+            }));
+            assert!(escaped.is_error, "{}", get_result_text(&escaped));
+
+            let no_ext = server.call_get_component(&json!({
+                "filepath": fx.path("Lib"), "component_name": "A",
+            }));
+            assert_error_mentions(&no_ext, "no extension");
+
+            let wrong_ext = server.call_get_component(&json!({
+                "filepath": fx.path("Lib.txt"), "component_name": "A",
+            }));
+            assert_error_mentions(&wrong_ext, "Unsupported file type");
+        }
+
+        #[test]
+        fn get_component_reports_unreadable_libraries_and_lists_what_is_there() {
+            let fx = Fixtures::new();
+            let server = create_test_server(fx.dir.path());
+
+            for lib in ["Bad.PcbLib", "Bad.SchLib"] {
+                let r = server.call_get_component(&json!({
+                    "filepath": fx.path(lib), "component_name": "A",
+                }));
+                assert_error_mentions(&r, "Failed to read library");
+            }
+
+            for (lib, present) in [("Lib.PcbLib", "CHIP_0402"), ("Lib.SchLib", "RESISTOR")] {
+                let missing = server.call_get_component(&json!({
+                    "filepath": fx.path(lib), "component_name": "GHOST",
+                }));
+                assert_error_mentions(&missing, present);
+
+                let found = server.call_get_component(&json!({
+                    "filepath": fx.path(lib), "component_name": present,
+                }));
+                assert!(!found.is_error, "{}", get_result_text(&found));
+            }
+        }
+
+        // ---- component_exists ---------------------------------------------------
+
+        #[test]
+        fn component_exists_names_its_missing_arguments_and_bad_extension() {
+            let fx = Fixtures::new();
+            let outside = test_temp_dir();
+            let server = create_test_server(fx.dir.path());
+
+            let no_names = server.call_component_exists(&json!({
+                "filepath": fx.path("Lib.PcbLib"),
+            }));
+            assert_error_mentions(&no_names, "component_names");
+
+            // Present but holding nothing readable as a name.
+            let empty_names = server.call_component_exists(&json!({
+                "filepath": fx.path("Lib.PcbLib"), "component_names": [1, 2],
+            }));
+            assert_error_mentions(&empty_names, "empty or contains non-string");
+
+            let escaped = server.call_component_exists(&json!({
+                "filepath": outside.path().join("X.PcbLib").to_string_lossy(),
+                "component_names": ["A"],
+            }));
+            assert!(escaped.is_error, "{}", get_result_text(&escaped));
+
+            let no_ext = server.call_component_exists(&json!({
+                "filepath": fx.path("Lib"), "component_names": ["A"],
+            }));
+            assert_error_mentions(&no_ext, "no extension");
+
+            let wrong_ext = server.call_component_exists(&json!({
+                "filepath": fx.path("Lib.txt"), "component_names": ["A"],
+            }));
+            assert_error_mentions(&wrong_ext, "Unsupported file type");
+        }
+
+        #[test]
+        fn component_exists_answers_per_name_for_both_library_types() {
+            let fx = Fixtures::new();
+            let server = create_test_server(fx.dir.path());
+
+            for lib in ["Bad.PcbLib", "Bad.SchLib"] {
+                let r = server.call_component_exists(&json!({
+                    "filepath": fx.path(lib), "component_names": ["A"],
+                }));
+                assert_error_mentions(&r, "Failed to read library");
+            }
+
+            for (lib, present) in [("Lib.PcbLib", "CHIP_0402"), ("Lib.SchLib", "RESISTOR")] {
+                let r = server.call_component_exists(&json!({
+                    "filepath": fx.path(lib), "component_names": [present, "GHOST"],
+                }));
+                assert!(!r.is_error, "{}", get_result_text(&r));
+                let parsed = parse_result_json(&r);
+                let results = parsed["results"].as_array().unwrap();
+                assert_eq!(results[0]["exists"], true, "{parsed}");
+                assert_eq!(results[1]["exists"], false, "{parsed}");
+            }
+        }
+    }
 }

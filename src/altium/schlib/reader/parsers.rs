@@ -751,6 +751,7 @@ pub(super) fn parse_bezier(props: &HashMap<String, String>) -> Option<Bezier> {
         color,
         is_not_accessible,
         owner_part_id,
+        display_flags: read_display_flags(props),
         unique_id: props.get("uniqueid").cloned(),
     })
 }

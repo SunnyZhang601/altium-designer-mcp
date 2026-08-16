@@ -716,6 +716,32 @@ begin
                                   PCBM_BoardRegisteration, Txt.I_ObjectAddress);
 end;
 
+{ Slotted through-hole pad with a rotated slot and no plating. Every hole in the
+  library is unrotated and plated, so HoleRotation and Plated read nothing but
+  their defaults. }
+procedure AddPadSlotRotated(Comp : IPCB_LibComponent; X : Integer; Nm : String);
+var
+    Pad : IPCB_Pad;
+begin
+    Pad := PCBServer.PCBObjectFactory(ePadObject, eNoDimension, eCreate_Default);
+    if Pad = nil then Exit;
+    Pad.X            := MilsToCoord(X);
+    Pad.Y            := 0;
+    Pad.Name         := Nm;
+    Pad.Layer        := eMultiLayer;
+    Pad.TopShape     := eRounded;
+    Pad.TopXSize     := MilsToCoord(70);
+    Pad.TopYSize     := MilsToCoord(50);
+    Pad.HoleType     := eSlotHole;
+    Pad.HoleSize     := MilsToCoord(20);
+    Pad.HoleWidth    := MilsToCoord(40);
+    Pad.HoleRotation := 30;
+    Pad.Plated       := False;
+    Comp.AddPCBObject(Pad);
+    PCBServer.SendMessageToRobots(Comp.I_ObjectAddress, c_Broadcast,
+                                  PCBM_BoardRegisteration, Pad.I_ObjectAddress);
+end;
+
 { ---- PcbLib authoring -------------------------------------------------------
 
   Footprints: PAD_SHAPES, PAD_HOLES, VIAS, TRACKS, ARCS, REGIONS, FILLS, TEXT_STROKE,
@@ -1347,6 +1373,7 @@ begin
         Lib.RegisterComponent(Comp);
         PCBServer.PreProcess;
         AddRegionNamed(Comp, -100, -50,   0,  50, 'NamedPour', eRegionKind_NamedRegion);
+        AddPadSlotRotated(Comp, -300, 'S1');
         AddTextStrokeFont(Comp, -100, 120, 'SANS',  40, 2, 12);
         AddTextStrokeFont(Comp,  100, 120, 'SERIF', 40, 3, 12);
         AddRegionNamed(Comp,   20, -50, 120,  50, 'CavityRgn', eRegionKind_Cavity);
@@ -2439,6 +2466,147 @@ begin
 end;
 
 
+{ One of each remaining shape type with GraphicallyLocked := True. The flag lives
+  on ISch_GraphicalObject so it should reach every shape, but AD24 has already
+  shown that whether a property is WRITTEN varies per record: Disabled and Dimmed
+  are dropped, a polyline's fill is dropped, a text frame's transparency is
+  dropped. Authoring one per shape is the only way to know which persist. }
+procedure AddLockedShapes(Comp : ISch_Component);
+var
+    Lin : ISch_Line;
+    Arc : ISch_Arc;
+    Ell : ISch_Ellipse;
+    RRe : ISch_RoundRectangle;
+    Ply : ISch_Polyline;
+    Pgn : ISch_Polygon;
+    Pwe : ISch_Pie;
+    Bez : ISch_Bezier;
+    Lbl : ISch_Label;
+begin
+    Lin := SchServer.SchObjectFactory(eLine, eCreate_Default);
+    if Lin <> nil then
+    begin
+        Lin.Location  := Point(MilsToCoord(-200), MilsToCoord(100));
+        Lin.Corner    := Point(MilsToCoord(-120), MilsToCoord(100));
+        Lin.LineWidth := eSmall;
+        Lin.GraphicallyLocked := True;
+        Lin.OwnerPartId := 1;
+        Lin.OwnerPartDisplayMode := Comp.DisplayMode;
+        Comp.AddSchObject(Lin);
+        SchServer.RobotManager.SendMessage(Comp.I_ObjectAddress, c_BroadCast, SCHM_PrimitiveRegistration, Lin.I_ObjectAddress);
+    end;
+    Arc := SchServer.SchObjectFactory(eArc, eCreate_Default);
+    if Arc <> nil then
+    begin
+        Arc.Location   := Point(MilsToCoord(-200), MilsToCoord(40));
+        Arc.Radius     := MilsToCoord(20);
+        Arc.StartAngle := 0;
+        Arc.EndAngle   := 180;
+        Arc.LineWidth  := eSmall;
+        Arc.GraphicallyLocked := True;
+        Arc.OwnerPartId := 1;
+        Arc.OwnerPartDisplayMode := Comp.DisplayMode;
+        Comp.AddSchObject(Arc);
+        SchServer.RobotManager.SendMessage(Comp.I_ObjectAddress, c_BroadCast, SCHM_PrimitiveRegistration, Arc.I_ObjectAddress);
+    end;
+    Ell := SchServer.SchObjectFactory(eEllipse, eCreate_Default);
+    if Ell <> nil then
+    begin
+        Ell.Location        := Point(MilsToCoord(-120), MilsToCoord(40));
+        Ell.Radius          := MilsToCoord(25);
+        Ell.SecondaryRadius := MilsToCoord(15);
+        Ell.LineWidth       := eSmall;
+        Ell.GraphicallyLocked := True;
+        Ell.OwnerPartId := 1;
+        Ell.OwnerPartDisplayMode := Comp.DisplayMode;
+        Comp.AddSchObject(Ell);
+        SchServer.RobotManager.SendMessage(Comp.I_ObjectAddress, c_BroadCast, SCHM_PrimitiveRegistration, Ell.I_ObjectAddress);
+    end;
+    RRe := SchServer.SchObjectFactory(eRoundRectangle, eCreate_Default);
+    if RRe <> nil then
+    begin
+        RRe.Location      := Point(MilsToCoord(-200), MilsToCoord(-20));
+        RRe.Corner        := Point(MilsToCoord(-120), MilsToCoord(10));
+        RRe.CornerXRadius := MilsToCoord(8);
+        RRe.CornerYRadius := MilsToCoord(8);
+        RRe.LineWidth     := eSmall;
+        RRe.GraphicallyLocked := True;
+        RRe.OwnerPartId := 1;
+        RRe.OwnerPartDisplayMode := Comp.DisplayMode;
+        Comp.AddSchObject(RRe);
+        SchServer.RobotManager.SendMessage(Comp.I_ObjectAddress, c_BroadCast, SCHM_PrimitiveRegistration, RRe.I_ObjectAddress);
+    end;
+    Ply := SchServer.SchObjectFactory(ePolyline, eCreate_Default);
+    if Ply <> nil then
+    begin
+        Ply.LineWidth := eSmall;
+        Ply.ClearAllVertices;
+        Ply.InsertVertex(1);  Ply.Vertex[1] := Point(MilsToCoord(-100), MilsToCoord(-20));
+        Ply.InsertVertex(2);  Ply.Vertex[2] := Point(MilsToCoord(-60),  MilsToCoord(10));
+        Ply.InsertVertex(3);  Ply.Vertex[3] := Point(MilsToCoord(-20),  MilsToCoord(-20));
+        Ply.GraphicallyLocked := True;
+        Ply.OwnerPartId := 1;
+        Ply.OwnerPartDisplayMode := Comp.DisplayMode;
+        Comp.AddSchObject(Ply);
+        SchServer.RobotManager.SendMessage(Comp.I_ObjectAddress, c_BroadCast, SCHM_PrimitiveRegistration, Ply.I_ObjectAddress);
+    end;
+    Pgn := SchServer.SchObjectFactory(ePolygon, eCreate_Default);
+    if Pgn <> nil then
+    begin
+        Pgn.ClearAllVertices;
+        Pgn.InsertVertex(1);  Pgn.Vertex[1] := Point(MilsToCoord(0),  MilsToCoord(-20));
+        Pgn.InsertVertex(2);  Pgn.Vertex[2] := Point(MilsToCoord(60), MilsToCoord(-20));
+        Pgn.InsertVertex(3);  Pgn.Vertex[3] := Point(MilsToCoord(60), MilsToCoord(10));
+        Pgn.LineWidth := eSmall;
+        Pgn.GraphicallyLocked := True;
+        Pgn.OwnerPartId := 1;
+        Pgn.OwnerPartDisplayMode := Comp.DisplayMode;
+        Comp.AddSchObject(Pgn);
+        SchServer.RobotManager.SendMessage(Comp.I_ObjectAddress, c_BroadCast, SCHM_PrimitiveRegistration, Pgn.I_ObjectAddress);
+    end;
+    Pwe := SchServer.SchObjectFactory(ePie, eCreate_Default);
+    if Pwe <> nil then
+    begin
+        Pwe.Location   := Point(MilsToCoord(120), MilsToCoord(-20));
+        Pwe.Radius     := MilsToCoord(25);
+        Pwe.StartAngle := 0;
+        Pwe.EndAngle   := 90;
+        Pwe.LineWidth  := eSmall;
+        Pwe.GraphicallyLocked := True;
+        Pwe.OwnerPartId := 1;
+        Pwe.OwnerPartDisplayMode := Comp.DisplayMode;
+        Comp.AddSchObject(Pwe);
+        SchServer.RobotManager.SendMessage(Comp.I_ObjectAddress, c_BroadCast, SCHM_PrimitiveRegistration, Pwe.I_ObjectAddress);
+    end;
+    Bez := SchServer.SchObjectFactory(eBezier, eCreate_Default);
+    if Bez <> nil then
+    begin
+        Bez.LineWidth := eSmall;
+        Bez.ClearAllVertices;
+        Bez.InsertVertex(1);  Bez.SetState_Vertex(1, Point(MilsToCoord(-200), MilsToCoord(-80)));
+        Bez.InsertVertex(2);  Bez.SetState_Vertex(2, Point(MilsToCoord(-160), MilsToCoord(-50)));
+        Bez.InsertVertex(3);  Bez.SetState_Vertex(3, Point(MilsToCoord(-120), MilsToCoord(-50)));
+        Bez.InsertVertex(4);  Bez.SetState_Vertex(4, Point(MilsToCoord(-80),  MilsToCoord(-80)));
+        Bez.GraphicallyLocked := True;
+        Bez.OwnerPartId := 1;
+        Bez.OwnerPartDisplayMode := Comp.DisplayMode;
+        Comp.AddSchObject(Bez);
+        SchServer.RobotManager.SendMessage(Comp.I_ObjectAddress, c_BroadCast, SCHM_PrimitiveRegistration, Bez.I_ObjectAddress);
+    end;
+    Lbl := SchServer.SchObjectFactory(eLabel, eCreate_Default);
+    if Lbl <> nil then
+    begin
+        Lbl.Location := Point(MilsToCoord(0), MilsToCoord(-80));
+        Lbl.FontID   := 1;
+        Lbl.Text     := 'LOCKED';
+        Lbl.GraphicallyLocked := True;
+        Lbl.OwnerPartId := 1;
+        Lbl.OwnerPartDisplayMode := Comp.DisplayMode;
+        Comp.AddSchObject(Lbl);
+        SchServer.RobotManager.SendMessage(Comp.I_ObjectAddress, c_BroadCast, SCHM_PrimitiveRegistration, Lbl.I_ObjectAddress);
+    end;
+end;
+
 { ---- SchLib authoring -------------------------------------------------------
 
   Build order step 1: PINS_ETYPE — one pin per PinElectricalType, the densest
@@ -2700,6 +2868,14 @@ begin
         Comp := NewSymbol(Lib, 'LOCKFLAGS', 'Graphically locked / disabled / dimmed shape', 1);
         if Comp <> nil then
             AddRectFlagged(Comp, -100, -50, 100, 50);
+    except
+    end;
+
+    { ---- LOCKFLAGS2 — GraphicallyLocked on every remaining shape type. ---- }
+    try
+        Comp := NewSymbol(Lib, 'LOCKFLAGS2', 'Graphically locked shapes', 1);
+        if Comp <> nil then
+            AddLockedShapes(Comp);
     except
     end;
 

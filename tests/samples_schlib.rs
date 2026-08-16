@@ -55,7 +55,7 @@ fn samples_schlib_structure() {
     // (SHAPESTYLE, SHAPESTYLE2, SHAPECOLOR, LOCKFLAGS, JUSTIFY, FRACPINS,
     // BEZIERSYM, PIESYM, IMAGESYM, TEXTFRAMESYM, EMBIMGSYM, SWAPPIN, FRACSHAPES,
     // DISPMODE) added to GenerateSamples.pas and regenerated on-site.
-    assert_eq!(lib.len(), 30, "expected exactly thirty symbols");
+    assert_eq!(lib.len(), 31, "expected exactly thirty-one symbols");
 
     let names = lib.names();
     for expected in [
@@ -88,6 +88,7 @@ fn samples_schlib_structure() {
         "DISPMODE",
         "SHAPECOLOR",
         "SHAPESTYLE2",
+        "LOCKFLAGS2",
     ] {
         assert!(
             names.iter().any(|n| n == expected),
@@ -922,6 +923,38 @@ fn samples_schlib_lockflags() {
         sym.rectangles[0].display_flags.graphically_locked,
         "the LOCKFLAGS rectangle must be graphically locked"
     );
+}
+
+#[test]
+fn samples_schlib_locked_shapes() {
+    let lib = SchLib::open(sample("symbols.SchLib")).expect("failed to open symbols.SchLib");
+    let sym = lib.get("LOCKFLAGS2").expect("LOCKFLAGS2 symbol not found");
+
+    // GraphicallyLocked lives on ISch_GraphicalObject, but whether AD24 WRITES an
+    // inherited flag varies by record — Disabled and Dimmed are dropped from a
+    // rectangle, a polyline's fill is dropped, a text frame's transparency is
+    // dropped. So each shape type is authored and asserted rather than assumed
+    // from the rectangle that LOCKFLAGS already covers.
+    assert!(sym.lines[0].display_flags.graphically_locked, "line");
+    assert!(sym.arcs[0].display_flags.graphically_locked, "arc");
+    assert!(sym.ellipses[0].display_flags.graphically_locked, "ellipse");
+    assert!(
+        sym.round_rects[0].display_flags.graphically_locked,
+        "round rect"
+    );
+    assert!(
+        sym.polylines[0].display_flags.graphically_locked,
+        "polyline"
+    );
+    assert!(sym.polygons[0].display_flags.graphically_locked, "polygon");
+    assert!(sym.pies[0].display_flags.graphically_locked, "pie");
+    assert!(sym.beziers[0].display_flags.graphically_locked, "bezier");
+    let label = sym
+        .labels
+        .iter()
+        .find(|l| l.text == "LOCKED")
+        .expect("LOCKFLAGS2 label not found");
+    assert!(label.display_flags.graphically_locked, "label");
 }
 
 #[test]

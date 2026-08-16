@@ -184,6 +184,47 @@ pub fn from_wire_text(raw: &str) -> Option<String> {
     std::str::from_utf8(&bytes).ok().map(str::to_string)
 }
 
+/// Recovers real text from an ANSI-widened byte string, whatever single-byte
+/// code page did the widening.
+///
+/// Altium widens a value's raw UTF-8 bytes one-per-char through the *authoring
+/// machine's* ANSI code page (`PinWideText` values, CFB storage names), so the
+/// same file reads differently by locale. Each plausible code page is tried:
+/// the one that encodes `text` losslessly back to bytes forming valid
+/// non-ASCII UTF-8 is the one that widened it, and those bytes decode to the
+/// real value. Returns `None` when no code page fits — which is what happens
+/// for text that is already real (its characters do not narrow to a UTF-8 byte
+/// pattern), so a real value passed in is left for the caller to use verbatim.
+#[must_use]
+pub fn fold_ansi_widened(text: &str) -> Option<String> {
+    if text.is_ascii() {
+        return None;
+    }
+    for enc in [
+        encoding_rs::WINDOWS_1252,
+        encoding_rs::WINDOWS_1250,
+        encoding_rs::WINDOWS_1251,
+        encoding_rs::WINDOWS_1253,
+        encoding_rs::WINDOWS_1254,
+        encoding_rs::WINDOWS_1255,
+        encoding_rs::WINDOWS_1256,
+        encoding_rs::WINDOWS_1257,
+        encoding_rs::WINDOWS_1258,
+        encoding_rs::WINDOWS_874,
+    ] {
+        let (bytes, _, had_errors) = enc.encode(text);
+        if had_errors {
+            continue;
+        }
+        if let Ok(real) = std::str::from_utf8(&bytes) {
+            if !real.is_ascii() {
+                return Some(real.to_string());
+            }
+        }
+    }
+    None
+}
+
 /// Generates a safe OLE storage name for a component.
 ///
 /// OLE Compound File names are limited to 31 UTF-16 code units. This function:

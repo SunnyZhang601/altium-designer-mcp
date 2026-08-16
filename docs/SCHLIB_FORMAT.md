@@ -74,6 +74,18 @@ separator, reproduced verbatim. The `FileHeader`'s `LibRef{N}` entries hold the 
 name** — the golden stores a 33-byte Khmer name there against a 31-unit storage — so lookup for a
 long name goes `FileHeader` → `SectionKeys` → storage.
 
+## PinWideText Stream
+
+Per-component, alongside `PinFrac` / `PinSymbolLineWidth`, in the shared compressed-storage
+framing (see the `/Storage` section): one zlib entry per pin whose name leaves ASCII, keyed by pin
+ordinal, payload a Unicode parameter block `[u32 LE byte_len][UTF-16LE "|NAME=<text>"]`.
+
+This is the pin name's authoritative wide form — the binary pin record narrows the name through
+the writing machine's ANSI code page, so a name typed as real Unicode survives only here. In an
+Altium-authored file the value can itself be the ANSI-widened form of the name's UTF-8 bytes (the
+golden's 52 streams all are, courtesy of script authoring); a reader folds such a value back
+through the plausible code pages and applies it only when the binary record yielded a lossy husk.
+
 ## FileHeader Stream
 
 A single C-string parameter block:

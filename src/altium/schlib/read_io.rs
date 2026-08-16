@@ -121,20 +121,7 @@ impl SchLib {
 
             reader::parse_data_stream(&mut symbol, &data);
 
-            // Apply the optional per-component pin auxiliary streams. They sit
-            // alongside `Data` in the same storage and are keyed by pin ordinal,
-            // so they must be applied AFTER the pins are parsed. Absent streams
-            // (the common case, incl. the whole golden) leave the pins untouched.
-            if let Some(frac) =
-                crate::altium::read_stream_opt(&mut cfb, format!("{comp_name}/PinFrac"))
-            {
-                pin_aux::apply_pin_frac(&mut symbol.pins, &frac);
-            }
-            if let Some(widths) =
-                crate::altium::read_stream_opt(&mut cfb, format!("{comp_name}/PinSymbolLineWidth"))
-            {
-                pin_aux::apply_pin_symbol_line_widths(&mut symbol.pins, &widths);
-            }
+            apply_pin_aux_streams(&mut cfb, &comp_name, &mut symbol);
 
             // Use the symbol's actual name (from LibReference) as the key
             // This handles long names that were truncated in the OLE storage path
@@ -163,6 +150,30 @@ impl SchLib {
         }
 
         Ok(lib)
+    }
+}
+
+/// Applies the optional per-component pin auxiliary streams. They sit
+/// alongside `Data` in the same storage and are keyed by pin ordinal, so they
+/// must be applied AFTER the pins are parsed. Absent streams (the common case)
+/// leave the pins untouched.
+fn apply_pin_aux_streams<R: Read + Seek>(
+    cfb: &mut CompoundFile<R>,
+    comp_name: &str,
+    symbol: &mut Symbol,
+) {
+    if let Some(frac) = crate::altium::read_stream_opt(&mut *cfb, format!("{comp_name}/PinFrac")) {
+        pin_aux::apply_pin_frac(&mut symbol.pins, &frac);
+    }
+    if let Some(widths) =
+        crate::altium::read_stream_opt(&mut *cfb, format!("{comp_name}/PinSymbolLineWidth"))
+    {
+        pin_aux::apply_pin_symbol_line_widths(&mut symbol.pins, &widths);
+    }
+    if let Some(wide) =
+        crate::altium::read_stream_opt(&mut *cfb, format!("{comp_name}/PinWideText"))
+    {
+        pin_aux::apply_pin_wide_text(&mut symbol.pins, &wide);
     }
 }
 

@@ -67,6 +67,14 @@ use std::path::Path;
 use super::{AltiumError, AltiumResult};
 pub use primitives::*;
 
+/// Test-only re-export of [`pin_aux::apply_pin_wide_text`], so the golden
+/// fidelity test can resolve a `PinWideText` stream through the same fold the
+/// reader uses rather than reimplementing it.
+#[doc(hidden)]
+pub fn apply_pin_wide_text_for_test(pins: &mut [Pin], raw: &[u8]) {
+    pin_aux::apply_pin_wide_text(pins, raw);
+}
+
 /// A schematic symbol library.
 ///
 /// # Example

@@ -15,12 +15,6 @@ golden, writes it back and diffs the OLE streams and every parameter block. Anyt
 still loses is listed in that test's `KNOWN_DEFECTS` and described here; the two lists are
 the same list, so an entry leaves both together.
 
-**`PinWideText` is neither read nor written (`SchLib`).** Altium writes a per-symbol
-`PinWideText` stream when a pin's text leaves Windows-1252: the same container as the root
-icon `/Storage` stream (`[len]["|HEADER=PinWideText|Weight=1"+NUL]` then one zlib entry per
-pin, named by pin ordinal). We drop it on a read-modify-write. The golden carries 52 of
-them, one per i18n symbol.
-
 **Five i18n fixture symbols are internally inconsistent** (`_JV`, `_BN`, `_CR`, `_IU`,
 `_SB`): `DelphiScript` mangled their source literals, and the damage differs by location —
 the golden's CFB storage name folds to the *correct* word while the record inside stores a

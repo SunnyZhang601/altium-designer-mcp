@@ -1788,3 +1788,107 @@ fn samples_schlib_section_keys_survive_a_read_modify_write() {
          Altium's name resolution for that component"
     );
 }
+
+/// The golden's 52 `PinWideText` streams — the authoritative wide form of each
+/// non-ASCII pin name — must come back from a read-modify-write for the same
+/// components, resolving to the same names.
+#[test]
+fn samples_schlib_pin_wide_text_survives_a_read_modify_write() {
+    use std::io::{Cursor, Read as _};
+
+    /// Canonical component -> resolved pin names from every `PinWideText` stream.
+    /// Payload values are folded the way the reader folds them, so a golden
+    /// stream (ANSI-widened bytes) and ours (real UTF-16) compare equal.
+    fn wide_names(bytes: &[u8]) -> std::collections::BTreeMap<String, Vec<String>> {
+        let mut cfb = cfb::CompoundFile::open(Cursor::new(bytes)).expect("parse OLE");
+        let paths: Vec<std::path::PathBuf> = cfb
+            .walk()
+            .filter(cfb::Entry::is_stream)
+            .filter(|e| e.name() == "PinWideText")
+            .map(|e| e.path().to_path_buf())
+            .collect();
+        let mut map = std::collections::BTreeMap::new();
+        for path in paths {
+            let mut raw = Vec::new();
+            cfb.open_stream(&path)
+                .expect("open PinWideText")
+                .read_to_end(&mut raw)
+                .expect("read PinWideText");
+
+            // Resolve through the reader itself: husk pins + apply = the names.
+            let mut pins: Vec<Pin> = (0..64)
+                .map(|i| Pin::new("?", i.to_string(), 0, 0, 10, PinOrientation::Right))
+                .collect();
+            altium_designer_mcp::altium::schlib::apply_pin_wide_text_for_test(&mut pins, &raw);
+            let names: Vec<String> = pins
+                .into_iter()
+                .map(|p| p.name)
+                .filter(|n| n != "?")
+                .collect();
+
+            // Fold the component storage name to a locale-free key: its bytes
+            // are the name's UTF-8 widened through the authoring code page.
+            let seg = path
+                .parent()
+                .and_then(|p| p.file_name())
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            map.insert(canonical(&seg), names);
+        }
+        map
+    }
+
+    /// Locale-free fold of a storage name (1250 for the golden, 1252 for us).
+    /// A truncated storage name can end mid-codepoint, so an incomplete tail
+    /// is accepted and folded lossily — identically on both sides.
+    fn canonical(seg: &str) -> String {
+        for enc in [encoding_rs::WINDOWS_1252, encoding_rs::WINDOWS_1250] {
+            let (bytes, _, had_errors) = enc.encode(seg);
+            if had_errors {
+                continue;
+            }
+            let sound = match std::str::from_utf8(&bytes) {
+                Ok(s) => !s.is_ascii(),
+                Err(e) => e.error_len().is_none() && e.valid_up_to() > 0,
+            };
+            if sound {
+                return String::from_utf8_lossy(&bytes).to_lowercase();
+            }
+        }
+        seg.to_lowercase()
+    }
+
+    let golden = std::fs::read(sample("symbols.SchLib")).expect("read golden");
+    let golden_names = wide_names(&golden);
+    assert_eq!(
+        golden_names.len(),
+        52,
+        "one PinWideText stream per i18n symbol"
+    );
+
+    let lib = SchLib::read(Cursor::new(golden.as_slice())).expect("read golden");
+    let mut rewritten = Cursor::new(Vec::new());
+    lib.write(&mut rewritten).expect("write the golden back");
+    let ours = wide_names(rewritten.get_ref());
+
+    assert_eq!(ours.len(), 52, "the rewrite emits a stream per i18n symbol");
+
+    // The five DelphiScript-damaged fixtures resolve differently on purpose
+    // (their storage names and record names disagree in the golden itself), so
+    // golden-side subset equality is asserted over the other 47: every clean
+    // golden component must come back with the same resolved pin names.
+    let damaged = ["_jv", "_bn", "_cr", "_iu", "_sb"];
+    let mut checked = 0;
+    for (component, names) in &golden_names {
+        if damaged.iter().any(|d| component.ends_with(d)) {
+            continue;
+        }
+        assert_eq!(
+            ours.get(component),
+            Some(names),
+            "{component}: wide pin names must survive the rewrite"
+        );
+        checked += 1;
+    }
+    assert_eq!(checked, 47, "all clean components were compared");
+}

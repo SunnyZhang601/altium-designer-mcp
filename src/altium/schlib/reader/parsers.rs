@@ -254,6 +254,7 @@ pub(super) fn parse_parameter(props: &HashMap<String, String>) -> Option<Paramet
         .unwrap_or(0);
     let show_name = props.get("showname").is_some_and(|s| s == "T");
     let hide_name = props.get("hidename").is_some_and(|s| s == "T");
+    let is_mirrored = props.get("ismirrored").is_some_and(|s| s == "T");
     let description = read_utf8_text_field(props, "description").unwrap_or_default();
     let is_configurable = props.get("isconfigurable").is_some_and(|s| s == "T");
     // Inverted on the wire: Altium writes NotAutoPosition=T only when the user turns
@@ -288,6 +289,7 @@ pub(super) fn parse_parameter(props: &HashMap<String, String>) -> Option<Paramet
         justification,
         show_name,
         hide_name,
+        is_mirrored,
         description,
         is_configurable,
         auto_position,

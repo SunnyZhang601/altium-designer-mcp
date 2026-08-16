@@ -70,7 +70,8 @@ authoring it and reading the saved bytes back.
 | SchLib `TextHorzAnchor` / `TextVertAnchor` | absent from every parameter record in an authored library |
 | SchLib `IsNotAccesible` = false (Altium's spelling) | every graphic record in a library carries `=T`; no library case omits it |
 | SchLib arc fill (`IsSolid` / `AreaColor`) | `Arc.IsSolid` does not compile — an `ISch_Arc` is a stroked shape with no fill |
-| SchLib pie `Transparent` | `Pie.Transparent` does not compile — real on rectangle/round-rect/ellipse/polygon, absent from `ISch_Pie` |
+| SchLib pie `Transparent` | `Pie.Transparent` does not compile — real on rectangle/round-rect/ellipse/polygon, absent from `ISch_Pie` |
+| SchLib round-rect `LineStyle` | accepted without error, but the saved `RECORD=10` carries no `LineStyle` key — `ISch_Line` and `ISch_Polyline` both persist it |
 
 ### Deciding whether a property is settable at all
 

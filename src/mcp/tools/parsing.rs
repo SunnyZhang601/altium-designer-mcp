@@ -1584,6 +1584,10 @@ impl McpServer {
             .get("text_vert_anchor")
             .and_then(Value::as_u64)
             .unwrap_or(0) as u8;
+        let is_mirrored = json
+            .get("is_mirrored")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
         let owner_part_id = json_i32(json, "owner_part_id").unwrap_or(1);
 
         Some(Parameter {
@@ -1598,6 +1602,7 @@ impl McpServer {
             param_type,
             orientation,
             justification,
+            is_mirrored,
             show_name,
             hide_name,
             description,

@@ -1051,6 +1051,7 @@ impl McpServer {
                                                 "justification": { "type": "integer", "description": "Text anchor id 0-8 (0=bottom-left, 4=middle-centre, 8=top-right). Default: 0" },
                                                 "show_name": { "type": "boolean", "description": "Whether the parameter name is shown alongside the value. Default: false" },
                                                 "hide_name": { "type": "boolean", "description": "Whether the parameter name is hidden (only the value shown). Default: false" },
+                                                "is_mirrored": { "type": "boolean", "description": "Whether the parameter text is mirrored. Default: false" },
                                                 "description": { "type": "string", "description": "Parameter description text. Default: empty" },
                                                 "is_configurable": { "type": "boolean", "description": "Whether the parameter is variant-configurable. Default: false" },
                                                 "auto_position": { "type": "boolean", "description": "Whether Altium auto-positions the parameter label relative to the component. Stored inverted on the wire (NotAutoPosition=T) and only when turned off. Default: true" },

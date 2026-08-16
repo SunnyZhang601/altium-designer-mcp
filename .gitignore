@@ -14,3 +14,7 @@ node_modules/
 __pycache__/
 .env.local
 .claude/worktrees/
+
+# Altium writes per-document undo history beside the scripts it opens; these
+# are local editor state, not sources.
+scripts/altium/generate/History/

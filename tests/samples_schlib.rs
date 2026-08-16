@@ -51,11 +51,14 @@ fn pin_by_designator<'a>(symbol: &'a Symbol, designator: &str) -> &'a Pin {
 fn samples_schlib_structure() {
     let lib = SchLib::open(sample("symbols.SchLib")).expect("failed to open symbols.SchLib");
 
+    // Fifteen per-primitive-family symbols, the coverage-enrichment symbols, and
+    // fifty-three i18n symbols — one per writing system (see AddI18nSymbol in
+    // GenerateSamples.pas).
     // Fifteen per-primitive-family symbols plus the coverage-enrichment symbols
     // (SHAPESTYLE, SHAPESTYLE2, SHAPECOLOR, LOCKFLAGS, JUSTIFY, FRACPINS,
     // BEZIERSYM, PIESYM, IMAGESYM, TEXTFRAMESYM, EMBIMGSYM, SWAPPIN, FRACSHAPES,
     // DISPMODE) added to GenerateSamples.pas and regenerated on-site.
-    assert_eq!(lib.len(), 31, "expected exactly thirty-one symbols");
+    assert_eq!(lib.len(), 84, "expected exactly eighty-four symbols");
 
     let names = lib.names();
     for expected in [

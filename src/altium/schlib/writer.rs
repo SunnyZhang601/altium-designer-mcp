@@ -25,7 +25,7 @@ use super::primitives::{
     Arc, Bezier, Ellipse, EllipticalArc, FootprintModel, Image, Label, Line, Parameter, Pie, Pin,
     Polygon, Polyline, Rectangle, RoundRect, ShapeDisplayFlags, Text, TextFrame, TextJustification,
 };
-use super::Symbol;
+use super::{SchPrimitiveKind, Symbol};
 use crate::altium::framing::{write_cstring_param_block, write_pascal_string};
 
 /// Writes a record frame to the output: Altium's `[u24 length LE][u8 flags]`
@@ -1253,126 +1253,57 @@ pub fn encode_data_stream(symbol: &Symbol) -> crate::altium::error::AltiumResult
     let header = encode_component_header(symbol);
     write_text_record(&mut data, &header)?;
 
-    // 3. Rectangles — written before the pins so the body shape sits at the
-    //    back. Emitting pins first lets a solid-filled body paint over the pin
-    //    names that sit inside it (names vanish). This matches Altium's own
-    //    ordering (body rectangle precedes pins in its symbol records).
-    for rect in &symbol.rectangles {
-        let record = encode_rectangle(rect, index_counter);
-        write_text_record(&mut data, &record)?;
-        index_counter += 1;
-    }
-
-    // 4. Pins (binary format)
-    for pin in &symbol.pins {
-        write_binary_pin(&mut data, pin)?;
-        // Pins consume an IndexInSheet counter slot even though the binary pin
-        // record stores no such field — confirmed against real Altium-authored
-        // libraries, where a symbol with parameters 0..2, two pins, then a
-        // rectangle stores IndexInSheet=5 on the rectangle (slots 3 and 4 are
-        // the pins).
-        index_counter += 1;
-    }
-
-    // 5. Lines
-    for line in &symbol.lines {
-        let record = encode_line(line, index_counter);
-        write_text_record(&mut data, &record)?;
-        index_counter += 1;
-    }
-
-    // 6. Polylines
-    for polyline in &symbol.polylines {
-        let record = encode_polyline(polyline, index_counter);
-        write_text_record(&mut data, &record)?;
-        index_counter += 1;
-    }
-
-    // 7. Polygons
-    for polygon in &symbol.polygons {
-        let record = encode_polygon(polygon, index_counter);
-        write_text_record(&mut data, &record)?;
-        index_counter += 1;
-    }
-
-    // 8. Arcs
-    for arc in &symbol.arcs {
-        let record = encode_arc(arc, index_counter);
-        write_text_record(&mut data, &record)?;
-        index_counter += 1;
-    }
-
-    // 8b. Pies (filled sectors, RECORD=9)
-    for pie in &symbol.pies {
-        let record = encode_pie(pie, index_counter);
-        write_text_record(&mut data, &record)?;
-        index_counter += 1;
-    }
-
-    // 8c. Images (RECORD=30)
-    for image in &symbol.images {
-        let record = encode_image(image, index_counter);
-        write_text_record(&mut data, &record)?;
-        index_counter += 1;
-    }
-
-    // 8d. Text frames (RECORD=28) share the content counter like every other
-    // shape (the golden frame carries no token only because it sits at slot 0,
-    // which the shared 0-omitted rule drops).
-    for text_frame in &symbol.text_frames {
-        let record = encode_text_frame(text_frame, index_counter);
-        write_text_record(&mut data, &record)?;
-        index_counter += 1;
-    }
-
-    // 9. Bezier curves
-    for bezier in &symbol.beziers {
-        let record = encode_bezier(bezier, index_counter);
-        write_text_record(&mut data, &record)?;
-        index_counter += 1;
-    }
-
-    // 10. Ellipses
-    for ellipse in &symbol.ellipses {
-        let record = encode_ellipse(ellipse, index_counter);
-        write_text_record(&mut data, &record)?;
-        index_counter += 1;
-    }
-
-    // 11. Rounded rectangles
-    for round_rect in &symbol.round_rects {
-        let record = encode_round_rect(round_rect, index_counter);
-        write_text_record(&mut data, &record)?;
-        index_counter += 1;
-    }
-
-    // 12. Elliptical arcs
-    for elliptical_arc in &symbol.elliptical_arcs {
-        let record = encode_elliptical_arc(elliptical_arc, index_counter);
-        write_text_record(&mut data, &record)?;
-        index_counter += 1;
-    }
-
-    // 13. Labels
-    for label in &symbol.labels {
-        let record = encode_label(label, index_counter);
-        write_text_record(&mut data, &record)?;
-        index_counter += 1;
-    }
-
-    // 14. Text annotations
-    for text in &symbol.text {
-        let record = encode_text(text, index_counter);
-        write_text_record(&mut data, &record)?;
-        index_counter += 1;
-    }
-
-    // 14b. USER parameters (owner_part_id >= 1) — emitted after the graphic
-    // content, matching the golden stream order (JUSTIFY stores its labels at
-    // content slots 0..3 and its user parameters at 4..5). Each consumes a
-    // shared-counter slot like any other content record.
-    for param in symbol.parameters.iter().filter(|p| p.owner_part_id != -1) {
-        let record = encode_parameter(param, index_counter);
+    // 3. Content records, in the symbol's own order — Altium's authoring
+    //    order for anything read from a file (see `Symbol::primitive_order`)
+    //    and the canonical kind order otherwise, which leads with the
+    //    rectangles so a solid-filled body sits behind the pins.
+    //
+    //    System parameters (owner_part_id == -1, the Altium-authored
+    //    Comment-class records) are skipped here: they belong after the
+    //    designator and carry the IndexInSheet=-1 sentinel instead of a
+    //    counter slot.
+    for (kind, index) in symbol.write_sequence() {
+        let record = match kind {
+            SchPrimitiveKind::Pin => {
+                // A binary pin record has no IndexInSheet field of its own but
+                // still consumes a counter slot — confirmed against real
+                // Altium-authored libraries, where a symbol with parameters
+                // 0..2, two pins, then a rectangle stores IndexInSheet=5 on the
+                // rectangle.
+                write_binary_pin(&mut data, &symbol.pins[index])?;
+                index_counter += 1;
+                continue;
+            }
+            SchPrimitiveKind::Parameter => {
+                let param = &symbol.parameters[index];
+                if param.owner_part_id == -1 {
+                    continue;
+                }
+                encode_parameter(param, index_counter)
+            }
+            SchPrimitiveKind::Rectangle => {
+                encode_rectangle(&symbol.rectangles[index], index_counter)
+            }
+            SchPrimitiveKind::Line => encode_line(&symbol.lines[index], index_counter),
+            SchPrimitiveKind::Polyline => encode_polyline(&symbol.polylines[index], index_counter),
+            SchPrimitiveKind::Polygon => encode_polygon(&symbol.polygons[index], index_counter),
+            SchPrimitiveKind::Arc => encode_arc(&symbol.arcs[index], index_counter),
+            SchPrimitiveKind::Pie => encode_pie(&symbol.pies[index], index_counter),
+            SchPrimitiveKind::Image => encode_image(&symbol.images[index], index_counter),
+            SchPrimitiveKind::TextFrame => {
+                encode_text_frame(&symbol.text_frames[index], index_counter)
+            }
+            SchPrimitiveKind::Bezier => encode_bezier(&symbol.beziers[index], index_counter),
+            SchPrimitiveKind::Ellipse => encode_ellipse(&symbol.ellipses[index], index_counter),
+            SchPrimitiveKind::RoundRect => {
+                encode_round_rect(&symbol.round_rects[index], index_counter)
+            }
+            SchPrimitiveKind::EllipticalArc => {
+                encode_elliptical_arc(&symbol.elliptical_arcs[index], index_counter)
+            }
+            SchPrimitiveKind::Label => encode_label(&symbol.labels[index], index_counter),
+            SchPrimitiveKind::Text => encode_text(&symbol.text[index], index_counter),
+        };
         write_text_record(&mut data, &record)?;
         index_counter += 1;
     }
@@ -1662,10 +1593,10 @@ mod tests {
         // Golden-confirmed against real Altium-authored libraries: binary pins
         // store no IndexInSheet token but DO consume counter slots (a real
         // symbol with parameters 0..2, two pins, then a rectangle stores
-        // IndexInSheet=5 on the rectangle). Emission order here is rectangle
-        // (slot 0, omitted), two pins (1, 2), line (3), then the user
-        // parameter (4) — user parameters follow the graphic content,
-        // matching the golden stream order (JUSTIFY).
+        // IndexInSheet=5 on the rectangle). The records go out in the order
+        // they were added — parameter (slot 0, token omitted), rectangle (1),
+        // two pins (2, 3), line (4) — because `add_*` records the order, the
+        // same way reading a symbol records the file's.
         let mut symbol = Symbol::new("PINSLOTS");
         symbol.add_parameter(Parameter::new("Value", "10k"));
         symbol.add_rectangle(Rectangle::new(-5, -5, 5, 5));
@@ -1675,29 +1606,67 @@ mod tests {
 
         let data = encode_data_stream(&symbol).expect("encode");
         let records = stream_records(&data);
+        let param = records
+            .iter()
+            .find(|t| t.starts_with("|RECORD=41") && !t.contains("OwnerPartId=-1"))
+            .expect("user parameter present");
+        assert!(
+            !param.contains("IndexInSheet"),
+            "the parameter was added first, so it holds slot 0: {param}"
+        );
         let rect = records
             .iter()
             .find(|t| t.starts_with("|RECORD=14"))
             .expect("rectangle present");
         assert!(
-            !rect.contains("IndexInSheet"),
-            "slot-0 rectangle omits the token: {rect}"
+            rect.contains("|IndexInSheet=1|"),
+            "rectangle takes slot 1: {rect}"
         );
         let line = records
             .iter()
             .find(|t| t.starts_with("|RECORD=13"))
             .expect("line present");
         assert!(
-            line.contains("|IndexInSheet=3|"),
-            "line after two pins takes slot 3 (pins consumed 1 and 2): {line}"
+            line.contains("|IndexInSheet=4|"),
+            "line after two pins takes slot 4 (pins consumed 2 and 3): {line}"
         );
-        let param = records
-            .iter()
-            .find(|t| t.starts_with("|RECORD=41") && !t.contains("OwnerPartId=-1"))
-            .expect("user parameter present");
+    }
+
+    #[test]
+    fn a_symbol_with_no_recorded_order_leads_with_the_rectangles() {
+        // Populating the lists directly leaves `primitive_order` empty, which is
+        // what a symbol deserialised from a `write_schlib` call looks like. The
+        // canonical order applies, and it puts the rectangles first so a
+        // solid-filled body sits behind the pins rather than painting over the
+        // pin names inside it.
+        let symbol = Symbol {
+            pins: vec![Pin::new("A", "1", -10, 0, 5, PinOrientation::Left)],
+            rectangles: vec![Rectangle::new(-5, -5, 5, 5)],
+            lines: vec![Line::new(-5, 0, 5, 0)],
+            ..Symbol::new("CANONICAL")
+        };
         assert!(
-            param.contains("|IndexInSheet=4|"),
-            "user parameter follows the shapes at slot 4: {param}"
+            symbol.primitive_order.is_empty(),
+            "direct construction records no order"
+        );
+
+        let data = encode_data_stream(&symbol).expect("encode");
+        let records = stream_records(&data);
+        let kinds: Vec<&str> = records
+            .iter()
+            .filter_map(|t| t.strip_prefix("|RECORD="))
+            .filter_map(|t| t.split('|').next())
+            .collect();
+        // 1 = header, 14 = rectangle, 13 = line; the pin is binary and does not
+        // appear among the text records.
+        assert_eq!(
+            kinds.iter().position(|k| *k == "14"),
+            Some(1),
+            "the rectangle is the first content record: {kinds:?}"
+        );
+        assert!(
+            kinds.iter().position(|k| *k == "13") > kinds.iter().position(|k| *k == "14"),
+            "the line follows it: {kinds:?}"
         );
     }
 

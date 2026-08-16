@@ -66,12 +66,14 @@ authoring it and reading the saved bytes back.
 | Net index (any primitive) | a `PcbLib` has no net table, so it is always `0xFFFF` |
 | SchLib `IsRule` | AD24 marks a rule by `Name=Rule` plus a `RULEKIND=…` payload in `Text`, not by a flag |
 | SchLib `IsSystemParameter` | absent even on `Comment`; not written into a library |
-| SchLib `IsConfigurable` | read-only — the identifier table has `GetState_` but no `SetState_` |
+| SchLib `IsConfigurable` | absent from every parameter record in an authored library |
 | SchLib `TextHorzAnchor` / `TextVertAnchor` | absent from every parameter record in an authored library |
 | SchLib `IsNotAccesible` = false (Altium's spelling) | every graphic record in a library carries `=T`; no library case omits it |
 | SchLib arc fill (`IsSolid` / `AreaColor`) | `Arc.IsSolid` does not compile — an `ISch_Arc` is a stroked shape with no fill |
 | SchLib pie `Transparent` | `Pie.Transparent` does not compile — real on rectangle/round-rect/ellipse/polygon, absent from `ISch_Pie` |
 | SchLib round-rect `LineStyle` | accepted without error, but the saved `RECORD=10` carries no `LineStyle` key — `ISch_Line` and `ISch_Polyline` both persist it |
+| PcbLib region `ArcResolution` | not on `IPCB_Region` — `Rgn.ArcResolution` does not compile, though the name is real elsewhere in the identifier table |
+| PcbLib via mask expansion via DIRECT setters | `Via.SolderMaskExpansion*` / `.PasteMaskExpansion*` compile, then crash AD24 with a native access violation in `ScriptingSystem.DLL`. Set them through `TPadCache` (`GetState_Cache` → `SetState_Cache`) instead, which works |
 
 ### Deciding whether a property is settable at all
 
@@ -79,10 +81,14 @@ Two separate questions, and answering only the first is what makes a run fail.
 
 **Does the name exist?** The DelphiScript engine's identifier table lives in
 **`ScriptingSystem.dll`** as **UTF-16LE** strings — not in `Advpcb.dll` / `AdvSch.dll`, and
-not in the `Altium.*.dll` .NET assemblies. A `SetState_<Name>` entry means settable, a
-`GetState_` without one means read-only, and absence means the name does not exist at all
-(`TextJustification`). Enum literals are in the same table: `eJustify_Center` is there,
-`eJustify_CenterCenter` is not. A missing `Set*` *method* proves nothing —
+not in the `Altium.*.dll` .NET assemblies. The test is presence, and only presence:
+absence means the name does not resolve at all (`TextJustification`, `eJustify_CenterCenter`),
+while a hit means it is worth trying. Enum literals are in the same table, so check those
+too — `eJustify_Center` is there, `eJustify_CenterCenter` is not.
+
+Do **not** read anything more into the `SetState_` / `GetState_` prefixes. They are absent
+for plenty of settable properties: `StandoffHeight`, `BodyColor3D` and `BodyOpacity3D` have
+neither and all three set and persist. A missing `Set*` method proves nothing either —
 `SolderMaskExpansionFromHoleEdge` and `BarCodeKind` both lack one and both set fine.
 
 ```python
@@ -102,3 +108,9 @@ lists every `(interface, property)` pair with no precedent in the committed `.pa
 it to **one unproven interface per run**, or a failure will not say which name was at
 fault. An unresolved identifier aborts the whole compile and takes every other footprint
 in that run with it; `try/except` cannot help, because nothing has run yet.
+
+A third failure mode is worse than either: some properties compile and then take AD24 down
+with a native access violation. Both known cases — pad thermal relief and via mask
+expansion — sit on the pad cache, and the via one is avoidable by going through
+`TPadCache` rather than the direct setters. Watch the run for the crash dialog instead of
+waiting out the timeout, or a single bad line costs seven minutes and a hung Altium.

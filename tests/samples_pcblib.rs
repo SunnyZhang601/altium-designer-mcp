@@ -866,6 +866,36 @@ fn samples_pcblib_text_style() {
 }
 
 #[test]
+fn samples_pcblib_via_manual_mask_expansion() {
+    let lib = PcbLib::open(sample("footprints.PcbLib")).expect("failed to open footprints.PcbLib");
+    let fp = lib.get("PRIMPROPS").expect("PRIMPROPS footprint not found");
+
+    // The counterpart to samples_pcblib_via_mask_state_is_altium_factory_default:
+    // that one pins a via left on the rule, this one a via switched to manual.
+    // Both expansions had to be set through TPadCache — the direct
+    // Via.SolderMaskExpansion* / .PasteMaskExpansion* setters compile and then
+    // bring AD24 down with a native access violation, so no golden can ever be
+    // authored that way (see GenerateSamples.pas).
+    assert_eq!(fp.vias.len(), 1, "PRIMPROPS has one via");
+    let v = &fp.vias[0];
+    assert_eq!(
+        v.solder_mask_expansion_mode,
+        MaskExpansionMode::Manual,
+        "the cache marks the expansion manual"
+    );
+    assert!(
+        approx_eq(v.solder_mask_expansion, 0.1778, 1e-4),
+        "7 mil solder-mask expansion, got {}",
+        v.solder_mask_expansion
+    );
+    assert!(
+        approx_eq(v.paste_mask_expansion, 0.0762, 1e-4),
+        "3 mil paste-mask expansion, got {}",
+        v.paste_mask_expansion
+    );
+}
+
+#[test]
 fn samples_pcblib_component_body_placement_and_appearance() {
     let lib = PcbLib::open(sample("footprints.PcbLib")).expect("failed to open footprints.PcbLib");
     let fp = lib.get("PRIMPROPS").expect("PRIMPROPS footprint not found");

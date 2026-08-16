@@ -656,13 +656,13 @@ begin
                                   PCBM_BoardRegisteration, Body.I_ObjectAddress);
 end;
 
-{ STAGED PROBE — not compiled. A via's mask expansion must go through TPadCache
-  (GetState_Cache -> SetState_Cache), the same route AddPadMask uses; the direct
-  Via.SolderMaskExpansionMode / .PasteMaskExpansion setters compile but take
-  AD24 down with a native access violation in ScriptingSystem.DLL, exactly like
-  the pad thermal-relief setters. Reinstate via the cache, on a run of its own.
-  Uncomment the body AND its call site together. }
-(*
+{ Via with manual mask expansions, set through TPadCache (GetState_Cache ->
+  SetState_Cache) — the same route the pad mask helper uses.
+  DOCUMENTED NEGATIVE (AD24): the DIRECT setters
+  Via.SolderMaskExpansionMode / .SolderMaskExpansion / .PasteMaskExpansionMode /
+  .PasteMaskExpansion compile, then take AD24 down with a native access
+  violation in ScriptingSystem.DLL, exactly like the pad thermal-relief
+  setters. Always go through the cache. }
 procedure AddViaMask(Comp : IPCB_LibComponent; X : Integer; Y : Integer;
                      PadDia : Integer; HoleDia : Integer);
 var
@@ -688,7 +688,6 @@ begin
     PCBServer.SendMessageToRobots(Comp.I_ObjectAddress, c_Broadcast,
                                   PCBM_BoardRegisteration, Via.I_ObjectAddress);
 end;
-*)
 
 { ---- PcbLib authoring -------------------------------------------------------
 
@@ -1325,8 +1324,7 @@ begin
         AddRegionNamed(Comp,  140, -50, 240,  50, 'BoardCut',  eRegionKind_BoardCutout);
         AddRegionNamed(Comp,  260, -50, 360,  50, 'PlainCut',  eRegionKind_Cutout);
         AddBodyProps(Comp, 200, 0, 80, 60);
-        { STAGED, one unproven interface per run — see the helper's note:
-          AddViaMask(Comp, 400, 0, 50, 25); }
+        AddViaMask(Comp, 400, 0, 50, 25);
         PCBServer.PostProcess;
     except
     end;

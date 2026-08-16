@@ -2903,4 +2903,454 @@ mod tests {
         .expect("round pad should parse");
         assert_eq!(bga.shape, PadShape::Round);
     }
+
+    // ==================== rejection paths and optional-field arms ============
+    //
+    // Every `parse_*` helper answers a malformed primitive with a message
+    // naming the field, and silently defaults the optional ones. Both halves
+    // are contract; the tests below pin each rejection and each default.
+
+    mod rejections {
+        use crate::mcp::server::McpServer;
+        use serde_json::json;
+
+        /// Asserts the parse failed and its message mentions `needle`.
+        fn rejects<T: std::fmt::Debug>(result: Result<T, String>, needle: &str) {
+            let err = result.expect_err("expected a rejection");
+            assert!(
+                err.contains(needle),
+                "expected the message to mention {needle:?}, got: {err}"
+            );
+        }
+
+        /// A pad payload that parses, so a test can drop or corrupt one field.
+        fn pad_json() -> serde_json::Value {
+            json!({ "designator": "1", "x": 0.0, "y": 0.0, "width": 1.0, "height": 1.0 })
+        }
+
+        // ---- unknown-field guard ---------------------------------------------
+
+        #[test]
+        fn unknown_fields_are_named_along_with_what_was_allowed() {
+            // A typo in an optional key would otherwise be silently ignored and
+            // the caller would never learn the value did not take effect.
+            let err = McpServer::check_unknown_fields(&json!({ "widht": 1.0 }), &["width"])
+                .expect_err("an unknown field must be refused");
+            assert!(err.contains("widht"), "{err}");
+            assert!(err.contains("width"), "{err}");
+
+            // A non-object carries no keys to check, and is left alone.
+            assert!(McpServer::check_unknown_fields(&json!(42), &["width"]).is_ok());
+            assert!(McpServer::check_unknown_fields(&json!({ "width": 1.0 }), &["width"]).is_ok());
+        }
+
+        // ---- parse_pad --------------------------------------------------------
+
+        #[test]
+        fn parse_pad_names_the_missing_required_field() {
+            for field in ["designator", "x", "y", "width", "height"] {
+                let mut json = pad_json();
+                json.as_object_mut().unwrap().remove(field);
+                rejects(McpServer::parse_pad(&json), field);
+            }
+        }
+
+        #[test]
+        fn parse_pad_rejects_an_empty_designator() {
+            // Whitespace is not a designator: the pad would land in the library
+            // unnameable and unmatched by any schematic pin.
+            let mut json = pad_json();
+            json["designator"] = json!("   ");
+            rejects(McpServer::parse_pad(&json), "cannot be empty");
+        }
+
+        #[test]
+        fn parse_pad_rejects_non_positive_dimensions() {
+            for field in ["width", "height"] {
+                let mut zero = pad_json();
+                zero[field] = json!(0.0);
+                rejects(McpServer::parse_pad(&zero), "greater than 0");
+
+                let mut negative = pad_json();
+                negative[field] = json!(-1.0);
+                rejects(McpServer::parse_pad(&negative), "greater than 0");
+            }
+        }
+
+        #[test]
+        fn parse_pad_rejects_unknown_shape_and_layer_names() {
+            let mut shape = pad_json();
+            shape["shape"] = json!("trapezoid");
+            rejects(McpServer::parse_pad(&shape), "invalid shape");
+
+            let mut layer = pad_json();
+            layer["layer"] = json!("Layer 47");
+            rejects(McpServer::parse_pad(&layer), "invalid layer");
+        }
+
+        #[test]
+        fn parse_pad_defaults_the_layer_from_whether_it_is_drilled() {
+            use crate::altium::pcblib::Layer;
+
+            // No hole: an SMD land, which lives on the top layer.
+            let smd = McpServer::parse_pad(&pad_json()).expect("smd pad should parse");
+            assert_eq!(smd.layer, Layer::TopLayer);
+
+            // A drilled pad spans the stack, so it defaults to multi-layer.
+            let mut drilled = pad_json();
+            drilled["hole_size"] = json!(0.8);
+            let through = McpServer::parse_pad(&drilled).expect("through pad should parse");
+            assert_eq!(through.layer, Layer::MultiLayer);
+
+            // A zero hole is not a hole, so it stays an SMD land.
+            let mut zero_hole = pad_json();
+            zero_hole["hole_size"] = json!(0.0);
+            let still_smd = McpServer::parse_pad(&zero_hole).expect("pad should parse");
+            assert_eq!(still_smd.layer, Layer::TopLayer);
+        }
+
+        #[test]
+        fn parse_pad_reads_hole_shape_and_falls_back_to_round() {
+            use crate::altium::pcblib::HoleShape;
+
+            let with_shape = |s: &str| {
+                let mut json = pad_json();
+                json["hole_size"] = json!(0.8);
+                json["hole_shape"] = json!(s);
+                McpServer::parse_pad(&json)
+                    .expect("pad should parse")
+                    .hole_shape
+            };
+            assert_eq!(with_shape("square"), HoleShape::Square);
+            assert_eq!(with_shape("slot"), HoleShape::Slot);
+            assert_eq!(with_shape("round"), HoleShape::Round);
+            // An unrecognised name is not an error — a round hole is the safe
+            // reading, and the pad still writes.
+            assert_eq!(with_shape("hexagon"), HoleShape::Round);
+        }
+
+        #[test]
+        fn parse_pad_reads_the_per_layer_stack_arrays() {
+            use crate::altium::pcblib::PadShape;
+
+            let mut json = pad_json();
+            json["stack_mode"] = json!("full_stack");
+            json["per_layer_shapes"] = json!(["round", "rectangle", "not-a-shape"]);
+            json["per_layer_corner_radii"] = json!([25, 50, 300]);
+            let pad = McpServer::parse_pad(&json).expect("stacked pad should parse");
+
+            let shapes = pad.per_layer_shapes.expect("shapes should be read");
+            assert_eq!(shapes[0], PadShape::Round);
+            assert_eq!(shapes[1], PadShape::Rectangle);
+            // An unreadable entry falls back rather than failing the whole pad.
+            assert_eq!(shapes[2], PadShape::Round);
+
+            let radii = pad.per_layer_corner_radii.expect("radii should be read");
+            assert_eq!(radii[0], 25);
+            assert_eq!(radii[1], 50);
+            // Out of a byte's range, so it reads as 0 rather than wrapping.
+            assert_eq!(radii[2], 0);
+        }
+
+        // ---- parse_track / parse_arc / parse_fill -----------------------------
+
+        #[test]
+        fn parse_track_names_the_missing_field_and_bad_layer() {
+            let base = json!({ "x1": 0.0, "y1": 0.0, "x2": 1.0, "y2": 1.0, "width": 0.2 });
+            for field in ["x1", "y1", "x2", "y2", "width"] {
+                let mut json = base.clone();
+                json.as_object_mut().unwrap().remove(field);
+                rejects(McpServer::parse_track(&json), field);
+            }
+
+            let mut bad_layer = base;
+            bad_layer["layer"] = json!("Nowhere");
+            rejects(McpServer::parse_track(&bad_layer), "invalid layer");
+        }
+
+        #[test]
+        fn parse_arc_names_the_missing_field_and_bad_layer() {
+            let base = json!({
+                "x": 0.0, "y": 0.0, "radius": 1.0,
+                "start_angle": 0.0, "end_angle": 90.0, "width": 0.2,
+            });
+            for field in ["x", "y", "radius", "start_angle", "end_angle", "width"] {
+                let mut json = base.clone();
+                json.as_object_mut().unwrap().remove(field);
+                rejects(McpServer::parse_arc(&json), field);
+            }
+
+            let mut bad_layer = base;
+            bad_layer["layer"] = json!("Nowhere");
+            rejects(McpServer::parse_arc(&bad_layer), "invalid layer");
+        }
+
+        #[test]
+        fn parse_fill_names_the_missing_field_bad_layer_and_reads_rotation() {
+            let base = json!({ "x1": 0.0, "y1": 0.0, "x2": 1.0, "y2": 1.0 });
+            for field in ["x1", "y1", "x2", "y2"] {
+                let mut json = base.clone();
+                json.as_object_mut().unwrap().remove(field);
+                rejects(McpServer::parse_fill(&json), field);
+            }
+
+            let mut bad_layer = base.clone();
+            bad_layer["layer"] = json!("Nowhere");
+            rejects(McpServer::parse_fill(&bad_layer), "invalid layer");
+
+            let mut rotated = base;
+            rotated["rotation"] = json!(45.0);
+            let fill = McpServer::parse_fill(&rotated).expect("fill should parse");
+            assert!((fill.rotation - 45.0).abs() < f64::EPSILON);
+        }
+
+        // ---- parse_via --------------------------------------------------------
+
+        #[test]
+        fn parse_via_names_the_missing_field() {
+            let base = json!({ "x": 0.0, "y": 0.0, "diameter": 0.6, "hole_size": 0.3 });
+            for field in ["x", "y", "diameter", "hole_size"] {
+                let mut json = base.clone();
+                json.as_object_mut().unwrap().remove(field);
+                rejects(McpServer::parse_via(&json), field);
+            }
+        }
+
+        #[test]
+        fn parse_via_rejects_a_hole_that_cannot_fit_inside_the_ring() {
+            let base = json!({ "x": 0.0, "y": 0.0, "diameter": 0.6, "hole_size": 0.3 });
+
+            let mut no_hole = base.clone();
+            no_hole["hole_size"] = json!(0.0);
+            rejects(McpServer::parse_via(&no_hole), "greater than 0");
+
+            // A hole at or past the outer diameter leaves no annular ring, so
+            // the via would be a bare drill with no copper to connect to.
+            let mut swallowed = base;
+            swallowed["hole_size"] = json!(0.6);
+            rejects(McpServer::parse_via(&swallowed), "smaller than diameter");
+        }
+
+        #[test]
+        fn parse_via_rejects_unknown_layer_names_on_either_end() {
+            let base = json!({ "x": 0.0, "y": 0.0, "diameter": 0.6, "hole_size": 0.3 });
+            for field in ["from_layer", "to_layer"] {
+                let mut json = base.clone();
+                json[field] = json!("Nowhere");
+                rejects(McpServer::parse_via(&json), field);
+            }
+        }
+
+        #[test]
+        fn parse_via_reads_its_optional_tail() {
+            use crate::altium::pcblib::{
+                DrillLayerPairType, Layer, MaskExpansionMode, PowerPlaneConnectStyle,
+            };
+
+            let via = McpServer::parse_via(&json!({
+                "x": 0.0, "y": 0.0, "diameter": 0.6, "hole_size": 0.3,
+                "from_layer": "Top Layer", "to_layer": "Mid-Layer 1",
+                "solder_mask_expansion": 0.05,
+                "solder_mask_expansion_from_hole_edge": true,
+                "solder_mask_expansion_mode": "manual",
+                "drill_layer_pair_type": "mid",
+                "thermal_relief_gap": 0.25,
+                "thermal_relief_conductors": 4,
+                "thermal_relief_width": 0.3,
+                "power_plane_connect_style": "direct",
+                "power_plane_relief_expansion": 0.4,
+                "power_plane_clearance": 0.5,
+                "paste_mask_expansion": 0.06,
+                "net_index": 7,
+                "hole_positive_tolerance": 0.02,
+                "hole_negative_tolerance": 0.01,
+            }))
+            .expect("via should parse");
+
+            assert_eq!(via.from_layer, Layer::TopLayer);
+            assert_eq!(via.to_layer, Layer::MidLayer1);
+            assert!(via.solder_mask_expansion_from_hole_edge);
+            assert_eq!(via.solder_mask_expansion_mode, MaskExpansionMode::Manual);
+            assert_eq!(via.drill_layer_pair_type, DrillLayerPairType::Mid);
+            assert_eq!(via.thermal_relief_conductors, 4);
+            assert_eq!(
+                via.power_plane_connect_style,
+                PowerPlaneConnectStyle::Direct
+            );
+            assert_eq!(via.net_index, 7);
+            assert_eq!(via.hole_positive_tolerance, Some(0.02));
+            assert_eq!(via.hole_negative_tolerance, Some(0.01));
+        }
+
+        #[test]
+        fn parse_via_maps_unrecognised_enum_names_to_the_altium_default() {
+            use crate::altium::pcblib::{
+                DrillLayerPairType, MaskExpansionMode, PowerPlaneConnectStyle,
+            };
+
+            // An unrecognised name produces the state a fresh Altium via
+            // carries, so a typo writes the same bytes as saying nothing.
+            let via = McpServer::parse_via(&json!({
+                "x": 0.0, "y": 0.0, "diameter": 0.6, "hole_size": 0.3,
+                "solder_mask_expansion_mode": "whatever",
+                "drill_layer_pair_type": "whatever",
+                "power_plane_connect_style": "whatever",
+            }))
+            .expect("via should parse");
+
+            assert_eq!(via.solder_mask_expansion_mode, MaskExpansionMode::None);
+            assert_eq!(via.drill_layer_pair_type, DrillLayerPairType::Through);
+            assert_eq!(
+                via.power_plane_connect_style,
+                PowerPlaneConnectStyle::Relief
+            );
+        }
+
+        // ---- parse_region -----------------------------------------------------
+
+        #[test]
+        fn parse_region_needs_three_vertices() {
+            let vertex = |x: f64, y: f64| json!({ "x": x, "y": y });
+            assert!(McpServer::parse_region(&json!({
+                "layer": "Top Layer",
+                "vertices": [vertex(0.0, 0.0), vertex(1.0, 0.0)],
+            }))
+            .is_none());
+
+            // Entries missing a coordinate are dropped, which can take an
+            // apparently-large outline below the minimum.
+            assert!(McpServer::parse_region(&json!({
+                "layer": "Top Layer",
+                "vertices": [vertex(0.0, 0.0), vertex(1.0, 0.0), { "x": 1.0 }],
+            }))
+            .is_none());
+
+            assert!(McpServer::parse_region(&json!({ "layer": "Top Layer" })).is_none());
+        }
+
+        #[test]
+        fn parse_region_accepts_a_kind_by_name_or_by_id() {
+            use crate::altium::pcblib::RegionKind;
+
+            let with_kind = |kind: serde_json::Value| {
+                let mut json = json!({
+                    "layer": "Top Layer",
+                    "vertices": [
+                        { "x": 0.0, "y": 0.0 }, { "x": 1.0, "y": 0.0 }, { "x": 0.0, "y": 1.0 },
+                    ],
+                });
+                json["kind"] = kind;
+                McpServer::parse_region(&json)
+                    .expect("region should parse")
+                    .kind
+            };
+
+            assert_eq!(with_kind(json!("cutout")), RegionKind::Cutout);
+            assert_eq!(with_kind(json!("copper")), RegionKind::Copper);
+            assert_eq!(with_kind(json!("named_region")), RegionKind::NamedRegion);
+            assert_eq!(with_kind(json!("cavity")), RegionKind::Cavity);
+            // A numeric KIND, as a string and as a number, and an unreadable
+            // value falling back to copper.
+            assert_eq!(with_kind(json!("4")), RegionKind::Cavity);
+            assert_eq!(with_kind(json!(4)), RegionKind::Cavity);
+            assert_eq!(with_kind(json!("nonsense")), RegionKind::Copper);
+        }
+
+        #[test]
+        fn parse_region_reads_the_name_cavity_and_hole_contours() {
+            let region = McpServer::parse_region(&json!({
+                "layer": "Top Layer",
+                "vertices": [
+                    { "x": -1.0, "y": -1.0 }, { "x": 1.0, "y": -1.0 },
+                    { "x": 1.0, "y": 1.0 }, { "x": -1.0, "y": 1.0 },
+                ],
+                "name": "CAVITY_A",
+                "cavity_height": 1.5,
+                "sub_poly_index": 2,
+                "union_index": 3,
+                "is_shape_based": true,
+                "holes": [[
+                    { "x": -0.5, "y": -0.5 }, { "x": 0.5, "y": -0.5 }, { "x": 0.0, "y": 0.5 },
+                ]],
+            }))
+            .expect("region should parse");
+
+            assert_eq!(region.name, "CAVITY_A");
+            assert!((region.cavity_height - 1.5).abs() < f64::EPSILON);
+            assert_eq!(region.sub_poly_index, 2);
+            assert_eq!(region.union_index, 3);
+            assert!(region.is_shape_based);
+            assert_eq!(region.holes.len(), 1);
+            assert_eq!(region.holes[0].len(), 3);
+        }
+
+        // ---- SchLib shape helpers ---------------------------------------------
+
+        #[test]
+        fn polylines_and_polygons_need_enough_points_to_draw() {
+            let point = |x: f64, y: f64| json!({ "x": x, "y": y });
+
+            // A polyline is a run of segments, so one point draws nothing.
+            assert!(
+                McpServer::parse_schlib_polyline(&json!({ "points": [point(0.0, 0.0)] })).is_none()
+            );
+            assert!(McpServer::parse_schlib_polyline(
+                &json!({ "points": [point(0.0, 0.0), point(1.0, 1.0)] })
+            )
+            .is_some());
+
+            // A polygon is a closed area, so it needs a third point.
+            assert!(McpServer::parse_schlib_polygon(
+                &json!({ "points": [point(0.0, 0.0), point(1.0, 0.0)] })
+            )
+            .is_none());
+            assert!(McpServer::parse_schlib_polygon(&json!({
+                "points": [point(0.0, 0.0), point(1.0, 0.0), point(0.0, 1.0)],
+            }))
+            .is_some());
+        }
+
+        #[test]
+        fn an_image_with_undecodable_data_still_parses_without_it() {
+            // The bytes are optional decoration; a corrupt payload must not
+            // take the whole symbol down with it.
+            let image = McpServer::parse_schlib_image(&json!({
+                "x1": 0.0, "y1": 0.0, "x2": 10.0, "y2": 10.0,
+                "filename": "logo.bmp",
+                "image_data": "!!! not base64 !!!",
+            }))
+            .expect("image should parse");
+            assert!(image.image_data.is_none());
+        }
+
+        #[test]
+        fn label_justification_accepts_the_spelling_variants() {
+            // A schematic label takes its anchor as a free-text name, so both
+            // spellings of centre and either separator have to land on the same
+            // anchor. (PcbLib text is separate — it deserialises through serde
+            // and accepts only the canonical serde spelling.)
+            use crate::altium::schlib::TextJustification;
+
+            let justified = |s: &str| {
+                McpServer::parse_schlib_label(&json!({
+                    "x": 0.0, "y": 0.0, "text": "REF", "justification": s,
+                }))
+                .expect("label should parse")
+                .justification
+            };
+
+            // Both spellings of centre, with and without separators.
+            assert_eq!(justified("middle-center"), TextJustification::MiddleCenter);
+            assert_eq!(justified("middle_centre"), TextJustification::MiddleCenter);
+            assert_eq!(justified("center"), TextJustification::MiddleCenter);
+            assert_eq!(justified("bottom-centre"), TextJustification::BottomCenter);
+            assert_eq!(justified("bottomright"), TextJustification::BottomRight);
+            assert_eq!(justified("center-left"), TextJustification::MiddleLeft);
+            assert_eq!(justified("centre-right"), TextJustification::MiddleRight);
+            assert_eq!(justified("topleft"), TextJustification::TopLeft);
+            assert_eq!(justified("top-centre"), TextJustification::TopCenter);
+            // Unrecognised falls back to Altium's own default corner.
+            assert_eq!(justified("sideways"), TextJustification::BottomLeft);
+        }
+    }
 }

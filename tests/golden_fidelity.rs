@@ -74,11 +74,6 @@ const BY_DESIGN: &[(&str, &str)] = &[
 /// corrupted library.
 const KNOWN_DEFECTS: &[(&str, &str)] = &[
     (
-        "uniqueidprimitiveinformation",
-        "written only when primitives carry unique ids, and the reader does not \
-         populate them from this stream, so authored ids are lost",
-    ),
-    (
         "V7_LAYER",
         "Altium writes the short layer name (TOP); we write the long form \
          (TOPLAYER), and for a board cutout we write the resolved keep-out layer \
@@ -282,6 +277,34 @@ fn pcblib_golden_survives_a_round_trip() {
                 .into_iter()
                 .filter(|d| !is_known(d)),
         );
+    }
+
+    // 4. The identity streams, byte for byte. Both key a primitive by its
+    //    ordinal among all of the footprint's primitives, and a block-level
+    //    diff cannot see a reordering. `PrimitiveGuids` is replayed as read, so
+    //    equality there means the replay is intact; the unique-id records are
+    //    rebuilt from the write sequence, so equality there means the order the
+    //    ordinals refer to survived.
+    for name in lib.names() {
+        for stream in ["PrimitiveGuids/Data", "UniqueIDPrimitiveInformation/Data"] {
+            let path = format!("/{name}/{stream}");
+            let Some(g) = stream_bytes(&src, &path) else {
+                continue;
+            };
+            let what = format!("{name}: {stream}");
+            if is_known(&what) {
+                continue;
+            }
+            match stream_bytes(&out, &path) {
+                Some(o) if o == g => {}
+                Some(o) => failures.push(format!(
+                    "{what} differs: {} bytes golden, {} ours",
+                    g.len(),
+                    o.len()
+                )),
+                None => failures.push(format!("{what} was not written back")),
+            }
+        }
     }
 
     assert!(

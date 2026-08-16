@@ -7,7 +7,7 @@
 
 use altium_designer_mcp::altium::pcblib::{
     DrillLayerPairType, HoleShape, Layer, MaskExpansionMode, PadShape, PadStackMode, PcbFlags,
-    PcbLib, RegionKind, StrokeFont, TextKind,
+    PcbLib, PrimitiveKind, RegionKind, StrokeFont, TextKind,
 };
 use std::path::PathBuf;
 
@@ -1447,6 +1447,114 @@ fn samples_pcblib_golden_survives_a_read_modify_write() {
         .find(|t| t.text.len() > 255)
         .expect("the 264-character text keeps its full length");
     assert_eq!(long.text, "A".repeat(260) + "_END");
+}
+
+#[test]
+fn samples_pcblib_read_order_matches_the_guid_ordinals() {
+    // Altium's object ids, as they appear in a PrimitiveGuids record.
+    fn kind_of(object_kind: u32) -> Option<PrimitiveKind> {
+        match object_kind {
+            1 => Some(PrimitiveKind::Arc),
+            2 => Some(PrimitiveKind::Pad),
+            3 => Some(PrimitiveKind::Via),
+            4 => Some(PrimitiveKind::Track),
+            5 => Some(PrimitiveKind::Text),
+            6 => Some(PrimitiveKind::Fill),
+            89 => Some(PrimitiveKind::Region),
+            90 => Some(PrimitiveKind::ComponentBody),
+            // 85 is the footprint record itself, which is not a primitive and
+            // sits outside the ordinal space (always index 0).
+            _ => None,
+        }
+    }
+
+    // PrimitiveGuids keys each GUID by the primitive's ordinal among ALL of the
+    // footprint's primitives — not among its own kind. Checking our read order
+    // against that ordinal space is a cross-check between two independent
+    // streams of the same file: if they disagreed, every GUID we write back
+    // would name a different primitive than Altium meant.
+    let lib = PcbLib::open(sample("footprints.PcbLib")).expect("failed to open footprints.PcbLib");
+
+    let mut checked = 0;
+    let mut interleaved = 0;
+    for footprint in lib.iter() {
+        if footprint.primitive_guids.is_empty() {
+            continue;
+        }
+        let mut by_ordinal: Vec<(u32, PrimitiveKind)> = footprint
+            .primitive_guids
+            .iter()
+            .filter_map(|g| kind_of(g.object_kind).map(|k| (g.index, k)))
+            .collect();
+        by_ordinal.sort_unstable_by_key(|&(ordinal, _)| ordinal);
+
+        let ordinals: Vec<u32> = by_ordinal.iter().map(|&(o, _)| o).collect();
+        assert_eq!(
+            ordinals,
+            (0..u32::try_from(by_ordinal.len()).expect("footprint fits u32")).collect::<Vec<_>>(),
+            "{}: PrimitiveGuids ordinals are a permutation of 0..n-1",
+            footprint.name
+        );
+
+        let from_guids: Vec<PrimitiveKind> = by_ordinal.into_iter().map(|(_, k)| k).collect();
+        assert_eq!(
+            footprint.primitive_order, from_guids,
+            "{}: the order we read the primitives in must be the order the \
+             GUID ordinals describe",
+            footprint.name
+        );
+
+        // A footprint whose kinds come out in blocks would pass the check above
+        // even if we grouped by type, so at least one has to actually interleave
+        // for this to be worth anything.
+        let mut seen: Vec<PrimitiveKind> = Vec::new();
+        if from_guids.windows(2).any(|w| w[0] != w[1]) {
+            for kind in &from_guids {
+                if seen.last() != Some(kind) {
+                    if seen.contains(kind) {
+                        interleaved += 1;
+                        break;
+                    }
+                    seen.push(*kind);
+                }
+            }
+        }
+        checked += 1;
+    }
+
+    assert!(checked >= 20, "only {checked} footprints carried GUIDs");
+    assert!(
+        interleaved > 0,
+        "no golden footprint interleaves its primitive kinds, so this test \
+         cannot tell a preserved order from a type-grouped one"
+    );
+}
+
+#[test]
+fn samples_pcblib_primitive_order_survives_a_read_modify_write() {
+    use std::io::Cursor;
+
+    let mut lib = PcbLib::open(sample("footprints.PcbLib")).expect("failed to open golden");
+    let before: Vec<(String, Vec<PrimitiveKind>)> = lib
+        .iter()
+        .map(|f| (f.name.clone(), f.primitive_order.clone()))
+        .collect();
+
+    let mut buffer = Cursor::new(Vec::new());
+    lib.write(&mut buffer).expect("write the golden back");
+    buffer.set_position(0);
+    let after = PcbLib::read(&mut buffer).expect("read back");
+
+    for (name, order) in before {
+        let rewritten = after
+            .get(&name)
+            .unwrap_or_else(|| panic!("{name} missing after rewrite"));
+        assert_eq!(
+            rewritten.primitive_order, order,
+            "{name}: primitives came back in a different order, which \
+             renumbers every PrimitiveGuids ordinal and PRIMITIVEINDEX"
+        );
+    }
 }
 
 #[test]

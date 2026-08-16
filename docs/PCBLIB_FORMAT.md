@@ -37,10 +37,11 @@ PcbLib files are OLE Compound Documents (CFB format, **OLE v3 with 512-byte sect
 
 > **Note:** OLE version MUST be V3 (512-byte sectors). Altium Designer rejects V4 (4096-byte) files.
 >
-> Real Altium libraries also carry `SectionKeys` (root, for >31-char names), `FileVersionInfo`,
-> `EmbeddedFonts`, `LayerKindMapping`, `PadViaLibrary`, `ComponentParamsTOC`, `Textures`,
-> `ModelsNoEmbed` and `PrimitiveGuids` streams/storages. These are **unmodelled**: the reader
-> ignores them and the writer does not emit them.
+> Real Altium libraries also carry `FileVersionInfo`, `EmbeddedFonts`, `LayerKindMapping`,
+> `PadViaLibrary`, `ComponentParamsTOC`, `Textures`, `ModelsNoEmbed`, `PrimitiveGuids` and
+> `UniqueIdPrimitiveInformation`. All of these are read and written back. `SectionKeys` (root,
+> for names past the 31-character storage limit) is **unmodelled**: the reader ignores it and
+> the writer does not emit it.
 
 ## Encoding Primitives (Building Blocks)
 
@@ -150,15 +151,40 @@ no pipe).
 
 | Field | Description |
 |-------|-------------|
-| `PRIMITIVEINDEX` | Single **global 0-based ordinal** over ALL primitives in Data-stream emit order |
+| `PRIMITIVEINDEX` | Single **global 0-based ordinal** over ALL primitives, in Data-stream order |
 | `PRIMITIVEOBJECTID` | Primitive type name (Pad, Via, Track, Arc, Text, Region, Fill, ComponentBody) |
-| `UNIQUEID` | 8-character alphanumeric identifier |
+| `UNIQUEID` | 8-character alphanumeric identifier, **often empty** |
 
 > **Note:** `PRIMITIVEINDEX` is NOT a per-type index. Every primitive consumes an ordinal in the
-> Data-stream order (Arcs, Pads, Vias, Tracks, Text, Regions, Fills, ComponentBodies) whether or
-> not it has a unique id, so e.g. the first pad behind two silkscreen arcs is `PRIMITIVEINDEX=2`.
-> On read the entry's `PRIMITIVEOBJECTID` must match the primitive found at that ordinal; a
-> mismatch (e.g. a foreign file with a different index base) is skipped rather than mis-attached.
+> order the Data stream stores them, whether or not it has a record here, so the ordinals of the
+> records present have gaps: `LOCKFLAGS_PCB` in the golden runs 0–5, 7, 8, because ordinal 6 is a
+> track. On read the entry's `PRIMITIVEOBJECTID` must match the primitive found at that ordinal;
+> a mismatch (e.g. a foreign file with a different index base) is skipped rather than
+> mis-attached.
+>
+> An **empty `UNIQUEID` is normal** — every record in the golden has one. The record marks the
+> primitive as tracked; the value is filled in by a board, not a library. Treating an empty value
+> as "no record" discards the stream.
+
+### `/{component}/PrimitiveGuids`
+
+**Header:** `[record_count:4 LE u32]`
+
+**Data:** `record_count` fixed-width 24-byte records, no framing of their own:
+
+```text
+[object_kind:4 LE u32][ordinal:4 LE u32][guid:16 bytes]
+```
+
+`object_kind` is Altium's object id — 1 arc, 2 pad, 3 via, 4 track, 5 text, 6 fill, 85 the
+footprint record itself, 89 region, 90 component body. The GUID's first three fields are
+little-endian (the Windows `GUID` struct layout).
+
+`ordinal` is the **same global ordinal** `UniqueIdPrimitiveInformation` calls `PRIMITIVEINDEX`,
+not a per-kind index: across the 22 golden footprints the ordinals are a permutation of `0..n-1`
+once the kind-85 record (always ordinal 0) is set aside, and `PRIMPROPS` has its regions at 0, 4,
+5 and 6 with a pad at 1 and texts at 2 and 3. Both streams are therefore meaningless unless the
+Data stream keeps the primitive order the file was written with.
 
 ## Data Stream Format
 
@@ -889,7 +915,12 @@ recomputed body checksum that disagreed with the Models/Data record would be wor
 
 ## Primitive Writing Order
 
-When writing footprint data, primitives are encoded in this specific order:
+Altium stores primitives in **authoring order**, interleaving the kinds:
+`LOCKFLAGS_PCB` in the golden runs pad x6, track, pad x2, track, arc x2, fill x2. That order is
+the ordinal space both identity streams key off, so a footprint read from a file is written back
+in the order it came in.
+
+A footprint with no order of its own — one built in memory — is written kind by kind:
 
 1. Arcs (0x01)
 2. Pads (0x02)
@@ -899,6 +930,9 @@ When writing footprint data, primitives are encoded in this specific order:
 6. Regions (0x0B)
 7. Fills (0x06)
 8. ComponentBodies (0x0C)
+
+`WideStrings` is indexed over the text primitives alone, in their own relative order, so
+interleaving does not disturb the `ENCODEDTEXT{n}` numbering.
 
 There is **no** end marker after the last primitive (issue #68).
 
@@ -910,7 +944,7 @@ There is **no** end marker after the last primitive (issue #68).
 - **3D model embedding**: zlib-compressed STEP files, referenced by GUID
 - **Pad hole shapes**: Round (0), Square (1), Slot (2) — stored at offset 262 of the 651-byte size/shape block, NOT in the main geometry block
 - **Net information**: modelled via the common-header indices; used in board files, not library files
-- **Unique IDs**: 8-character alphanumeric, keyed by a single global 0-based `PRIMITIVEINDEX` over all primitives in Data order
+- **Unique IDs**: 8-character alphanumeric or empty, keyed by a global 0-based `PRIMITIVEINDEX` over all primitives in Data order — the ordinal `PrimitiveGuids` also uses
 - **Default layer mapping**: unknown layer IDs default to Multi-Layer (74)
 - **Default stack mode**: unknown stack mode IDs default to Simple (0)
 - **Internal OLE entries filtered on read**: FileHeader, Library, Models, Textures, ModelsNoEmbed, PadViaLibrary, LayerKindMapping,

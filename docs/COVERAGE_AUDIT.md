@@ -15,20 +15,6 @@ golden, writes it back and diffs the OLE streams and every parameter block. Anyt
 still loses is listed in that test's `KNOWN_DEFECTS` and described here; the two lists are
 the same list, so an entry leaves both together.
 
-**`UniqueIDPrimitiveInformation` is not read, so it is not written back (`PcbLib`).** Every
-footprint with pads carries one, keyed by primitive index:
-
-```text
-UniqueIDPrimitiveInformation/Header : u32   record count
-UniqueIDPrimitiveInformation/Data   : count x [block_len:4]["|PRIMITIVEINDEX=n|
-                                      PRIMITIVEOBJECTID=Pad|UNIQUEID=…" + 0x00]
-```
-
-`PRIMITIVEINDEX` counts across the footprint's primitives, not within a kind, and the
-golden's indices are not contiguous (`LOCKFLAGS_PCB` runs 0–5, 7, 8), so the mapping has to
-be replayed rather than recomputed. Our writer emits the stream only when a primitive
-carries a unique id, and nothing ever populates one, so the streams vanish.
-
 **`SectionKeys` is neither read nor written (`PcbLib`, `SchLib`).** Altium encodes a
 component's storage name as the UTF-8 bytes of its name, one byte per storage-name
 character, capped at the compound-file limit of 31 UTF-16 code units. Past that cap it
@@ -42,12 +28,16 @@ keep-out layer rather than the one stored in the record.
 
 **`IndexInSheet` is renumbered (`SchLib`).** Our writer emits a symbol's primitives grouped
 by type; Altium preserves the interleaved authoring order, and `IndexInSheet` records it.
+This is the `SchLib` twin of the `PcbLib` primitive ordering that
+`Footprint::primitive_order` now carries, and it wants the same treatment.
 
-**Per-primitive GUIDs are preserved per footprint, not per primitive (`PcbLib`).** The
-`PrimitiveGuids` stream round-trips byte-for-byte, but the GUIDs hang off the footprint as
-an opaque list keyed by `(object_kind, index_within_kind)`. A structural edit — deleting a
-pad, reordering regions — shifts the indices out from under them. Attaching the GUID to the
-primitive it names touches eight primitive structs.
+**Identity streams are keyed by ordinal, not attached to the primitive (`PcbLib`).** A
+footprint's `PrimitiveGuids` records and its unique ids both name a primitive by its
+position among all the footprint's primitives. That position is preserved across a
+read-modify-write, so both survive one — but a *structural* edit (deleting a pad, inserting
+a region) renumbers everything after it and silently re-points every later identity.
+Attaching the GUID to the primitive it names would fix it, and touches eight primitive
+structs.
 
 **A `MODEL.*` block is invented for extruded bodies (`PcbLib`).** A component body with no
 embedded model gets a `MODEL.*` block including a freshly generated `MODELID`; Altium emits

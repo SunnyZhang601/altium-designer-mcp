@@ -82,11 +82,6 @@ const BY_DESIGN: &[(&str, &str)] = &[
 /// corrupted library.
 const KNOWN_DEFECTS: &[(&str, &str)] = &[
     (
-        "primitiveguids",
-        "the per-primitive GUID stream is neither read nor written, so a \
-         read-modify-write discards Altium's identity for every primitive",
-    ),
-    (
         "uniqueidprimitiveinformation",
         "written only when primitives carry unique ids, and the reader does not \
          populate them from this stream, so authored ids are lost",

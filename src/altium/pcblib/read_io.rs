@@ -453,6 +453,13 @@ impl PcbLib {
             Self::parse_primitives(&mut footprint, &data, &wide_strings);
         }
 
+        // PrimitiveGuids holds Altium's stable per-primitive identity. Losing it
+        // makes every primitive look new to Altium after a rewrite.
+        let guid_path = storage_path.join("PrimitiveGuids/Data");
+        if let Some(guid_data) = crate::altium::read_stream_opt(cfb, &guid_path) {
+            footprint.primitive_guids = reader::parse_primitive_guids(&guid_data);
+        }
+
         // Read UniqueIDPrimitiveInformation stream if present (contains unique IDs for primitives)
         let unique_id_path = storage_path.join("UniqueIDPrimitiveInformation/Data");
         if let Some(uid_data) = crate::altium::read_stream_opt(cfb, &unique_id_path) {

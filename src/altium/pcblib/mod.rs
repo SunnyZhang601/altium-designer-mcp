@@ -134,6 +134,35 @@ pub struct Footprint {
     /// 3D model reference (legacy, use `component_bodies` for new code).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model_3d: Option<Model3D>,
+
+    /// Altium's per-primitive GUIDs, from the footprint's `PrimitiveGuids`
+    /// stream, preserved in read order.
+    ///
+    /// These are the stable identities Altium uses to recognise a primitive
+    /// across edits; dropping them makes every primitive look new. They are held
+    /// as read rather than attached to the primitives themselves, so a
+    /// read-modify-write that leaves the primitive collections alone reproduces
+    /// them exactly. Adding or removing a primitive shifts the indices its kind
+    /// uses, and the writer drops any entry that no longer points at one.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub primitive_guids: Vec<PrimitiveGuid>,
+}
+
+/// One `PrimitiveGuids` record: which primitive it names, and its GUID.
+///
+/// The stream is a `u32` count followed by that many 24-byte records of
+/// `[object_kind: u32][index_within_kind: u32][guid: 16 bytes, little-endian]`.
+/// `object_kind` is Altium's object id — 1 arc, 2 pad, 3 via, 4 track, 5 text,
+/// 6 fill, 85 the footprint itself, 89 region, 90 component body — and `index`
+/// counts within that kind.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PrimitiveGuid {
+    /// Altium object id of the primitive this GUID belongs to.
+    pub object_kind: u32,
+    /// Position of the primitive among others of the same kind.
+    pub index: u32,
+    /// The GUID, formatted `{XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX}`.
+    pub guid: String,
 }
 
 /// Most overlapping pad pairs a tool reports before collapsing to a summary.
@@ -230,6 +259,7 @@ impl Footprint {
             fills: Vec::new(),
             component_bodies: Vec::new(),
             model_3d: None,
+            primitive_guids: Vec::new(),
         }
     }
 

@@ -1909,6 +1909,52 @@ fn encode_unique_id_record(
 // Per-Component Header Writing
 // =============================================================================
 
+/// Encodes a footprint's `PrimitiveGuids/Data` stream, or `None` when it has no
+/// identities to write.
+///
+/// The inverse of `reader::parse_primitive_guids`: 24-byte records of
+/// `[object_kind: u32][index_within_kind: u32][guid: 16 bytes]`, the GUID's
+/// first three fields little-endian. A malformed GUID string is skipped rather
+/// than written as zeroes, which would claim an identity Altium never issued.
+///
+/// Nothing is emitted for a from-scratch footprint: it has no identities to
+/// preserve, and inventing them would make every save produce different bytes.
+pub fn encode_primitive_guids(footprint: &Footprint) -> Option<Vec<u8>> {
+    if footprint.primitive_guids.is_empty() {
+        return None;
+    }
+    let mut out = Vec::with_capacity(footprint.primitive_guids.len() * 24);
+    for entry in &footprint.primitive_guids {
+        let Some(bytes) = parse_guid(&entry.guid) else {
+            continue;
+        };
+        out.extend_from_slice(&entry.object_kind.to_le_bytes());
+        out.extend_from_slice(&entry.index.to_le_bytes());
+        out.extend_from_slice(&bytes);
+    }
+    (!out.is_empty()).then_some(out)
+}
+
+/// Parses `{XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX}` back into its 16 bytes, with
+/// the first three fields little-endian.
+fn parse_guid(text: &str) -> Option<[u8; 16]> {
+    let digits: Vec<u8> = text.bytes().filter(u8::is_ascii_hexdigit).collect();
+    if digits.len() != 32 {
+        return None;
+    }
+    let mut hex = [0u8; 16];
+    for (slot, pair) in hex.iter_mut().zip(digits.chunks_exact(2)) {
+        let text = std::str::from_utf8(pair).ok()?;
+        *slot = u8::from_str_radix(text, 16).ok()?;
+    }
+    let mut out = [0u8; 16];
+    out[0..4].copy_from_slice(&[hex[3], hex[2], hex[1], hex[0]]);
+    out[4..6].copy_from_slice(&[hex[5], hex[4]]);
+    out[6..8].copy_from_slice(&[hex[7], hex[6]]);
+    out[8..16].copy_from_slice(&hex[8..16]);
+    Some(out)
+}
+
 /// Encodes the per-component `Header` stream.
 ///
 /// # Format

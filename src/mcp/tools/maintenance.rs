@@ -2120,4 +2120,247 @@ mod tests {
         assert!(lib.get("RESISTOR").is_none());
         assert!(lib.get("CAPACITOR").is_some());
     }
+
+    // ==================== error paths ====================
+
+    /// The guard branches the behavioural tests above never reach.
+    ///
+    /// `update_pad` and `update_primitive` already have their own error-path
+    /// tests; `bulk_rename` had none at all despite fourteen error returns, and
+    /// `list_backups` and `repair_library` were only ever called with valid
+    /// arguments on an existing library.
+    mod error_paths {
+        use super::*;
+        use std::path::Path;
+
+        /// Writes bytes that are not an OLE compound document, standing in for a
+        /// truncated or transfer-mangled library file.
+        fn write_corrupt(path: &Path) {
+            std::fs::write(path, b"not an OLE compound document").expect("write corrupt file");
+        }
+
+        // -------------------- bulk_rename --------------------
+
+        #[test]
+        fn bulk_rename_requires_filepath_pattern_and_replacement() {
+            let dir = test_temp_dir();
+            let server = create_test_server(dir.path());
+            let filepath = dir.path().join("Any.PcbLib").to_string_lossy().to_string();
+
+            for (args, want) in [
+                (
+                    json!({ "pattern": "a", "replacement": "b" }),
+                    "Missing required parameter: filepath",
+                ),
+                (
+                    json!({ "filepath": filepath, "replacement": "b" }),
+                    "Missing required parameter: pattern",
+                ),
+                (
+                    json!({ "filepath": filepath, "pattern": "a" }),
+                    "Missing required parameter: replacement",
+                ),
+            ] {
+                let result = server.call_bulk_rename(&args);
+                assert!(result.is_error, "{args} must be rejected");
+                assert_eq!(get_result_text(&result), want);
+            }
+        }
+
+        #[test]
+        fn bulk_rename_rejects_a_path_outside_the_allowed_roots() {
+            let dir = test_temp_dir();
+            let other = test_temp_dir();
+            let server = create_test_server(dir.path());
+            let outside = other.path().join("Out.PcbLib");
+            create_test_pcblib(&outside);
+
+            let result = server.call_bulk_rename(&json!({
+                "filepath": outside.to_string_lossy(),
+                "pattern": "CHIP",
+                "replacement": "PART",
+            }));
+            assert!(result.is_error);
+            assert!(get_result_text(&result).contains("Access denied"));
+        }
+
+        #[test]
+        fn bulk_rename_reports_an_invalid_regex() {
+            // The pattern reaches `Regex::new` verbatim, so a user typo must come
+            // back as a regex error rather than a panic or a silent no-op.
+            let dir = test_temp_dir();
+            let server = create_test_server(dir.path());
+            let path = dir.path().join("Rx.PcbLib");
+            create_test_pcblib(&path);
+
+            let result = server.call_bulk_rename(&json!({
+                "filepath": path.to_string_lossy(),
+                "pattern": "CHIP(",
+                "replacement": "PART",
+            }));
+            assert!(result.is_error);
+            assert!(get_result_text(&result).contains("Invalid regex pattern"));
+        }
+
+        #[test]
+        fn bulk_rename_rejects_an_unsupported_extension() {
+            let dir = test_temp_dir();
+            let server = create_test_server(dir.path());
+
+            let result = server.call_bulk_rename(&json!({
+                "filepath": dir.path().join("Notes.txt").to_string_lossy(),
+                "pattern": "a",
+                "replacement": "b",
+            }));
+            assert!(result.is_error);
+            assert!(get_result_text(&result).contains("Unsupported file type"));
+        }
+
+        #[test]
+        fn bulk_rename_reports_a_corrupt_library_for_both_types() {
+            // PcbLib and SchLib open the library on separate arms.
+            let dir = test_temp_dir();
+            let server = create_test_server(dir.path());
+
+            for name in ["Corrupt.PcbLib", "Corrupt.SchLib"] {
+                let path = dir.path().join(name);
+                write_corrupt(&path);
+                let result = server.call_bulk_rename(&json!({
+                    "filepath": path.to_string_lossy(),
+                    "pattern": "A",
+                    "replacement": "B",
+                }));
+                assert!(result.is_error, "{name} must fail to read");
+                assert!(
+                    get_result_text(&result).contains("Failed to read library"),
+                    "{name} must name the read failure, got: {}",
+                    get_result_text(&result)
+                );
+            }
+        }
+
+        #[test]
+        fn bulk_rename_pcblib_reports_rename_conflicts() {
+            // The SchLib conflict arm is covered by
+            // `bulk_rename_schlib_dry_run_and_conflicts`; the PcbLib arm is a
+            // separate branch. Collapsing both fixtures onto one name is the
+            // conflict.
+            let dir = test_temp_dir();
+            let server = create_test_server(dir.path());
+            let path = dir.path().join("Clash.PcbLib");
+            create_test_pcblib(&path);
+
+            let result = server.call_bulk_rename(&json!({
+                "filepath": path.to_string_lossy(),
+                "pattern": "CHIP_0402|CHIP_0603",
+                "replacement": "CHIP",
+            }));
+            assert!(result.is_error);
+            assert!(
+                get_result_text(&result).contains("Rename conflicts detected"),
+                "got: {}",
+                get_result_text(&result)
+            );
+        }
+
+        // -------------------- list_backups --------------------
+
+        #[test]
+        fn list_backups_requires_a_filepath() {
+            let dir = test_temp_dir();
+            let server = create_test_server(dir.path());
+
+            let result = server.call_list_backups(&json!({}));
+            assert!(result.is_error);
+            assert_eq!(
+                get_result_text(&result),
+                "Missing required parameter: filepath"
+            );
+        }
+
+        #[test]
+        fn list_backups_rejects_a_path_outside_the_allowed_roots() {
+            let dir = test_temp_dir();
+            let other = test_temp_dir();
+            let server = create_test_server(dir.path());
+
+            let result = server.call_list_backups(&json!({
+                "filepath": other.path().join("Out.PcbLib").to_string_lossy(),
+            }));
+            assert!(result.is_error);
+            assert!(get_result_text(&result).contains("Access denied"));
+        }
+
+        #[test]
+        fn list_backups_rejects_a_missing_parent_directory() {
+            // A missing parent must be an error, not an empty backup list — the
+            // latter reads as "nothing to restore" when the truth is "wrong path".
+            //
+            // Note this is caught by `validate_path`, not by the `read_dir` arm
+            // further down: by the time the scan runs, the parent has been proven
+            // to exist. That arm is defensive against a race or a permission
+            // change between the two, which no portable test can stage, so it is
+            // deliberately left uncovered rather than forced.
+            let dir = test_temp_dir();
+            let server = create_test_server(dir.path());
+
+            let result = server.call_list_backups(&json!({
+                "filepath": dir.path().join("gone").join("Lib.PcbLib").to_string_lossy(),
+            }));
+            assert!(result.is_error);
+            assert!(
+                get_result_text(&result).contains("Parent directory"),
+                "got: {}",
+                get_result_text(&result)
+            );
+        }
+
+        // -------------------- repair_library --------------------
+
+        #[test]
+        fn repair_library_requires_a_filepath() {
+            let dir = test_temp_dir();
+            let server = create_test_server(dir.path());
+
+            let result = server.call_repair_library(&json!({}));
+            assert!(result.is_error);
+            assert_eq!(
+                get_result_text(&result),
+                "Missing required parameter: filepath"
+            );
+        }
+
+        #[test]
+        fn repair_library_rejects_a_path_outside_the_allowed_roots() {
+            let dir = test_temp_dir();
+            let other = test_temp_dir();
+            let server = create_test_server(dir.path());
+            let outside = other.path().join("Out.PcbLib");
+            create_test_pcblib(&outside);
+
+            let result = server.call_repair_library(&json!({
+                "filepath": outside.to_string_lossy(),
+            }));
+            assert!(result.is_error);
+            assert!(get_result_text(&result).contains("Access denied"));
+        }
+
+        #[test]
+        fn repair_library_reports_a_corrupt_library() {
+            let dir = test_temp_dir();
+            let server = create_test_server(dir.path());
+            let path = dir.path().join("Corrupt.PcbLib");
+            write_corrupt(&path);
+
+            let result = server.call_repair_library(&json!({
+                "filepath": path.to_string_lossy(),
+            }));
+            assert!(result.is_error);
+            assert!(
+                get_result_text(&result).contains("Failed to read library"),
+                "got: {}",
+                get_result_text(&result)
+            );
+        }
+    }
 }

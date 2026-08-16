@@ -78,12 +78,7 @@ const BY_DESIGN: &[(&str, &str)] = &[
 /// an entry as its fix lands. It is spelled out here rather than left implicit
 /// so the cost is visible in code review instead of being discovered in a
 /// corrupted library.
-const KNOWN_DEFECTS: &[(&str, &str)] = &[(
-    "pinwidetext",
-    "Altium writes a per-symbol PinWideText stream for pins whose text leaves \
-     Windows-1252 — the icon-storage container framing, one zlib entry per pin \
-     ordinal; we neither read nor write it, so a read-modify-write drops it",
-)];
+const KNOWN_DEFECTS: &[(&str, &str)] = &[];
 
 /// The five fixture symbols `DelphiScript` mangled before Altium saw them.
 ///

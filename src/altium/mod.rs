@@ -721,4 +721,42 @@ mod tests {
         assert_ne!(result, "RESISTOR");
         assert!(result.len() <= MAX_OLE_NAME_LEN);
     }
+
+    #[test]
+    fn an_empty_parameter_value_decodes_without_a_round_trip() {
+        // The decode narrows through Windows-1252 and back; an empty value has
+        // nothing to narrow and must not become a lone replacement character.
+        assert_eq!(decode_utf8_param_value(""), "");
+        // A value that really is UTF-8 bytes widened by the ANSI read comes
+        // back as the text it was.
+        assert_eq!(decode_utf8_param_value("abc"), "abc");
+    }
+
+    #[test]
+    fn ansi_folding_declines_text_that_was_never_widened() {
+        // ASCII cannot be the widened form of anything, so there is nothing to
+        // fold and the caller keeps what it had.
+        assert_eq!(fold_ansi_widened("plain ascii"), None);
+        assert_eq!(fold_ansi_widened(""), None);
+
+        // Real Unicode that no single-byte page can encode is likewise left
+        // alone rather than mangled into a guess.
+        assert_eq!(fold_ansi_widened("\u{7535}\u{963B}"), None);
+
+        // The golden's shape: the name's UTF-8 bytes read back through an ANSI
+        // code page. Folding them through that same page recovers the real
+        // text. Built with the real decoder rather than by hand — Windows-1252
+        // and Latin-1 disagree over 0x80-0x9F, and these bytes land there.
+        let real = "\u{7535}\u{963B}";
+        let widened = decode_windows1252(real.as_bytes());
+        assert_eq!(fold_ansi_widened(&widened).as_deref(), Some(real));
+    }
+
+    #[test]
+    fn section_keys_from_a_stream_with_no_block_are_empty() {
+        // A stream too short to frame a block yields no keys rather than
+        // reading past its end.
+        assert!(parse_section_keys(&[]).is_empty());
+        assert!(parse_section_keys(&[1, 2, 3]).is_empty());
+    }
 }

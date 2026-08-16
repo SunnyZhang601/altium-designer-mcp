@@ -397,6 +397,56 @@ impl Parameter {
 mod tests {
     use super::{Parameter, TextFrame};
 
+    // ==================== serde defaults =====================================
+    //
+    // These fire when a caller's JSON omits the field, which is the normal
+    // case: the writer omits anything at its default, so a read-modify-write
+    // round-trip relies on the value coming back on the way in. A wrong
+    // default is silent — the record deserialises fine and writes different
+    // bytes than it was read with.
+
+    #[test]
+    fn an_omitted_label_or_text_field_takes_altiums_own_default() {
+        use super::{Label, Text, TextJustification};
+
+        let label: Label = serde_json::from_str(r#"{"x":0,"y":0,"text":"L"}"#)
+            .expect("a minimal label should deserialise");
+        // Font id 0 is not a font; Altium's first is 1.
+        assert_eq!(label.font_id, 1);
+        // SchLib anchors bottom-left, unlike the shared enum's MiddleCenter —
+        // defaulting to the shared value would shift every label on save.
+        assert_eq!(label.justification, TextJustification::BottomLeft);
+
+        let text: Text = serde_json::from_str(r#"{"x":0,"y":0,"text":"T"}"#)
+            .expect("a minimal text should deserialise");
+        assert_eq!(text.font_id, 1);
+        assert_eq!(text.justification, TextJustification::BottomLeft);
+    }
+
+    #[test]
+    fn an_omitted_text_frame_field_takes_the_from_scratch_record_value() {
+        let frame: TextFrame = serde_json::from_str(r#"{"x1":0,"y1":0,"x2":10,"y2":5,"text":"F"}"#)
+            .expect("a minimal text frame should deserialise");
+
+        assert_eq!(frame.font_id, 1);
+        // Altium writes these on a from-scratch frame, so omitting them must
+        // reproduce them rather than emit black, left-aligned and zero-margin.
+        assert_eq!(frame.area_color, 16_777_215, "white");
+        assert_eq!(frame.alignment, 1, "centre");
+        assert!((frame.text_margin - 0.000_05).abs() < 1e-12);
+    }
+
+    #[test]
+    fn an_omitted_parameter_flag_defaults_to_auto_positioned() {
+        let param: Parameter = serde_json::from_str(r#"{"name":"Value","value":"1k"}"#)
+            .expect("a minimal parameter should deserialise");
+        assert_eq!(param.font_id, 1);
+        // Stored inverted as `NotAutoPosition=T`, so an authored library omits
+        // the key while auto-positioning is on. Defaulting to `false` here
+        // would make every round-tripped parameter gain that key.
+        assert!(param.auto_position);
+    }
+
     #[test]
     fn text_frame_new_stores_geometry_text_and_defaults() {
         let tf = TextFrame::new(-10, -5, 10, 5, "hello");

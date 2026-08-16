@@ -11,22 +11,10 @@ record). The specialised worklists stay the single source of truth for their are
 
 ## A. Format / fidelity residue
 
-- [ ] **Footprint-model record fidelity (`SchLib` RECORD=45)** — three defects in
-      `encode_footprint_model`: `IsCurrent` is written as `index == 0` instead of the read
-      `model.is_current` (a symbol whose current footprint is the second model gets flipped);
-      `DatafileCount=1` is hardcoded (multi-datafile models unsupported); `UniqueID` is
-      regenerated every save instead of round-tripped.
-- [ ] **Audit `VOLATILE_KEYS` in `tests/golden_fidelity.rs`** — every entry excuses a value
-      from comparison; several may be identities Altium actually keeps stable across saves
-      (component `UniqueID`, `ITEMGUID`/`REVISIONGUID`) that we regenerate instead of
-      preserving. Settle each with a double-resave observation, then preserve the stable ones.
 - [ ] **Pad binary-block fidelity** — the golden fidelity diff compares parameter text, not
       the pad's binary geometry blocks. Byte-diff the golden's pads against a rewrite to
       settle the two old RE findings: oblong/oval SMD pads routing to the 651 size/shape
-      block, and the multi-entry full-stack tail (count > 1).
-- [ ] **`IDENTIFIER` codepoint list (`ComponentBody`)** — written empty; a non-empty value
-      (comma-separated codepoints) has no fixture. UI-only; candidate for the next
-      `manual/` authoring session.
+      block, and the multi-entry full-stack tail (count > 1). **Last §A item.**
 
 ## B. Coverage (issue #302 owns the detail)
 

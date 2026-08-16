@@ -36,16 +36,15 @@ fn sample(name: &str) -> PathBuf {
 /// The per-layer GUID caches are *not* here. They are stable now that the
 /// library's own parameter block is replayed byte-for-byte, and leaving them
 /// checked is what proves the replay happened.
-const VOLATILE_KEYS: &[&str] = &[
-    "UNIQUEID",
-    "ITEMGUID",
-    "REVISIONGUID",
-    "FILENAME",
-    "DATE",
-    "TIME",
-    "MODELID",
-    "MODEL.CHECKSUM",
-];
+/// Audited against a UI double-save (`identifier.PcbLib` saved twice from one
+/// unchanged in-memory state, 2026-08-16): `MODELID`, `MODEL.CHECKSUM`,
+/// `ITEMGUID` and `REVISIONGUID` are all STABLE per save — the first two are
+/// per-body constants Altium round-trips, the last two are literally empty in
+/// every library-authored footprint — so they are compared now, not excused.
+/// What remains: the save timestamp, the absolute path of the file being
+/// written, and record `UNIQUEID`s our `SchLib` writer still regenerates where
+/// no read value exists (header + RECORD=45).
+const VOLATILE_KEYS: &[&str] = &["UNIQUEID", "FILENAME", "DATE", "TIME"];
 
 fn is_volatile_key(key: &str) -> bool {
     // A %UTF8% twin's content depends on the ANSI code page of the machine

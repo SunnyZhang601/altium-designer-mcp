@@ -138,20 +138,11 @@ impl PcbLib {
                 // they referenced, so the latter don't linger in self.models as
                 // orphans, which would bloat the library on every save.
                 (true, true, true) => {
-                    tracing::debug!(
-                        footprint = %footprint.name,
-                        old_bodies = footprint.component_bodies.len(),
-                        "Re-embedding model_3d from new explicit path"
+                    Self::drop_stale_bodies(
+                        &footprint.name.clone(),
+                        &mut footprint.component_bodies,
+                        &mut self.models,
                     );
-                    let stale: std::collections::HashSet<String> = footprint
-                        .component_bodies
-                        .iter()
-                        .filter(|cb| cb.embedded)
-                        .map(|cb| cb.model_id.to_lowercase())
-                        .collect();
-                    footprint.component_bodies.clear();
-                    self.models
-                        .retain(|m| !stale.contains(&m.id.to_lowercase()));
                 }
                 // Fresh embed: new footprint, file present.
                 (false, _, true) => {}
@@ -170,6 +161,11 @@ impl PcbLib {
                 .push(EmbeddedModel::new(&guid, &filename, step_data));
             footprint.component_bodies.push(ComponentBody {
                 model_id: guid,
+                identifier: String::new(),
+                texture_center_x: None,
+                texture_center_y: None,
+                texture_size_x: None,
+                texture_size_y: None,
                 model_name: filename,
                 embedded: true,
                 rotation_x: 0.0,
@@ -218,6 +214,28 @@ impl PcbLib {
     /// - Truncates longer names and adds unique suffixes to avoid collisions
     ///
     /// The full footprint name is still stored in the PATTERN field.
+    /// Drops a footprint's embedded bodies and the models they referenced,
+    /// ahead of a re-embed from a new explicit path — otherwise the old models
+    /// linger in `self.models` as orphans and bloat the library on every save.
+    fn drop_stale_bodies(
+        name: &str,
+        bodies: &mut Vec<ComponentBody>,
+        models: &mut Vec<EmbeddedModel>,
+    ) {
+        tracing::debug!(
+            footprint = %name,
+            old_bodies = bodies.len(),
+            "Re-embedding model_3d from new explicit path"
+        );
+        let stale: std::collections::HashSet<String> = bodies
+            .iter()
+            .filter(|cb| cb.embedded)
+            .map(|cb| cb.model_id.to_lowercase())
+            .collect();
+        bodies.clear();
+        models.retain(|m| !stale.contains(&m.id.to_lowercase()));
+    }
+
     /// Writes embedded 3D models to `/Library/Models/` storage.
     ///
     /// Creates:

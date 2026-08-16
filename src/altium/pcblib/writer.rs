@@ -1610,6 +1610,17 @@ fn resolve_body_outline(body: &ComponentBody, footprint: &Footprint) -> Vec<(f64
     ]
 }
 
+/// Encodes a body identifier as its on-disk form: a comma-separated list of
+/// decimal Unicode code points (empty stays empty). Inverse of the reader's
+/// `decode_identifier`.
+fn encode_identifier(identifier: &str) -> String {
+    identifier
+        .chars()
+        .map(|c| (c as u32).to_string())
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
 /// Builds the parameter string for a `ComponentBody`.
 fn build_component_body_params(body: &ComponentBody) -> String {
     // A body with no STEP model (no filename, not embedded) is a generic
@@ -1661,25 +1672,49 @@ fn build_component_body_params(body: &ComponentBody) -> String {
     params.push("ARCRESOLUTION=0.5mil".to_string());
     params.push(format!("BODYCOLOR3D={}", body.body_color_3d));
     params.push(format!("BODYOPACITY3D={:.3}", body.body_opacity_3d));
-    // IDENTIFIER is deferred: AltiumSharp stores it as a comma-separated codepoint
-    // list, so a plain-string round-trip would write a file Altium misreads. Keep
-    // the empty literal hard-coded (empty -> empty is oracle-safe).
-    params.push("IDENTIFIER=".to_string());
+    // IDENTIFIER is a comma-separated list of decimal Unicode code points
+    // (manual/identifier.PcbLib: `µΩ电` = `181,937,30005`); an empty
+    // identifier emits the bare key, as both authoring routes do.
+    params.push(format!(
+        "IDENTIFIER={}",
+        encode_identifier(&body.identifier)
+    ));
     params.push("TEXTURE=".to_string());
-    params.push("TEXTURECENTERX=0mil".to_string());
-    params.push("TEXTURECENTERY=0mil".to_string());
-    params.push("TEXTURESIZEX=0mil".to_string());
-    params.push("TEXTURESIZEY=0mil".to_string());
+    // The texture values round-trip verbatim when read (the UI writes
+    // 0.0001mil sizes where a scripted body carries 0mil); a from-scratch
+    // body emits the scripted-body defaults.
+    let texture = |value: &Option<String>, default: &str| {
+        value.clone().unwrap_or_else(|| default.to_string())
+    };
+    params.push(format!(
+        "TEXTURECENTERX={}",
+        texture(&body.texture_center_x, "0mil")
+    ));
+    params.push(format!(
+        "TEXTURECENTERY={}",
+        texture(&body.texture_center_y, "0mil")
+    ));
+    params.push(format!(
+        "TEXTURESIZEX={}",
+        texture(&body.texture_size_x, "0mil")
+    ));
+    params.push(format!(
+        "TEXTURESIZEY={}",
+        texture(&body.texture_size_y, "0mil")
+    ));
     params.push("TEXTUREROTATION= 0.00000000000000E+0000".to_string());
 
-    // Model reference — only when there IS a model. The golden's extruded
-    // bodies (BODY3D, PRIMPROPS) end at TEXTUREROTATION with no MODEL keys at
-    // all — no MODELID, no MODEL.MODELTYPE, not even an EXTRUDED Z range: the
-    // extrusion derives from STANDOFFHEIGHT/OVERALLHEIGHT. We used to append
-    // the whole group anyway, inventing a fresh MODELID GUID per save, so an
-    // extruded body's record changed on every write and grew keys Altium never
-    // stores. Its STEP-backed EMBSTEP body carries exactly the group below.
-    if !extruded {
+    // Model reference — present exactly when the body HAS a model identity.
+    // Both authoring routes are golden-pinned: a script-authored extruded body
+    // (BODY3D, PRIMPROPS) has no MODELID and ends at TEXTUREROTATION with no
+    // MODEL keys at all, while a UI-authored extruded body
+    // (manual/identifier.PcbLib) carries a MODELID and the full group with
+    // MODEL.MODELTYPE=0 plus the EXTRUDED Z range (standoff..overall) and no
+    // MODELSOURCE. A model-backed body (EMBSTEP) uses MODELTYPE=1 plus
+    // MODEL.MODELSOURCE=Undefined and no EXTRUDED range. Inventing a MODELID
+    // for a body that has none is what #377 removed; a body that has one
+    // keeps its group whatever its type.
+    if !body.model_id.is_empty() {
         params.push(format!("MODELID={}", body.model_id));
         // Round-trip the stored checksum verbatim.
         params.push(format!("MODEL.CHECKSUM={}", body.model_checksum));
@@ -1695,8 +1730,20 @@ fn build_component_body_params(body: &ComponentBody) -> String {
         params.push(format!("MODEL.3D.ROTY={:.3}", body.rotation_y));
         params.push(format!("MODEL.3D.ROTZ={:.3}", body.rotation_z));
         params.push(format!("MODEL.3D.DZ={}", format_mil_coord(body.z_offset)));
-        params.push("MODEL.MODELTYPE=1".to_string());
-        params.push("MODEL.MODELSOURCE=Undefined".to_string());
+        if extruded {
+            params.push("MODEL.MODELTYPE=0".to_string());
+            params.push(format!(
+                "MODEL.EXTRUDED.MINZ={}",
+                format_mil_coord(body.standoff_height)
+            ));
+            params.push(format!(
+                "MODEL.EXTRUDED.MAXZ={}",
+                format_mil_coord(body.overall_height)
+            ));
+        } else {
+            params.push("MODEL.MODELTYPE=1".to_string());
+            params.push("MODEL.MODELSOURCE=Undefined".to_string());
+        }
     }
 
     // Re-emit any unmodelled keys captured on read, verbatim and in read order, so

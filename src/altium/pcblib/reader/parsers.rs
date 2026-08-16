@@ -1456,6 +1456,53 @@ pub(super) fn parse_fill(data: &[u8], offset: usize) -> ParseResult<Fill> {
 /// A `ComponentBody` is a single size-prefixed block (matching `AltiumSharp` and
 /// the `BODY_3D` golden libraries): the layer/flags header, a C-string
 /// parameter block, then the 2D outline polygon — all within the one block.
+/// The body's decoded `IDENTIFIER` plus its four verbatim texture values
+/// (centre X/Y, size X/Y). IDENTIFIER is a comma-separated list of decimal
+/// Unicode code points (settled by `manual/identifier.PcbLib`: `µΩ电` =
+/// `181,937,30005`), decoded here and re-encoded symmetrically by the writer.
+/// The texture values round-trip verbatim: the UI writes
+/// `TEXTURESIZEX=0.0001mil` where a scripted body carries `0mil`, so they
+/// cannot be derived; `None` (absent key) lets the writer emit the
+/// scripted-body default.
+fn parse_body_identity_params(
+    params: &std::collections::HashMap<String, String>,
+) -> (String, [Option<String>; 4]) {
+    let identifier = params
+        .get("IDENTIFIER")
+        .map(|v| decode_identifier(v))
+        .unwrap_or_default();
+    let texture = |key: &str| params.get(key).cloned();
+    (
+        identifier,
+        [
+            texture("TEXTURECENTERX"),
+            texture("TEXTURECENTERY"),
+            texture("TEXTURESIZEX"),
+            texture("TEXTURESIZEY"),
+        ],
+    )
+}
+
+/// Decodes an `IDENTIFIER` value — comma-separated decimal Unicode code
+/// points — into the string it names. Empty input or any unparsable entry
+/// yields an empty identifier (never a half-decoded one).
+fn decode_identifier(value: &str) -> String {
+    if value.is_empty() {
+        return String::new();
+    }
+    value
+        .split(',')
+        .map(|part| {
+            part.trim()
+                .parse::<u32>()
+                .ok()
+                .and_then(char::from_u32)
+                .ok_or(())
+        })
+        .collect::<Result<String, ()>>()
+        .unwrap_or_default()
+}
+
 /// The `MODEL.CHECKSUM` value, round-tripped verbatim (0 when absent).
 fn parse_model_checksum(params: &std::collections::HashMap<String, String>) -> i64 {
     params
@@ -1464,6 +1511,7 @@ fn parse_model_checksum(params: &std::collections::HashMap<String, String>) -> i
         .unwrap_or(0)
 }
 
+#[allow(clippy::too_many_lines)] // one straight-line read per body field, like encode_data_stream
 pub(super) fn parse_component_body(data: &[u8], offset: usize) -> ParseResult<ComponentBody> {
     // The single block holds the header, parameters and outline.
     let (block0, current) = read_block(data, offset).ok_or_else(|| {
@@ -1505,15 +1553,17 @@ pub(super) fn parse_component_body(data: &[u8], offset: usize) -> ParseResult<Co
             .and_then(|v| v.parse::<f64>().ok())
             .unwrap_or(0.0)
     };
-    let rotation_x = rotation("MODEL.3D.ROTX");
-    let rotation_y = rotation("MODEL.3D.ROTY");
-    let rotation_z = rotation("MODEL.3D.ROTZ");
+    let [rotation_x, rotation_y, rotation_z] =
+        ["MODEL.3D.ROTX", "MODEL.3D.ROTY", "MODEL.3D.ROTZ"].map(rotation);
 
     let height = |key: &str| parse_mil_value(params.get(key).map(String::as_str));
-    let z_offset = height("MODEL.3D.DZ");
-    let standoff_height = height("STANDOFFHEIGHT");
-    let cavity_height = height("CAVITYHEIGHT");
-    let overall_height = height("OVERALLHEIGHT");
+    let [z_offset, standoff_height, cavity_height, overall_height] = [
+        "MODEL.3D.DZ",
+        "STANDOFFHEIGHT",
+        "CAVITYHEIGHT",
+        "OVERALLHEIGHT",
+    ]
+    .map(height);
 
     // MODEL.CHECKSUM is a plain integer. Round-trip it verbatim
     // (0 = default/valid) — it is not recomputed from the model bytes here.
@@ -1578,7 +1628,14 @@ pub(super) fn parse_component_body(data: &[u8], offset: usize) -> ParseResult<Co
     let model_2d_x = parse_mil_value(params.get("MODEL.2D.X").map(String::as_str));
     let model_2d_y = parse_mil_value(params.get("MODEL.2D.Y").map(String::as_str));
 
+    let (identifier, textures) = parse_body_identity_params(&params);
+
     let body = ComponentBody {
+        identifier,
+        texture_center_x: textures[0].clone(),
+        texture_center_y: textures[1].clone(),
+        texture_size_x: textures[2].clone(),
+        texture_size_y: textures[3].clone(),
         model_id,
         model_name,
         embedded,

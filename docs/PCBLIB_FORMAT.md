@@ -808,7 +808,7 @@ snap-point or reserved blocks, and there is no `MODEL.SNAPCOUNT` parameter.
 | `BODYPROJECTION` | Body projection | `0` |
 | `BODYCOLOR3D` | 3D body colour | `8421504` |
 | `BODYOPACITY3D` | 3D body opacity | `1.000` |
-| `IDENTIFIER` | Identifier (comma-separated codepoint list — deferred, emitted empty) | `` |
+| `IDENTIFIER` | Body name as comma-separated decimal Unicode code points (`µΩ电` = `181,937,30005`; empty stays empty) | `` |
 | `TEXTURE`, `TEXTURECENTERX/Y`, `TEXTURESIZEX/Y`, `TEXTUREROTATION` | Texture fields (fixed defaults) | |
 | `MODELID` | Model GUID (model-backed bodies ONLY) | `{GUID}` |
 | `MODEL.CHECKSUM` | Model integrity checksum (round-tripped verbatim, see below) | `0` |
@@ -821,12 +821,15 @@ snap-point or reserved blocks, and there is no `MODEL.SNAPCOUNT` parameter.
 | `MODEL.MODELTYPE` | `1` = model-backed (STEP) | |
 | `MODEL.MODELSOURCE` | Model source | `Undefined` |
 
-**Extruded vs model-backed:** a body with no model file (empty `MODEL.NAME`, not embedded) is a
-generic *extruded* body, and its parameter string **ends at `TEXTUREROTATION` — no `MODEL.*`
-keys at all**, `MODELID` included: the golden's extruded bodies (`BODY3D`, `PRIMPROPS`) carry
-none, and the extrusion derives from `STANDOFFHEIGHT`/`OVERALLHEIGHT`. A model-backed body
-carries the whole `MODEL.*` group above with `MODEL.MODELTYPE=1`. `ISSHAPEBASED` stays `FALSE`
-in both cases.
+**Extruded vs model-backed — and the MODEL group's presence:** the group is present exactly
+when the body carries a `MODELID`, which depends on the authoring route. A *script-authored*
+extruded body (the golden's `BODY3D`, `PRIMPROPS`) has none and ends at `TEXTUREROTATION`; a
+*UI-authored* extruded body (`manual/identifier.PcbLib`) carries a stable `MODELID` and the
+full group with `MODEL.MODELTYPE=0`, `MODEL.EXTRUDED.MINZ/MAXZ` (standoff..overall), real
+`MODEL.2D.X/Y` placement, and no `MODELSOURCE` — plus `TEXTURESIZEX/Y=0.0001mil` where the
+scripted route writes `0mil` (both round-trip verbatim). A model-backed body (`EMBSTEP`) uses
+`MODEL.MODELTYPE=1` plus `MODEL.MODELSOURCE=Undefined` and no `EXTRUDED` range. `ISSHAPEBASED`
+stays `FALSE` throughout.
 
 Unmodelled keys captured on read are re-emitted verbatim after the canonical set (with canonical
 duplicates dropped) so read-modify-write round-trips.

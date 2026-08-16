@@ -51,11 +51,11 @@ fn pin_by_designator<'a>(symbol: &'a Symbol, designator: &str) -> &'a Pin {
 fn samples_schlib_structure() {
     let lib = SchLib::open(sample("symbols.SchLib")).expect("failed to open symbols.SchLib");
 
-    // Twenty-seven Altium-authored symbols: fifteen per-primitive-family symbols
-    // plus twelve coverage-enrichment symbols (SHAPESTYLE, LOCKFLAGS, JUSTIFY,
-    // FRACPINS, BEZIERSYM, PIESYM, IMAGESYM, TEXTFRAMESYM, EMBIMGSYM, SWAPPIN,
-    // FRACSHAPES, DISPMODE) added to GenerateSamples.pas and regenerated on-site.
-    assert_eq!(lib.len(), 28, "expected exactly twenty-eight symbols");
+    // Fifteen per-primitive-family symbols plus the coverage-enrichment symbols
+    // (SHAPESTYLE, SHAPESTYLE2, SHAPECOLOR, LOCKFLAGS, JUSTIFY, FRACPINS,
+    // BEZIERSYM, PIESYM, IMAGESYM, TEXTFRAMESYM, EMBIMGSYM, SWAPPIN, FRACSHAPES,
+    // DISPMODE) added to GenerateSamples.pas and regenerated on-site.
+    assert_eq!(lib.len(), 30, "expected exactly thirty symbols");
 
     let names = lib.names();
     for expected in [
@@ -86,6 +86,8 @@ fn samples_schlib_structure() {
         "SWAPPIN",
         "FRACSHAPES",
         "DISPMODE",
+        "SHAPECOLOR",
+        "SHAPESTYLE2",
     ] {
         assert!(
             names.iter().any(|n| n == expected),
@@ -727,6 +729,89 @@ fn samples_schlib_shapestyle() {
     // persist it on a library round-rect (reads back false), so it is not testable.
     assert_eq!(sym.ellipses.len(), 1, "SHAPESTYLE has one ellipse");
     assert!(sym.ellipses[0].transparent, "the ellipse is transparent");
+}
+
+#[test]
+fn samples_schlib_shape_colours() {
+    let lib = SchLib::open(sample("symbols.SchLib")).expect("failed to open symbols.SchLib");
+    let sym = lib.get("SHAPECOLOR").expect("SHAPECOLOR symbol not found");
+
+    // Every other symbol authors Color := $000000, which is Altium's default and
+    // is therefore omitted from the record — so without this symbol no shape
+    // parser's colour arm is ever exercised against a real file. SHAPECOLOR
+    // carries one of each shape in a DISTINCT colour, so a mismatched read
+    // cannot pass by picking up a neighbour's value.
+    assert_eq!(sym.lines.len(), 1, "SHAPECOLOR has one line");
+    assert_eq!(sym.lines[0].color, 255, "line is red ($0000FF)");
+
+    assert_eq!(sym.rectangles.len(), 1, "SHAPECOLOR has one rectangle");
+    assert_eq!(
+        sym.rectangles[0].line_color, 65280,
+        "rectangle border is green"
+    );
+    assert_eq!(sym.rectangles[0].fill_color, 16_776_960, "rectangle fill");
+    assert!(sym.rectangles[0].filled, "rectangle is solid");
+
+    assert_eq!(sym.round_rects.len(), 1, "SHAPECOLOR has one round rect");
+    assert_eq!(
+        sym.round_rects[0].line_color, 16_711_680,
+        "round rect border is blue"
+    );
+
+    assert_eq!(sym.arcs.len(), 1, "SHAPECOLOR has one arc");
+    assert_eq!(sym.arcs[0].color, 65535, "arc is yellow");
+    // A non-zero StartAngle: every other arc in the library starts at 0, which
+    // Altium omits, leaving the start-angle read path uncovered.
+    assert!(approx_eq(sym.arcs[0].start_angle, 45.0), "arc start angle");
+    assert!(approx_eq(sym.arcs[0].end_angle, 315.0), "arc end angle");
+
+    assert_eq!(sym.ellipses.len(), 1, "SHAPECOLOR has one ellipse");
+    assert_eq!(
+        sym.ellipses[0].line_color, 16_711_935,
+        "ellipse border is magenta"
+    );
+
+    assert_eq!(sym.polylines.len(), 1, "SHAPECOLOR has one polyline");
+    assert_eq!(sym.polylines[0].color, 8_421_376, "polyline is teal");
+
+    assert_eq!(sym.polygons.len(), 1, "SHAPECOLOR has one polygon");
+    assert_eq!(
+        sym.polygons[0].line_color, 128,
+        "polygon border is dark red"
+    );
+
+    assert_eq!(sym.pies.len(), 1, "SHAPECOLOR has one pie");
+    assert_eq!(sym.pies[0].line_color, 32896, "pie border is olive");
+    assert_eq!(sym.pies[0].fill_color, 42495, "pie fill");
+
+    assert_eq!(sym.beziers.len(), 1, "SHAPECOLOR has one bezier");
+    assert_eq!(sym.beziers[0].color, 8_404_992, "bezier colour");
+    assert_eq!(sym.beziers[0].line_width, 2, "bezier is eMedium (2)");
+
+    let label = sym
+        .labels
+        .iter()
+        .find(|l| l.text == "COLOURED")
+        .expect("SHAPECOLOR label not found");
+    assert_eq!(label.color, 4_227_327, "label is orange");
+}
+
+#[test]
+fn samples_schlib_polyline_styling() {
+    let lib = SchLib::open(sample("symbols.SchLib")).expect("failed to open symbols.SchLib");
+    let sym = lib
+        .get("SHAPESTYLE2")
+        .expect("SHAPESTYLE2 symbol not found");
+
+    // A polyline carries four styling properties no other primitive family has,
+    // and AD24 persists all four. Authored as dashed with an open arrow at the
+    // start, a solid arrow at the end, and the large end-shape size.
+    assert_eq!(sym.polylines.len(), 1, "SHAPESTYLE2 has one polyline");
+    let pl = &sym.polylines[0];
+    assert_eq!(pl.line_style, 1, "dashed");
+    assert_eq!(pl.start_line_shape, 1, "start is an arrow");
+    assert_eq!(pl.end_line_shape, 2, "end is a solid arrow");
+    assert_eq!(pl.line_shape_size, 3, "end shapes are eLarge");
 }
 
 #[test]

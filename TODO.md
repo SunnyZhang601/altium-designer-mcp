@@ -44,9 +44,11 @@ record). The specialised worklists stay the single source of truth for their are
 ## D. Release & distribution (no release exists yet)
 
 - [ ] Cut **v0.1.0 as a pre-release** once §A above is complete (decision 2026-08-16) —
-      the 99% coverage climb continues calmly afterwards and stops gating the release.
-      **Maintainer triggers it personally.** Tag-day steps: stamp the changelog
+      **maintainer triggers it personally**. Tag-day steps: stamp the changelog
       heading/date, `git tag v0.1.0`, push, watch the Release workflow, verify artefacts.
+- [ ] **v1.0.0 is the real release**, gated on ALL features built and **99% test
+      coverage** (production metric, #381). The climb between the two happens calmly —
+      neither gate blocks the other's work.
 - [ ] Consider a `.dxt` Claude Desktop extension for one-click install (pattern from
       coffeenmusic/altium-mcp).
 

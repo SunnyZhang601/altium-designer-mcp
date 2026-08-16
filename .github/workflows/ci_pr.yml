@@ -195,10 +195,18 @@ jobs:
                     rust-coverage-${{ runner.os }}-${{ steps.rust-version.outputs.version }}-
 
             - name: Generate coverage report (lcov)
-              run: cargo llvm-cov --all-features --workspace --lcov --output-path lcov.info
+              # main.rs is excluded from the metric, not from testing: the whole
+              # mcp_e2e suite drives the shipped binary through it, but
+              # instrumentation cannot see across the process boundary, so its
+              # lines read as uncovered no matter how tested they are. Everything
+              # else counts, including in-file #[cfg(test)] modules (their only
+              # uncovered lines are assertion-failure branches — noise that biases
+              # the number DOWN, which is the safe direction). Integration files
+              # under tests/ were never part of the report.
+              run: cargo llvm-cov --all-features --workspace --lcov --output-path lcov.info --ignore-filename-regex '(^|[/\\])main\.rs$'
 
             - name: Generate coverage summary
-              run: cargo llvm-cov report --summary-only
+              run: cargo llvm-cov report --summary-only --ignore-filename-regex '(^|[/\\])main\.rs$'
 
             # The token is mandatory (see ci_main.yml). Dependabot cannot read
             # secrets, so its PRs would fail the upload — skip them instead.

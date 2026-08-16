@@ -30,37 +30,29 @@ fn sample(name: &str) -> PathBuf {
 }
 
 /// Keys whose value is expected to differ on every write and carries no
-/// fidelity meaning: identities Altium regenerates, and the absolute path of
-/// the file being written.
+/// fidelity meaning: identities Altium regenerates, the timestamp of the save
+/// itself, and the absolute path of the file being written.
+///
+/// The per-layer GUID caches are *not* here. They are stable now that the
+/// library's own parameter block is replayed byte-for-byte, and leaving them
+/// checked is what proves the replay happened.
 const VOLATILE_KEYS: &[&str] = &[
     "UNIQUEID",
     "ITEMGUID",
     "REVISIONGUID",
     "FILENAME",
+    "DATE",
+    "TIME",
     "MODELID",
     "MODEL.CHECKSUM",
-    "VP.HX",
 ];
 
-/// Key *prefix/suffix* patterns whose values are regenerated identities: the
-/// per-layer GUID caches Altium rewrites on every save.
 fn is_volatile_key(key: &str) -> bool {
-    if VOLATILE_KEYS.contains(&key) {
-        return true;
-    }
-    (key.starts_with("V9_CACHE_LAYER")
-        || key.starts_with("V9_STACK_LAYER")
-        || key.starts_with("LAYER_V8_"))
-        && key.ends_with("ID")
+    VOLATILE_KEYS.contains(&key)
 }
 
 /// Differences that are correct by design and will not change.
 const BY_DESIGN: &[(&str, &str)] = &[
-    (
-        "library/data",
-        "holds the absolute source path and library-wide identities, both \
-         regenerated on write",
-    ),
     (
         "library/padvialibrary/data",
         "an empty pad/via template cache with a fresh library id; no template is \
@@ -93,12 +85,11 @@ const KNOWN_DEFECTS: &[(&str, &str)] = &[
          rather than the stored one",
     ),
     (
-        "Library:",
-        "our writer rebuilds the library layer stack rather than preserving it:          mechanical layers are renamed to their alias names (Mechanical 2 -> Top          Assembly), disabled layers are enabled, USEDBYPRIMS is recomputed and          LAYERSET1LAYERS gains every layer we know about. A library with custom          mechanical layer names loses them on a read-modify-write",
-    ),
-    (
         "sectionkeys",
-        "Altium emits a SectionKeys stream mapping LibRef -> storage name for          every component whose name does not fit the CFB 31-character cap once          encoded; we neither read nor write it, so those components lose their          real name and keep only the truncated storage name",
+        "Altium emits a SectionKeys stream mapping LibRef -> storage name for \
+         every component whose name does not fit the CFB 31-character cap once \
+         encoded; we neither read nor write it, so those components lose their \
+         real name and keep only the truncated storage name",
     ),
     (
         "INDEXINSHEET",

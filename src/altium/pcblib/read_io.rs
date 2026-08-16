@@ -266,10 +266,14 @@ impl PcbLib {
             return;
         };
 
-        // Skip the leading parameter block, then read the component count.
-        let Some((_, mut offset)) = read_block(&data, 0) else {
+        // Keep the leading parameter block verbatim — it is the library's own
+        // layer stack and board configuration, which the writer replays rather
+        // than rebuilding (see `LibraryMetadata::library_params`) — then read
+        // the component count that follows it.
+        let Some((params, mut offset)) = read_block(&data, 0) else {
             return;
         };
+        metadata.library_params = Some(params.strip_suffix(&[0x00]).unwrap_or(params).to_vec());
         let Some(comp_count) = read_u32_le(&data, offset) else {
             return;
         };

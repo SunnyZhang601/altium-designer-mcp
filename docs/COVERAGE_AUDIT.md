@@ -10,35 +10,48 @@
 
 ## Outstanding
 
-**Per-primitive GUIDs are dropped on read (`PcbLib`).** Every footprint storage carries a
-`PrimitiveGuids` stream that the reader ignores entirely, so a read-modify-write discards
-Altium's stable identity for every pad, via, track, arc, region, text and body in the
-library. `write_io.rs` calls it "the editor's optional per-primitive GUID cache", but every
-Altium-authored footprint in the golden has one.
+Read-modify-write fidelity is enforced by `tests/golden_fidelity.rs`, which reads each
+golden, writes it back and diffs the OLE streams and every parameter block. Anything it
+still loses is listed in that test's `KNOWN_DEFECTS` and described here; the two lists are
+the same list, so an entry leaves both together.
 
-The format is fixed-width and fully decoded:
+**`UniqueIDPrimitiveInformation` is not read, so it is not written back (`PcbLib`).** Every
+footprint with pads carries one, keyed by primitive index:
 
 ```text
-PrimitiveGuids/Header : u32   record count
-PrimitiveGuids/Data   : count x 24 bytes
-                        [object_kind : u32][index_within_kind : u32][guid : 16 bytes, LE]
+UniqueIDPrimitiveInformation/Header : u32   record count
+UniqueIDPrimitiveInformation/Data   : count x [block_len:4]["|PRIMITIVEINDEX=n|
+                                      PRIMITIVEOBJECTID=Pad|UNIQUEID=…" + 0x00]
 ```
 
-`object_kind` is Altium's object id (1 arc, 2 pad, 3 via, 5 text, 89 region, 90 component
-body) and `index_within_kind` is the primitive's position among its own kind. Kind 85
-appears exactly once per footprint at index 0 — the footprint record itself. Counts match:
-`PRIMPROPS` has four regions, one body, two texts, one via and one pad, and its header
-reads 10.
+`PRIMITIVEINDEX` counts across the footprint's primitives, not within a kind, and the
+golden's indices are not contiguous (`LOCKFLAGS_PCB` runs 0–5, 7, 8), so the mapping has to
+be replayed rather than recomputed. Our writer emits the stream only when a primitive
+carries a unique id, and nothing ever populates one, so the streams vanish.
 
-Closing it needs a stream reader, a per-primitive field to hold the GUID, and a writer that
-re-emits the stream in the same fixed-width form. Nothing else in the format layer is known
-to be lost on read or unreachable on write.
+**`SectionKeys` is neither read nor written (`PcbLib`, `SchLib`).** Altium encodes a
+component's storage name as the UTF-8 bytes of its name, one byte per storage-name
+character, capped at the compound-file limit of 31 UTF-16 code units. Past that cap it
+writes a `SectionKeys` stream mapping the real `LibRef` back to the truncated name
+(`|KeyCount=N|%UTF8%LibRef0=…|||LibRef0=…|%UTF8%SectionKey0=…|…`). Without it a component
+with a long non-ASCII name keeps only its truncated storage name.
 
-The SchLib Parameter display properties are settled: `NotAutoPosition` and
-`Justification` are covered by a hand-authored fixture
-(`scripts/samples/manual/parameters.SchLib` — see that folder's README to rebuild it).
-`IsRule`, `IsSystemParameter` and `TextHorzAnchor`/`TextVertAnchor` are listed among the
-negatives below.
+**`V7_LAYER` is re-derived rather than replayed (`PcbLib`).** Altium writes the short token
+(`TOP`); we write the long form (`TOPLAYER`), and for a board cutout we write the resolved
+keep-out layer rather than the one stored in the record.
+
+**`IndexInSheet` is renumbered (`SchLib`).** Our writer emits a symbol's primitives grouped
+by type; Altium preserves the interleaved authoring order, and `IndexInSheet` records it.
+
+**Per-primitive GUIDs are preserved per footprint, not per primitive (`PcbLib`).** The
+`PrimitiveGuids` stream round-trips byte-for-byte, but the GUIDs hang off the footprint as
+an opaque list keyed by `(object_kind, index_within_kind)`. A structural edit — deleting a
+pad, reordering regions — shifts the indices out from under them. Attaching the GUID to the
+primitive it names touches eight primitive structs.
+
+**A `MODEL.*` block is invented for extruded bodies (`PcbLib`).** A component body with no
+embedded model gets a `MODEL.*` block including a freshly generated `MODELID`; Altium emits
+none.
 
 ## How to re-verify before trusting this
 
@@ -91,7 +104,7 @@ authoring it and reading the saved bytes back.
 | SchLib `TextHorzAnchor` / `TextVertAnchor` | absent from every parameter record in an authored library |
 | SchLib `IsNotAccesible` = false (Altium's spelling) | every graphic record in a library carries `=T`; no library case omits it |
 | SchLib arc fill (`IsSolid` / `AreaColor`) | `Arc.IsSolid` does not compile — an `ISch_Arc` is a stroked shape with no fill |
-| SchLib pie `Transparent` | `Pie.Transparent` does not compile — real on rectangle/round-rect/ellipse/polygon, absent from `ISch_Pie` |
+| SchLib pie `Transparent` | `Pie.Transparent` does not compile — real on rectangle/round-rect/ellipse/polygon, absent from `ISch_Pie` |
 | SchLib round-rect `LineStyle` | accepted without error, but the saved `RECORD=10` carries no `LineStyle` key — `ISch_Line` and `ISch_Polyline` both persist it |
 | SchLib text-frame `Orientation` | not on `ISch_TextFrame` — `Frm.Orientation` does not compile, though it is real on label/parameter/pin |
 | SchLib image `ShowBorder` | not on `ISch_Image` — `Img.ShowBorder` does not compile, though it is real on `ISch_TextFrame` |

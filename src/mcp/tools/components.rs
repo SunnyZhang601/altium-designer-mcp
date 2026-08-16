@@ -2264,10 +2264,25 @@ mod tests {
         /// Flips a file's read-only bit. A read-only library still opens and
         /// still backs up (both only read it), so the save is what fails —
         /// which is the branch each tool funnels its write errors through.
+        /// Makes the library un-writable through the atomic-save path on
+        /// every platform. The save writes a sibling temp file and renames it
+        /// over the target, so on Unix the DIRECTORY must refuse new entries
+        /// (file permission bits do not gate rename-over), while on Windows it
+        /// is the read-only FILE attribute that makes the replace fail.
         fn set_readonly(path: &std::path::Path, readonly: bool) {
-            let mut perms = std::fs::metadata(path).unwrap().permissions();
-            perms.set_readonly(readonly);
-            std::fs::set_permissions(path, perms).unwrap();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt as _;
+                let dir = path.parent().expect("library sits in a directory");
+                let mode = if readonly { 0o555 } else { 0o755 };
+                std::fs::set_permissions(dir, std::fs::Permissions::from_mode(mode)).unwrap();
+            }
+            #[cfg(not(unix))]
+            {
+                let mut perms = std::fs::metadata(path).unwrap().permissions();
+                perms.set_readonly(readonly);
+                std::fs::set_permissions(path, perms).unwrap();
+            }
         }
 
         /// A temp dir holding a populated library of each type, plus a corrupt

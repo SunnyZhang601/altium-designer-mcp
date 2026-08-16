@@ -355,6 +355,10 @@ pub(super) fn parse_pad(data: &[u8], offset: usize) -> ParseResult<Pad> {
         flags,
         unique_id: None,
         guid: None,
+        // The extended tail as read, replayed verbatim as the write base so
+        // unmodelled tail bytes (and the AD-version-specific tail LENGTH —
+        // AD24 writes 133 where the template is 141) survive a rewrite.
+        raw_tail: (geometry.len() > 61).then(|| geometry[61..].to_vec()),
         identity_guid,
         identity_guid_b,
     };
@@ -624,6 +628,10 @@ pub(super) fn parse_via(data: &[u8], offset: usize) -> ParseResult<Via> {
         flags,
         unique_id: None,
         guid: None,
+        // The whole record block as read: the write base, so the in-record
+        // identity GUID slots (zeros in every AD-authored library via) and any
+        // unmodelled cache bytes survive a rewrite.
+        raw_block: Some(block.to_vec()),
     };
 
     Ok((via, next))
@@ -1003,6 +1011,10 @@ pub(super) fn parse_text(
         component_index,
         unique_id: None,
         guid: None,
+        // The geometry block as read: the write base, so AD's cached render
+        // metrics (bytes we do not model, zeroed or filled differently per AD
+        // version) survive a rewrite.
+        raw_geometry: Some(geometry_block.to_vec()),
         barcode_full_width,
         barcode_full_height,
         barcode_x_margin: barcode_margin_x,
@@ -1239,6 +1251,10 @@ pub(super) fn parse_region(data: &[u8], offset: usize) -> ParseResult<Region> {
     // Region struct field (and thus re-emitted from that field); everything else
     // is "additional".
     let additional_parameters = capture_additional_params(&params_str, REGION_MODELLED_PARAM_KEYS);
+    let param_key_order: Vec<String> = crate::altium::parse_pipe_params_ordered(&params_str)
+        .into_iter()
+        .map(|(key, _)| key)
+        .collect();
 
     // Keep `V7_LAYER` only when it disagrees with the layer byte, which is what
     // a board cutout does — see `Region::v7_layer`. Deriving it back from
@@ -1312,6 +1328,7 @@ pub(super) fn parse_region(data: &[u8], offset: usize) -> ParseResult<Region> {
         v7_layer,
         flags,
         kind,
+        param_key_order,
         name,
         net_index,
         polygon_index,

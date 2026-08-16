@@ -623,6 +623,13 @@ impl McpServer {
                 json!({"property": "shape", "old": format!("{:?}", pad.shape), "new": shape_str}),
             );
             pad.shape = new_shape;
+            // The format cannot say "Round with a corner radius" — shape id 1
+            // plus a radius under 100% IS a rounded rectangle — so leaving the
+            // old radius behind would silently re-round the pad on read.
+            if new_shape != crate::altium::pcblib::PadShape::RoundedRectangle {
+                pad.corner_radius_percent = None;
+                pad.per_layer_corner_radii = None;
+            }
         }
 
         // Reject invalid geometry the create path enforces — update bypassed it,
@@ -1761,6 +1768,7 @@ mod tests {
                 component_index: -1,
                 unique_id: None,
                 guid: None,
+                raw_geometry: None,
             });
             lib.add(fp);
             lib.save(path).expect("Failed to create rich PcbLib");

@@ -557,7 +557,9 @@ impl McpServer {
                     "fills",
                     "step_model",
                     "model_3d",
-                    "component_bodies"
+                    "component_bodies",
+                    "guid",
+                    "primitive_order"
                 ]
             );
             let name = fp_json
@@ -676,7 +678,10 @@ impl McpServer {
                             "is_shape_based",
                             "holes",
                             "unique_id",
-                            "additional_parameters"
+                            "additional_parameters",
+                            "guid",
+                            "v7_layer",
+                            "param_key_order"
                         ]
                     );
                     if let Some(region) = Self::parse_region(region_json) {
@@ -717,7 +722,9 @@ impl McpServer {
                             "unique_id",
                             "use_inverted_rectangle",
                             "x",
-                            "y"
+                            "y",
+                            "guid",
+                            "raw_geometry"
                         ]
                     );
                     if let Some(text) = Self::parse_text(text_json) {
@@ -934,6 +941,7 @@ impl McpServer {
                     component_index: -1,
                     unique_id: None,
                     guid: None,
+                    raw_geometry: None,
                 });
             }
 
@@ -1280,7 +1288,8 @@ impl McpServer {
                     "labels",
                     "text",
                     "parameters",
-                    "footprints"
+                    "footprints",
+                    "primitive_order"
                 ]
             );
             let name = sym_json

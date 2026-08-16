@@ -619,6 +619,7 @@ mod tests {
                 component_index: -1,
                 unique_id: None,
                 guid: None,
+                raw_geometry: None,
             }
         }
 

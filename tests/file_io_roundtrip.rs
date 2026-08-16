@@ -182,6 +182,7 @@ fn pcblib_file_roundtrip_all_primitives() {
         component_index: -1,
         unique_id: None,
         guid: None,
+        raw_geometry: None,
     };
     fp.add_text(text);
 
@@ -925,6 +926,7 @@ fn pcblib_roundtrip_preserves_numeric_silkscreen_text() {
         component_index: -1,
         unique_id: None,
         guid: None,
+        raw_geometry: None,
     };
 
     let mut lib = PcbLib::new();

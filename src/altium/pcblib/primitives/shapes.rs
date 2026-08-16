@@ -385,6 +385,15 @@ pub struct Region {
     /// byte-identical to the canonical form.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub additional_parameters: Vec<(String, String)>,
+    /// Every parameter key of the nested block, in the exact order read.
+    ///
+    /// Altium interleaves unmodelled keys with the canonical set (a board
+    /// cutout stores `LAYER`/`KEEPOUT`/`ISBOARDCUTOUT` right after `NAME`,
+    /// not at the end), so the writer replays this order — canonical keys from
+    /// their typed fields, the rest from `additional_parameters` — to stay
+    /// byte-faithful. Empty for a from-scratch region: canonical order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub param_key_order: Vec<String>,
 }
 
 /// Default net index for a from-scratch region (`0xFFFF` = no net).
@@ -445,6 +454,7 @@ impl Default for Region {
             unique_id: None,
             guid: None,
             additional_parameters: Vec::new(),
+            param_key_order: Vec::new(),
         }
     }
 }

@@ -263,6 +263,17 @@ pub struct Pad {
     /// ordinal list could not guarantee.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub guid: Option<String>,
+    /// The pad's extended tail (main-block bytes 61..end) exactly as read
+    /// (base64 in JSON), used as the write-side base with the typed tail
+    /// fields overlaid. AD24 writes a 133-byte tail where the `AltiumSharp`
+    /// template is 141, with two bytes differing — only replay bridges every
+    /// AD version at once. `None` (from scratch) uses the template.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "crate::altium::base64_opt"
+    )]
+    pub raw_tail: Option<Vec<u8>>,
 
     /// Per-pad identity GUID — extended-tail bytes @126-141 ("GUID-A"), read
     /// back verbatim as a braced uppercase GUID string (Windows little-endian
@@ -385,6 +396,7 @@ impl Pad {
             component_index: default_component_index(),
             unique_id: None,
             guid: None,
+            raw_tail: None,
             identity_guid: None,
             identity_guid_b: None,
         }
@@ -440,6 +452,7 @@ impl Pad {
             component_index: default_component_index(),
             unique_id: None,
             guid: None,
+            raw_tail: None,
             identity_guid: None,
             identity_guid_b: None,
         }
@@ -814,6 +827,18 @@ pub struct Via {
     /// ordinal list could not guarantee.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub guid: Option<String>,
+    /// The via's whole record block exactly as read (base64 in JSON), used as
+    /// the write-side base with every typed field overlaid — so unmodelled
+    /// bytes (the two in-record identity GUID slots, cache values, template
+    /// drift between AD versions) round-trip verbatim. `None` (from scratch)
+    /// uses the template with the GUID slots zeroed, which is what AD24 itself
+    /// writes for library vias (the golden's are all zeros).
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "crate::altium::base64_opt"
+    )]
+    pub raw_block: Option<Vec<u8>>,
 }
 
 /// Default thermal relief gap (10 mils = 0.254mm).
@@ -882,6 +907,7 @@ impl Via {
             drill_layer_pair_type: DrillLayerPairType::Through,
             unique_id: None,
             guid: None,
+            raw_block: None,
         }
     }
 
@@ -924,6 +950,7 @@ impl Via {
             drill_layer_pair_type: DrillLayerPairType::Through,
             unique_id: None,
             guid: None,
+            raw_block: None,
         }
     }
 }

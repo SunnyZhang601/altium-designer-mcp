@@ -1136,6 +1136,7 @@ mod tests {
             component_index: -1,
             unique_id: None,
             guid: None,
+            raw_geometry: None,
         });
         original.add_text(Text {
             barcode_full_width: None,
@@ -1174,6 +1175,7 @@ mod tests {
             component_index: -1,
             unique_id: None,
             guid: None,
+            raw_geometry: None,
         });
 
         let data = writer::encode_data_stream(&original).expect("encoding should succeed");
@@ -1240,6 +1242,7 @@ mod tests {
             component_index: -1,
             unique_id: None,
             guid: None,
+            raw_geometry: None,
         });
 
         let data = writer::encode_data_stream(&original).expect("encode");
@@ -1294,6 +1297,7 @@ mod tests {
             component_index: -1,
             unique_id: None,
             guid: None,
+            raw_geometry: None,
         });
 
         let data = writer::encode_data_stream(&original).expect("encode");
@@ -1349,6 +1353,7 @@ mod tests {
                 component_index: -1,
                 unique_id: None,
                 guid: None,
+                raw_geometry: None,
             },
             None,
         );
@@ -1422,6 +1427,7 @@ mod tests {
             component_index: -1,
             unique_id: None,
             guid: None,
+            raw_geometry: None,
         });
 
         let data = writer::encode_data_stream(&original).expect("encode");
@@ -1484,6 +1490,7 @@ mod tests {
             component_index: -1,
             unique_id: None,
             guid: None,
+            raw_geometry: None,
         };
         original.add_text(text.clone());
         text.text = ".Comment".to_string();
@@ -1625,6 +1632,7 @@ mod tests {
             component_index: -1,
             unique_id: None,
             guid: None,
+            raw_geometry: None,
         });
 
         let data = writer::encode_data_stream(&original).expect("encode");
@@ -1694,6 +1702,7 @@ mod tests {
             component_index: -1,
             unique_id: None,
             guid: None,
+            raw_geometry: None,
         });
 
         let data = writer::encode_data_stream(&original).expect("encoding should succeed");
@@ -1755,6 +1764,7 @@ mod tests {
             component_index: -1,
             unique_id: None,
             guid: None,
+            raw_geometry: None,
         };
 
         let mut fp = Footprint::new("LONG_TEXT");
@@ -1937,6 +1947,7 @@ mod tests {
             component_index: 4,
             unique_id: None,
             guid: None,
+            raw_geometry: None,
         });
 
         let data = writer::encode_data_stream(&original).expect("encoding should succeed");
@@ -2545,57 +2556,27 @@ mod tests {
     }
 
     #[test]
-    fn each_via_gets_a_unique_identity_guid() {
-        // PR-R6: every via must carry its OWN in-record identity GUIDs @259
-        // (IdentityGuid) and @275 (IdentityGuidB) — like the pad, which generates
-        // fresh unique GUIDs per primitive. A single template GUID reused for
-        // every via would make two vias in one footprint collide.
+    fn from_scratch_vias_carry_nil_identity_guids() {
+        // The in-record identity GUID slots @259-290 are ZEROS in every
+        // AD-authored library via (the golden), and a via read from a file
+        // replays its whole block verbatim. We used to invent two fresh GUIDs
+        // per save, which made the record change on every write; nil is what
+        // Altium itself writes.
         let mut fp = Footprint::new("VIA_GUIDS");
         fp.add_via(Via::new(0.0, 0.0, 0.6, 0.3));
-        fp.add_via(Via::new(2.0, 0.0, 0.6, 0.3));
         let data = writer::encode_data_stream(&fp).expect("encode");
 
-        // Locate both 321-byte via blocks by their `[0x03][len: u32 LE]` signature.
         let sig = [0x03u8, 0x41, 0x01, 0x00, 0x00];
         let first = data
             .windows(sig.len())
             .position(|w| w == sig)
-            .expect("first via block");
-        let second_rel = data[first + 5..]
-            .windows(sig.len())
-            .position(|w| w == sig)
-            .expect("second via block");
-        let second = first + 5 + second_rel;
-        assert_ne!(first, second, "expected two distinct via blocks");
-
-        let via1 = &data[first + 5..first + 5 + 321];
-        let via2 = &data[second + 5..second + 5 + 321];
-
-        // Uniqueness: the two vias must NOT share an IdentityGuid @259-274.
-        assert_ne!(
-            &via1[259..275],
-            &via2[259..275],
-            "two vias share an IdentityGuid — GUID is not per-primitive-unique"
+            .expect("via block");
+        let via = &data[first + 5..first + 5 + 321];
+        assert_eq!(
+            &via[259..291],
+            &[0u8; 32],
+            "from-scratch identity GUID slots are nil, as AD writes them"
         );
-        // IdentityGuidB @275-290 must likewise differ between vias.
-        assert_ne!(
-            &via1[275..291],
-            &via2[275..291],
-            "two vias share an IdentityGuidB"
-        );
-
-        // Well-formedness: each emitted GUID is a non-zero 16-byte value, and a
-        // via's GUID-A differs from its own GUID-B (mirrors the pad's two
-        // independent generate_guid() calls).
-        for via in [via1, via2] {
-            assert_ne!(&via[259..275], &[0u8; 16], "IdentityGuid is all-zero");
-            assert_ne!(&via[275..291], &[0u8; 16], "IdentityGuidB is all-zero");
-            assert_ne!(
-                &via[259..275],
-                &via[275..291],
-                "a via's IdentityGuid equals its IdentityGuidB"
-            );
-        }
     }
 
     #[test]

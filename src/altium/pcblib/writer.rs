@@ -398,7 +398,14 @@ fn encode_pad_per_layer_data(pad: &Pad) -> Vec<u8> {
             .as_ref()
             .and_then(|shapes| shapes.get(i).copied())
             .unwrap_or(pad.shape);
-        block.push(pad_shape_to_id(shape));
+        // In the per-layer table a rounded rectangle is stored as Round (1):
+        // the corner-radius bytes below are what distinguish it, exactly as
+        // the reader decodes it — the golden's rounded-rect pads carry 1 here,
+        // and 9 was our invention.
+        block.push(match shape {
+            PadShape::RoundedRectangle => 1,
+            other => pad_shape_to_id(other),
+        });
     }
 
     // 32 corner radius percentages - 32 bytes
@@ -477,8 +484,13 @@ fn encode_pad(data: &mut Vec<u8>, pad: &Pad) -> crate::altium::error::AltiumResu
     // carries its top/mid/bottom sizes+shapes in the MAIN geometry block (see
     // `encode_pad_geometry`) and keeps Block 5 empty, matching the golden.
     let needs_per_layer_data = pad.stack_mode == PadStackMode::FullStack;
-    let needs_size_shape =
-        pad.hole_shape != HoleShape::Round || pad.corner_radius_percent.is_some();
+    // A rounded rectangle NEEDS the block even with a default radius: the
+    // geometry byte @49 stores 1 (Round) for it — the golden's rounded-rect
+    // pads prove the shape lives in the radius bytes, not the id — so without
+    // this block the rounding would be unreadable.
+    let needs_size_shape = pad.hole_shape != HoleShape::Round
+        || pad.corner_radius_percent.is_some()
+        || pad.shape == PadShape::RoundedRectangle;
 
     if needs_per_layer_data {
         write_block(data, &encode_pad_per_layer_data(pad));
@@ -508,7 +520,14 @@ fn encode_pad_size_shape_block(pad: &Pad) -> Vec<u8> {
     let mut b = Vec::with_capacity(596);
     let w = from_mm(pad.width);
     let h = from_mm(pad.height);
-    let shape_id = pad_shape_to_id(pad.shape);
+    // In the size/shape block a rounded rectangle is stored as Round (1) with
+    // the radius bytes carrying the rounding — the golden's rounded-rect pads
+    // carry 1 in every per-layer slot; 9 lives only in the single @49 byte of
+    // the main geometry block.
+    let shape_id = match pad.shape {
+        PadShape::RoundedRectangle => 1,
+        other => pad_shape_to_id(other),
+    };
     let radius = pad
         .corner_radius_percent
         .unwrap_or(if pad.shape == PadShape::RoundedRectangle {
@@ -537,8 +556,12 @@ fn encode_pad_size_shape_block(pad: &Pad) -> Vec<u8> {
         write_i32(&mut b, 0); // 403-530: per-layer Y offsets
     }
     b.push(u8::from(pad.shape == PadShape::RoundedRectangle)); // 531: has-rounded-rect
+                                                               // 532-563: per-layer shapes. THIS table keeps the full shape id — the
+                                                               // golden's rounded-rect pad stores 9 here while the internal-layer table
+                                                               // @232-260 stores 1 (with the radius bytes carrying the rounding).
+    let full_shape_id = pad_shape_to_id(pad.shape);
     for _ in 0..32 {
-        b.push(shape_id); // 532-563: per-layer shapes
+        b.push(full_shape_id); // 532-563: per-layer shapes
     }
     for _ in 0..32 {
         b.push(radius); // 564-595: per-layer corner radii (%)
@@ -559,7 +582,7 @@ fn encode_pad_size_shape_block(pad: &Pad) -> Vec<u8> {
     b.push(0); // 637: flag1
     b.push(0x80); // 638: flag2
     b.push(1); // 639: flag3
-    b.push(shape_id); // 640: flag4 = pad shape id
+    b.push(full_shape_id); // 640: flag4 = full pad shape id (9 for rounded-rect)
     write_i32(&mut b, w); // 641-644: entry size X
     write_i32(&mut b, h); // 645-648: entry size Y
     b.push(50); // 649: corner radius % (fixed 50 across all goldens)
@@ -629,9 +652,23 @@ fn v7_layer_id(layer: u8) -> u32 {
 
 /// Builds the 141-byte pad extended tail by overlaying typed fields onto the
 /// canonical template (matching `AltiumSharp` `BuildPadExtendedTail`).
-fn build_pad_extended_tail(pad: &Pad) -> [u8; 141] {
+fn build_pad_extended_tail(pad: &Pad) -> Vec<u8> {
     const START: usize = PAD_EXTENDED_TAIL_START;
-    let mut tail = PAD_EXTENDED_TAIL_TEMPLATE;
+    // Every overlay below writes inside the first 125 tail bytes, which both
+    // the 141-byte AltiumSharp template and AD24's own 133-byte tails cover.
+    // A read tail is replayed verbatim as the base — including its LENGTH, so
+    // an AD24 pad stays 194 bytes overall instead of growing the template's
+    // surplus — and a shorter foreign tail falls back to the template rather
+    // than panicking an overlay.
+    const MIN_REPLAY_LEN: usize = 125;
+    let mut tail: Vec<u8> = match pad.raw_tail.as_deref() {
+        Some(raw) if raw.len() >= MIN_REPLAY_LEN => raw.to_vec(),
+        _ => PAD_EXTENDED_TAIL_TEMPLATE.to_vec(),
+    };
+    let replaying = pad
+        .raw_tail
+        .as_deref()
+        .is_some_and(|r| r.len() >= MIN_REPLAY_LEN);
 
     // 62: pad stack mode
     tail[62 - START] = pad_stack_mode_to_id(pad.stack_mode);
@@ -697,8 +734,12 @@ fn build_pad_extended_tail(pad: &Pad) -> [u8; 141] {
     if let Some(tol) = pad.hole_negative_tolerance {
         tail[166 - START..170 - START].copy_from_slice(&from_mm(tol).to_le_bytes());
     }
-    // 185: reserved marker (0x03 for a standard PcbLib pad)
-    tail[185 - START] = 0x03;
+    // 185: reserved marker. The AltiumSharp-derived template value is 0x03;
+    // AD24's own pads carry 0x01 — a replayed tail keeps whatever was read,
+    // and only the from-scratch template gets the historical stamp.
+    if !replaying {
+        tail[185 - START] = 0x03;
+    }
 
     tail
 }
@@ -732,7 +773,12 @@ fn encode_pad_geometry(pad: &Pad) -> Vec<u8> {
     // bottom]). For Simple/FullStack pads all three slots are the top size and
     // shape (FullStack carries its per-layer data in Block 5 instead).
     let is_tmb = pad.stack_mode == PadStackMode::TopMiddleBottom;
-    let shape_id = pad_shape_to_id(pad.shape);
+    // Rounded rectangle stores as 1 in every per-layer slot (radius bytes
+    // carry the rounding); see encode_pad_size_shape_block.
+    let shape_id = match pad.shape {
+        PadShape::RoundedRectangle => 1,
+        other => pad_shape_to_id(other),
+    };
     let tmb_size = |index: usize| -> (f64, f64) {
         if is_tmb {
             pad.per_layer_sizes
@@ -748,7 +794,10 @@ fn encode_pad_geometry(pad: &Pad) -> Vec<u8> {
             pad.per_layer_shapes
                 .as_ref()
                 .and_then(|shapes| shapes.get(index).copied())
-                .map_or(shape_id, pad_shape_to_id)
+                .map_or(shape_id, |s| match s {
+                    PadShape::RoundedRectangle => 1,
+                    other => pad_shape_to_id(other),
+                })
         } else {
             shape_id
         }
@@ -778,10 +827,15 @@ fn encode_pad_geometry(pad: &Pad) -> Vec<u8> {
     // It is independent of hole_size; deriving it from that emits 0 for SMD pads.
     block.push(u8::from(pad.is_plated));
 
-    // Extended tail - offsets 61-201 (141 bytes)
+    // Extended tail — offsets 61.. . Length follows the tail: a replayed AD24
+    // pad stays 194 bytes (133-byte tail), a from-scratch pad keeps the
+    // 202-byte template layout.
     block.extend_from_slice(&build_pad_extended_tail(pad));
 
-    debug_assert_eq!(block.len(), PAD_MAIN_BLOCK_LEN);
+    debug_assert!(
+        block.len() == PAD_MAIN_BLOCK_LEN || pad.raw_tail.is_some(),
+        "from-scratch pad main block must stay {PAD_MAIN_BLOCK_LEN} bytes"
+    );
     block
 }
 
@@ -822,7 +876,20 @@ const VIA_SR1_TEMPLATE: [u8; 321] = [
 /// [`VIA_SR1_TEMPLATE`]. Our previous 6-block layout (copied from the pad
 /// encoder) was misread by Altium; this matches `PcbLibWriter.WriteVia` (#113).
 fn encode_via(data: &mut Vec<u8>, via: &Via) {
-    let mut block = VIA_SR1_TEMPLATE;
+    // Base = the block as read (when its length matches the template layout
+    // the overlays below assume), so unmodelled bytes round-trip; else the
+    // template with its identity-GUID slots zeroed — AD24 writes zeros there
+    // for every library via (the golden), and the old fresh-GUIDs-per-save
+    // behaviour meant the record changed on every write.
+    let mut block = via
+        .raw_block
+        .as_deref()
+        .and_then(|raw| <[u8; VIA_SR1_TEMPLATE.len()]>::try_from(raw).ok())
+        .unwrap_or_else(|| {
+            let mut b = VIA_SR1_TEMPLATE;
+            b[259..291].fill(0);
+            b
+        });
 
     // Common header (offsets 0-12): MultiLayer + the via's flag word
     // (locked/keepout/tenting top+bottom).
@@ -885,8 +952,6 @@ fn encode_via(data: &mut Vec<u8>, via: &Via) {
     // encoder (`build_pad_extended_tail`), which writes two independent fresh
     // GUIDs per primitive. The reader never reads these back, so they are a pure
     // write-side identity (distinct from the UniqueIDPrimitiveInformation stream).
-    block[259..275].copy_from_slice(&generate_guid());
-    block[275..291].copy_from_slice(&generate_guid());
 
     // Drill tolerances @291 / @295. `None` leaves the template's 0x7FFFFFFF
     // "unset" sentinel (byte-identical); `Some(mm)` writes the raw tolerance.
@@ -952,15 +1017,21 @@ const fn text_kind_to_id(kind: TextKind) -> u8 {
 /// 6C 00 00 00 …`), keeping a from-scratch text byte-identical.
 fn encode_font_name_field(dst: &mut [u8], name: &str) {
     debug_assert_eq!(dst.len(), 64);
-    dst.fill(0);
+    // Write the name's UTF-16 units plus ONE null terminator, leaving the rest
+    // of the field as the base provides it. Altium reads the field as a
+    // null-terminated string and leaves whatever lay beyond the terminator in
+    // place — the golden's fields carry repeating junk there — so zero-filling
+    // was rewriting bytes AD itself preserves. A from-scratch text's template
+    // base is all zeros, keeping the historical output byte-identical.
     let mut i = 0;
     for unit in name.encode_utf16() {
         if i + 2 > 62 {
-            break; // leave the final 2 bytes as a null terminator
+            break; // leave room for the terminator
         }
         dst[i..i + 2].copy_from_slice(&unit.to_le_bytes());
         i += 2;
     }
+    dst[i..i + 2].copy_from_slice(&[0, 0]);
 }
 
 /// Converts a [`TextJustification`] to the Altium PCB text-box justification byte
@@ -1134,7 +1205,14 @@ const TEXT_SR1_TEMPLATE: [u8; 252] = [
 /// [`encode_component_wide_strings`]. `None` writes Altium's `-1`, meaning the
 /// text has no entry (special or empty).
 pub fn encode_text_geometry(text: &Text, wide_index: Option<u32>) -> Vec<u8> {
-    let mut block = TEXT_SR1_TEMPLATE;
+    // Base = the block as read when its length matches the template layout the
+    // overlays assume, so AD's cached render metrics (bytes we do not model)
+    // round-trip; else the template.
+    let mut block = text
+        .raw_geometry
+        .as_deref()
+        .and_then(|raw| <[u8; TEXT_SR1_TEMPLATE.len()]>::try_from(raw).ok())
+        .unwrap_or(TEXT_SR1_TEMPLATE);
 
     // i32 at 115: the entry number, or -1 for "no entry".
     let index_field: i32 = wide_index.and_then(|i| i32::try_from(i).ok()).unwrap_or(-1);
@@ -1194,7 +1272,13 @@ pub fn encode_text_geometry(text: &Text, wide_index: Option<u32>) -> Vec<u8> {
     // TrueType -> 1. The template default is 0, so stroke text stays
     // byte-identical; the TrueType record
     // (kind@160=1 with base@43=0). BarCode is a deferred kind and not modelled here.
-    block[43] = u8::from(!matches!(text.kind, TextKind::Stroke));
+    // @43 (base font type) is stamped only from scratch: the golden's special
+    // strings carry 0 here despite a TrueType kind, so the byte is not a pure
+    // function of the kind — a replayed base keeps what AD wrote, and the
+    // authoritative kind byte @160 above is still always overlaid.
+    if text.raw_geometry.is_none() {
+        block[43] = u8::from(!matches!(text.kind, TextKind::Stroke));
+    }
     // Italic style (offset 45). Default false reproduces the template's 0x00.
     block[45] = u8::from(text.italic);
 
@@ -1232,14 +1316,10 @@ pub fn encode_text_geometry(text: &Text, wide_index: Option<u32>) -> Vec<u8> {
     }
     // UTF-16LE, null-padded into the fixed 64-byte field at @161-224.
     if !text.barcode_font_name.is_empty() {
-        let mut buf = [0u8; 64];
-        for (slot, unit) in buf
-            .chunks_exact_mut(2)
-            .zip(text.barcode_font_name.encode_utf16())
-        {
-            slot.copy_from_slice(&unit.to_le_bytes());
-        }
-        block[161..225].copy_from_slice(&buf);
+        // Pad-preserving, like encode_font_name_field: write the units plus
+        // one terminator and leave the base's bytes beyond it — AD keeps junk
+        // there and reads only to the null.
+        encode_font_name_field(&mut block[161..225], &text.barcode_font_name);
     }
 
     // Inverted (knockout) text-box descriptor. Defaults reproduce the template
@@ -1361,6 +1441,78 @@ fn format_mil_coord(mm: f64) -> String {
 /// [vertices:count*16]      // Outline vertices as doubles
 /// [hole:...]               // hole_count x [u32 count][count*16] hole contours
 /// ```
+/// The canonical region parameter keys, in from-scratch emission order.
+const REGION_CANONICAL_KEYS: [&str; 8] = [
+    "V7_LAYER",
+    "NAME",
+    "KIND",
+    "SUBPOLYINDEX",
+    "UNIONINDEX",
+    "ARCRESOLUTION",
+    "ISSHAPEBASED",
+    "CAVITYHEIGHT",
+];
+
+/// One canonical region key's value, from the typed field that models it.
+fn region_canonical_value(region: &Region, key: &str) -> String {
+    match key {
+        "V7_LAYER" => region
+            .v7_layer
+            .clone()
+            .unwrap_or_else(|| v7_layer_token(region.layer)),
+        "NAME" => region.name.clone(),
+        "KIND" => region.kind.to_id().to_string(),
+        "SUBPOLYINDEX" => region.sub_poly_index.to_string(),
+        "UNIONINDEX" => region.union_index.to_string(),
+        "ARCRESOLUTION" => format_mil_coord(region.arc_resolution),
+        "ISSHAPEBASED" => if region.is_shape_based {
+            "TRUE"
+        } else {
+            "FALSE"
+        }
+        .to_string(),
+        "CAVITYHEIGHT" => format_mil_coord(region.cavity_height),
+        _ => unreachable!("not a canonical region key"),
+    }
+}
+
+/// Builds a region's nested parameter string (no leading pipe).
+///
+/// A region read from a file replays its own key ORDER (`param_key_order`):
+/// Altium interleaves unmodelled keys with the canonical set — a board cutout
+/// stores `LAYER`/`KEEPOUT`/`ISBOARDCUTOUT` right after `NAME`, not appended —
+/// so canonical keys are emitted from their typed fields at their original
+/// positions and everything else comes from `additional_parameters`, consumed
+/// in read order. Canonical keys the original block lacked are appended so a
+/// typed edit is never dropped. A from-scratch region (empty order) emits the
+/// canonical set in canonical order, byte-identical to the historical output.
+fn build_region_param_text(region: &Region) -> String {
+    if region.param_key_order.is_empty() {
+        let params = REGION_CANONICAL_KEYS
+            .iter()
+            .map(|key| format!("{key}={}", region_canonical_value(region, key)))
+            .collect::<Vec<_>>()
+            .join("|");
+        return append_additional_params(params, &region.additional_parameters);
+    }
+
+    let mut additional = region.additional_parameters.iter();
+    let mut parts: Vec<String> = Vec::with_capacity(region.param_key_order.len());
+    for key in &region.param_key_order {
+        if REGION_CANONICAL_KEYS.contains(&key.as_str()) {
+            parts.push(format!("{key}={}", region_canonical_value(region, key)));
+        } else if let Some((k, v)) = additional.next() {
+            parts.push(format!("{k}={v}"));
+        }
+    }
+    for key in REGION_CANONICAL_KEYS {
+        if !region.param_key_order.iter().any(|k| k == key) {
+            parts.push(format!("{key}={}", region_canonical_value(region, key)));
+        }
+    }
+    parts.join("|")
+}
+
 #[allow(clippy::cast_possible_truncation)] // Vertex/hole count and param length fit in u32/u16
 fn encode_region_properties(region: &Region) -> Vec<u8> {
     let vertex_count = region.vertices.len();
@@ -1370,30 +1522,7 @@ fn encode_region_properties(region: &Region) -> Vec<u8> {
     // canonical key set (matching AltiumSharp `BuildRegionParamText`). Each value is
     // now taken from the typed field; a default region reproduces the historical
     // hard-coded string byte-for-byte (KIND=0, NAME=, ARCRESOLUTION=0mil, ...).
-    let layer_name = region
-        .v7_layer
-        .clone()
-        .unwrap_or_else(|| v7_layer_token(region.layer));
-    let params = format!(
-        "V7_LAYER={layer_name}|NAME={name}|KIND={kind}|SUBPOLYINDEX={spi}|UNIONINDEX={uix}\
-         |ARCRESOLUTION={arc}|ISSHAPEBASED={shape}|CAVITYHEIGHT={cav}",
-        name = region.name,
-        kind = region.kind.to_id(),
-        spi = region.sub_poly_index,
-        uix = region.union_index,
-        arc = format_mil_coord(region.arc_resolution),
-        shape = if region.is_shape_based {
-            "TRUE"
-        } else {
-            "FALSE"
-        },
-        cav = format_mil_coord(region.cavity_height),
-    );
-    // Re-emit any unmodelled keys captured on read (board-region keys like LAYER /
-    // KEEPOUT / ISBOARDCUTOUT, etc.), verbatim and in read order, so a
-    // read-modify-write does not drop them. Empty for a from-scratch region, so
-    // nothing is appended and the output stays byte-identical to the canonical form.
-    let params = append_additional_params(params, &region.additional_parameters);
+    let params = build_region_param_text(region);
     let params_bytes = crate::altium::encode_windows1252(&params);
 
     let mut block = Vec::with_capacity(22 + params_bytes.len() + 4 + vertex_count * 16);
@@ -2281,6 +2410,7 @@ mod tests {
             component_index: -1,
             unique_id: None,
             guid: None,
+            raw_geometry: None,
         };
         let geom = encode_text_geometry(&text, None);
         assert_eq!(geom[40], 0x01, "IsComment @40");
@@ -2373,6 +2503,7 @@ mod tests {
             component_index: -1,
             unique_id: None,
             guid: None,
+            raw_geometry: None,
         };
         let geom = encode_text_geometry(&text, None);
         assert_eq!(
@@ -2446,6 +2577,7 @@ mod tests {
             component_index: -1,
             unique_id: None,
             guid: None,
+            raw_geometry: None,
         };
         let geom = encode_text_geometry(&text, None);
         assert_eq!(geom[110], 0x01, "IsInverted @110");
@@ -3702,6 +3834,7 @@ mod tests {
             component_index: -1,
             unique_id: None,
             guid: None,
+            raw_geometry: None,
         };
         let mut fp = Footprint::new("WS");
         fp.add_text(mk("AB")); // bytes 65, 66

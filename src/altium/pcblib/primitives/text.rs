@@ -280,6 +280,17 @@ pub struct Text {
     /// ordinal list could not guarantee.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub guid: Option<String>,
+    /// The text's geometry block exactly as read (base64 in JSON), used as
+    /// the write-side base with every typed field overlaid — AD caches its own
+    /// render metrics in bytes we do not model, and the golden zeroes bytes
+    /// the `AltiumSharp` template fills. `None` (from scratch) uses the
+    /// template.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "crate::altium::base64_opt"
+    )]
+    pub raw_geometry: Option<Vec<u8>>,
 }
 
 /// A filled rectangle on a layer.

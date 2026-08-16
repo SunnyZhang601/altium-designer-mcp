@@ -126,7 +126,6 @@ not say which name was at fault.
 them. (Parameter "area colour" appeared here in error — `parse_parameter` reads no
 such key, and no authored parameter record carries one.)
 
-**PcbLib:** region net and the cavity/subpoly params, ComponentBody model-2D
-placement and raw-outline precision. Pad thermal-relief / power-plane is
+**PcbLib:** region net and the cavity/subpoly params, raw-outline precision for ComponentBody. Pad thermal-relief / power-plane is
 🚫 **FINAL** on the scripting side (native crash on a fresh library pad in every sequence
 tried — see the Pad row); a golden would need a non-scripted authoring route.

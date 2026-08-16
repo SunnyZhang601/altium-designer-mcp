@@ -862,6 +862,11 @@ fn test_component_body_roundtrip() {
     // Add a ComponentBody with typical 3D model properties
     let body = ComponentBody {
         model_id: "TEST-MODEL-GUID".to_string(),
+        identifier: String::new(),
+        texture_center_x: None,
+        texture_center_y: None,
+        texture_size_x: None,
+        texture_size_y: None,
         model_name: "RESC0603.step".to_string(),
         embedded: false, // External reference (not embedded in library)
         rotation_x: 0.0,
@@ -925,6 +930,11 @@ fn test_component_body_with_rotation() {
     // 3D model with rotation
     let body = ComponentBody {
         model_id: "ROTATED-GUID".to_string(),
+        identifier: String::new(),
+        texture_center_x: None,
+        texture_center_y: None,
+        texture_size_x: None,
+        texture_size_y: None,
         model_name: "SOIC8.step".to_string(),
         embedded: false,
         rotation_x: 0.0,
@@ -2758,6 +2768,11 @@ fn test_component_body_external_model_reference() {
     // Add ComponentBody with external reference
     let body = ComponentBody {
         model_id: "{EXTERNAL-GUID-1234}".to_string(),
+        identifier: String::new(),
+        texture_center_x: None,
+        texture_center_y: None,
+        texture_size_x: None,
+        texture_size_y: None,
         model_name: "external_model.step".to_string(),
         embedded: false, // External reference
         rotation_x: 0.0,

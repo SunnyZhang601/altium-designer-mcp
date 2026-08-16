@@ -197,6 +197,30 @@ pub struct ComponentBody {
     #[serde(default, serialize_with = "crate::altium::serde_round::serialize")]
     pub model_2d_y: f64,
 
+    /// The body's `IDENTIFIER` — a user-visible name, stored on disk as a
+    /// comma-separated list of decimal Unicode code points (`µΩ电` is
+    /// `181,937,30005`; settled by the hand-authored `manual/identifier.PcbLib`).
+    /// Held here as the decoded string; empty when the body has none.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub identifier: String,
+
+    /// The `TEXTURECENTERX` value, verbatim wire text (mil-suffixed). The UI
+    /// and the scripting route disagree on these four texture values (the UI
+    /// writes `TEXTURESIZEX=0.0001mil` where a scripted body carries `0mil`),
+    /// so they round-trip as read rather than being derived; `None` emits the
+    /// scripted-body default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub texture_center_x: Option<String>,
+    /// The `TEXTURECENTERY` value, verbatim wire text (see `texture_center_x`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub texture_center_y: Option<String>,
+    /// The `TEXTURESIZEX` value, verbatim wire text (see `texture_center_x`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub texture_size_x: Option<String>,
+    /// The `TEXTURESIZEY` value, verbatim wire text (see `texture_center_x`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub texture_size_y: Option<String>,
+
     /// Net index into the board's net list — common-header u16 @3. `0xFFFF`
     /// (65535) means "no net", the from-scratch default (round-trip fidelity).
     #[serde(default = "default_net_index")]
@@ -289,6 +313,11 @@ impl ComponentBody {
             model_2d_rotation: 0.0,
             model_2d_x: 0.0,
             model_2d_y: 0.0,
+            identifier: String::new(),
+            texture_center_x: None,
+            texture_center_y: None,
+            texture_size_x: None,
+            texture_size_y: None,
             net_index: default_net_index(),
             polygon_index: default_polygon_index(),
             component_index: default_component_index(),

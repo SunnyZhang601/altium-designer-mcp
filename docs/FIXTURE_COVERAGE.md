@@ -23,6 +23,10 @@ field. The fix is always to enrich them (see the workflow below).
 
 - `scripts/Generate-Samples.ps1` — launches Altium headless (RunScript CLI), runs the
   DelphiScript, copies the authored libraries into `scripts/samples/`.
+- `scripts/Watch-AltiumDialog.ps1` — run alongside the generator. A compile error or
+  a native crash opens a modal dialog that, headless, would just sit there until the
+  7-minute timeout; this catches it, prints the offending identifier and kills
+  Altium. It is what makes batching several unproven names into one run safe.
 - `scripts/altium/generate/GenerateSamples.pas` — the **authoring logic** (editable here;
   DelphiScript). Header declares it *iterative by design*: generate → read back → add the next
   feature → regenerate, until coverage is complete.

@@ -16,11 +16,13 @@ still loses is listed in that test's `KNOWN_DEFECTS` and described here; the two
 the same list, so an entry leaves both together.
 
 **Five i18n fixture symbols are internally inconsistent** (`_JV`, `_BN`, `_CR`, `_IU`,
-`_SB`): `DelphiScript` mangled their source literals, and the damage differs by location —
-the golden's CFB storage name folds to the *correct* word while the record inside stores a
-shifted string, so no self-consistent writer can reproduce both. The cure is regenerating
-these five with literals built from character codes (`Chr()`), not source text; needs an
-Altium run.
+`_SB`) — and scripted regeneration is a **verified negative** (three runs, 2026-08-16).
+Source literals: the engine mis-decodes exactly these five sequences (storage name correct,
+records shifted). Wide `Chr($A997)`: truncates to the low byte — the engine's strings are
+ANSI. UTF-8 byte `Chr($EA)+…`: storage names and `SectionKeys` come out byte-perfect but
+every text record double-widens. No scripted construction remains; the cure is renaming
+the five once by hand in the AD UI. Until then `tests/golden_fidelity.rs` excuses exactly
+these five, by suffix (`FIXTURE_INCONSISTENT`).
 
 **Identity streams are keyed by ordinal, not attached to the primitive (`PcbLib`).** A
 footprint's `PrimitiveGuids` records and its unique ids both name a primitive by its

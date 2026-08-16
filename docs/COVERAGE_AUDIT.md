@@ -32,10 +32,6 @@ a region) renumbers everything after it and silently re-points every later ident
 Attaching the GUID to the primitive it names would fix it, and touches eight primitive
 structs.
 
-**A `MODEL.*` block is invented for extruded bodies (`PcbLib`).** A component body with no
-embedded model gets a `MODEL.*` block including a freshly generated `MODELID`; Altium emits
-none.
-
 ## How to re-verify before trusting this
 
 An earlier edition went badly stale — 103 of its 129 entries named fields that had since

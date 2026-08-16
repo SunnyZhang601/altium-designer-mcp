@@ -2335,11 +2335,80 @@ begin
     Par.ShowName      := True;
     Par.ReadOnlyState := 1;
     Par.IsMirrored    := True;
+    Par.ParamType     := eParameterType_Integer;
     Par.OwnerPartId   := 1;
     Par.OwnerPartDisplayMode := Comp.DisplayMode;
     Comp.AddSchObject(Par);
     SchServer.RobotManager.SendMessage(Comp.I_ObjectAddress, c_BroadCast, SCHM_PrimitiveRegistration, Par.I_ObjectAddress);
 end;
+
+{ DOCUMENTED NEGATIVE (AD24): a polyline's fill properties are accepted and
+  then dropped. AreaColor / IsSolid / Transparent all compile on ISch_Polyline
+  but the saved RECORD=6 carries none of them, unlike the rectangle and
+  polygon records that do persist theirs. Kept as a living probe: the read
+  test asserts the defaults, so a later AD version that starts writing them
+  shows up as a failure. }
+procedure AddPolylineTransparent(Comp : ISch_Component; X1 : Integer; Y1 : Integer;
+                                 X2 : Integer; Y2 : Integer; X3 : Integer; Y3 : Integer);
+var PL : ISch_Polyline;
+begin
+    PL := SchServer.SchObjectFactory(ePolyline, eCreate_Default);
+    if PL = nil then Exit;
+    PL.LineWidth   := eSmall;
+    PL.Color       := $000000;
+    PL.AreaColor   := $00FFFF;
+    PL.IsSolid     := True;
+    PL.Transparent := True;
+    PL.ClearAllVertices;
+    PL.InsertVertex(1);  PL.Vertex[1] := Point(MilsToCoord(X1), MilsToCoord(Y1));
+    PL.InsertVertex(2);  PL.Vertex[2] := Point(MilsToCoord(X2), MilsToCoord(Y2));
+    PL.InsertVertex(3);  PL.Vertex[3] := Point(MilsToCoord(X3), MilsToCoord(Y3));
+    PL.OwnerPartId := 1;
+    PL.OwnerPartDisplayMode := Comp.DisplayMode;
+    Comp.AddSchObject(PL);
+    SchServer.RobotManager.SendMessage(Comp.I_ObjectAddress, c_BroadCast, SCHM_PrimitiveRegistration, PL.I_ObjectAddress);
+end;
+
+{ DOCUMENTED NEGATIVE (AD24): an image has NO ShowBorder. `Img.ShowBorder` is a
+  compile error, "Undeclared identifier" — the property is real on
+  ISch_TextFrame but not on ISch_Image, and no authored image record carries
+  the key. The reader keeps the field for hand-edited files only. }
+
+{ Text frame with a whole-mil text margin, which is the point: the plain frame's
+  margin is sub-mil, so the record carries only TextMargin_Frac and the integer
+  key is never exercised.
+  DOCUMENTED NEGATIVE (AD24): Transparent is accepted on a text frame and then
+  not written — the saved RECORD=28 has no Transparent key.
+  DOCUMENTED NEGATIVE (AD24): a text frame has NO Orientation.
+  `Frm.Orientation` is a compile error, "Undeclared identifier"; the property
+  is real on ISch_Label / ISch_Parameter / ISch_Pin but not on ISch_TextFrame,
+  and no authored frame record carries the key. }
+procedure AddTextFrameStyled(Comp : ISch_Component; X1 : Integer; Y1 : Integer;
+                             X2 : Integer; Y2 : Integer; AText : String);
+var Frm : ISch_TextFrame;
+begin
+    Frm := SchServer.SchObjectFactory(eTextFrame, eCreate_Default);
+    if Frm = nil then Exit;
+    Frm.Location    := Point(MilsToCoord(X1), MilsToCoord(Y1));
+    Frm.Corner      := Point(MilsToCoord(X2), MilsToCoord(Y2));
+    Frm.Text        := AText;
+    Frm.FontID      := 1;
+    Frm.Color       := $000000;
+    Frm.AreaColor   := $B0FFFF;
+    Frm.TextColor   := $800000;
+    Frm.IsSolid     := True;
+    Frm.ShowBorder  := True;
+    Frm.WordWrap    := True;
+    Frm.ClipToRect  := True;
+    Frm.LineWidth   := eSmall;
+    Frm.TextMargin  := MilsToCoord(30);
+    Frm.Transparent := True;
+    Frm.OwnerPartId := 1;
+    Frm.OwnerPartDisplayMode := Comp.DisplayMode;
+    Comp.AddSchObject(Frm);
+    SchServer.RobotManager.SendMessage(Comp.I_ObjectAddress, c_BroadCast, SCHM_PrimitiveRegistration, Frm.I_ObjectAddress);
+end;
+
 
 { ---- SchLib authoring -------------------------------------------------------
 
@@ -2741,6 +2810,8 @@ begin
         if Comp <> nil then
         begin
             AddPolylineStyled(Comp, -150, 80, -100, 130, -50, 80);
+            AddPolylineTransparent(Comp, 40, 80, 90, 130, 140, 80);
+            AddTextFrameStyled(Comp, 180, -40, 260, 60, 'FRAME2');
             AddRoundRectStyled(Comp, -150, 0, -50, 50);
             AddLabelFlagged(Comp, -150, -80, 'MIRRORED');
             AddParameterProps(Comp, 'Rating', '10V', 50, -80);

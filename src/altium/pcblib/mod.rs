@@ -844,6 +844,36 @@ mod tests {
     }
 
     #[test]
+    fn orphan_removal_keeps_bodies_it_cannot_judge() {
+        // Only an embedded body naming a model the library does not carry is
+        // an orphan. An external reference, or one with no model id to check
+        // against, must survive — deleting those would drop live geometry.
+        let mut lib = PcbLib::new();
+        let mut fp = Footprint::new("MIXED");
+
+        let mut external = ComponentBody::new("{ABSENT}", "ext.step");
+        external.embedded = false;
+        fp.add_component_body(external);
+
+        let mut anonymous = ComponentBody::new("", "anon.step");
+        anonymous.embedded = true;
+        fp.add_component_body(anonymous);
+
+        let mut orphan = ComponentBody::new("{GONE}", "gone.step");
+        orphan.embedded = true;
+        fp.add_component_body(orphan);
+
+        lib.add(fp);
+
+        let results = lib.remove_orphaned_component_bodies();
+        assert_eq!(results, vec![("MIXED".to_string(), 1)]);
+        let kept = &lib.get("MIXED").expect("the footprint").component_bodies;
+        assert_eq!(kept.len(), 2);
+        assert!(kept.iter().any(|cb| !cb.embedded));
+        assert!(kept.iter().any(|cb| cb.model_id.is_empty()));
+    }
+
+    #[test]
     fn a_library_reports_its_source_path_only_once_it_has_one() {
         let mut lib = PcbLib::new();
         assert_eq!(lib.filepath(), None);

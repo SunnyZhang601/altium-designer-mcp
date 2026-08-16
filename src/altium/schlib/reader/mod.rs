@@ -539,4 +539,19 @@ mod tests {
         parse_text_record(&mut symbol, &bytes);
         assert_eq!(symbol.parameters[0].value, "10\u{00B5}F");
     }
+
+    #[test]
+    fn empty_or_unparsable_record_fields_leave_the_symbol_as_it_was() {
+        // An empty LibReference is not a name — taking it would blank out the
+        // symbol's OLE storage name and make it unaddressable.
+        let mut symbol = Symbol::new("KEEP_ME");
+        parse_text_record_from_string(&mut symbol, "|RECORD=1|LibReference=");
+        assert_eq!(symbol.name, "KEEP_ME");
+
+        // A polyline record carrying no usable geometry is dropped rather than
+        // added as a degenerate shape.
+        let mut symbol = Symbol::new("NO_POLYLINE");
+        parse_text_record_from_string(&mut symbol, "|RECORD=6|LocationCount=0");
+        assert!(symbol.polylines.is_empty());
+    }
 }

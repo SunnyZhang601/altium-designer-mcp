@@ -570,6 +570,19 @@ mod tests {
         tempfile::tempdir_in(root).expect("create temp dir")
     }
 
+    /// Runs `body` with a TRACE-level subscriber installed on this thread.
+    /// The reader reports what it found — and what it gave up on — through
+    /// `tracing`, and those fields are only evaluated when a subscriber wants
+    /// them, so a damaged file has to be read under one to prove the
+    /// diagnostics themselves are well-formed.
+    fn with_tracing<T>(body: impl FnOnce() -> T) -> T {
+        let subscriber = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::TRACE)
+            .with_test_writer()
+            .finish();
+        tracing::subscriber::with_default(subscriber, body)
+    }
+
     #[test]
     fn the_legacy_pipe_delimited_header_still_parses() {
         // Older libraries carry a key=value header instead of the binary
@@ -584,7 +597,7 @@ mod tests {
               |LIBREF0=FIRST|LIBREF1=SECOND|COMPDESCR0=first part|COMPDESCR1=second part|",
         );
 
-        let library = PcbLib::open(&path).expect("a legacy header should read");
+        let library = with_tracing(|| PcbLib::open(&path).expect("a legacy header should read"));
         assert_eq!(library.metadata.component_count, 2);
         assert_eq!(library.metadata.component_names, vec!["FIRST", "SECOND"]);
         assert_eq!(
@@ -867,7 +880,7 @@ mod tests {
         data.extend_from_slice(b"FP");
         let path = dir.path().join("ShortNames.PcbLib");
         library_with_library_data(&path, &data);
-        let library = PcbLib::open(&path).expect("should open");
+        let library = with_tracing(|| PcbLib::open(&path).expect("should open"));
         assert_eq!(library.metadata.component_count, 2);
         assert_eq!(library.metadata.component_names, vec!["FP"]);
     }
@@ -943,5 +956,56 @@ mod tests {
         let path = dir.path().join("BinaryStorage.PcbLib");
         library_with_optional_storage(&path, b"|PATTERN=FP|", Some(&[0xFF, 0xFE, 0xFD]));
         assert_eq!(PcbLib::open(&path).expect("should open").len(), 1);
+    }
+
+    #[test]
+    fn a_models_header_that_disagrees_with_the_index_defers_to_the_index() {
+        // The Header count comes straight from the file and is uncapped, so a
+        // crafted one must not drive the stream scan — the parsed index does.
+        // A stream the index names but the file lacks costs that model alone.
+        let dir = temp_dir();
+        let path = dir.path().join("Models.PcbLib");
+        {
+            let mut compound = cfb::create(&path).expect("create compound document");
+            {
+                let mut stream = compound
+                    .create_stream("/FileHeader")
+                    .expect("create FileHeader");
+                stream
+                    .write_all(b"|HEADER=Protel for Windows - PCB Library|")
+                    .expect("write FileHeader");
+            }
+            compound.create_storage("/Library").expect("create Library");
+            compound
+                .create_storage("/Library/Models")
+                .expect("create Models");
+            {
+                // Claims far more models than the index describes.
+                let mut stream = compound
+                    .create_stream("/Library/Models/Header")
+                    .expect("create Models/Header");
+                stream
+                    .write_all(&9999u32.to_le_bytes())
+                    .expect("write Models/Header");
+            }
+            {
+                // One record, so the index bounds the scan at a single stream.
+                let record = b"|ID={AAAA}|NAME=part.step|";
+                let mut data = u32::try_from(record.len()).unwrap().to_le_bytes().to_vec();
+                data.extend_from_slice(record);
+                let mut stream = compound
+                    .create_stream("/Library/Models/Data")
+                    .expect("create Models/Data");
+                stream.write_all(&data).expect("write Models/Data");
+            }
+            // Deliberately no /Library/Models/0 stream.
+            compound.flush().expect("flush compound document");
+        }
+
+        let library = with_tracing(|| PcbLib::open(&path).expect("the library should open"));
+        assert!(
+            library.models.is_empty(),
+            "a model whose stream is absent must not be invented"
+        );
     }
 }

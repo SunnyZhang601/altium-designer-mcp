@@ -1113,4 +1113,62 @@ mod tests {
             assert!(get_result_text(&r).contains("more"));
         }
     }
+
+    #[test]
+    fn rendering_refuses_a_library_outside_the_allowed_directories() {
+        // Both renderers read the file before drawing, so the sandbox check
+        // has to come first — otherwise a render is an arbitrary file read.
+        let dir = test_temp_dir();
+        let other = test_temp_dir();
+        let server = create_test_server(dir.path());
+
+        let outside_pcb = other.path().join("Outside.PcbLib");
+        create_test_pcblib(&outside_pcb);
+        let r = server.call_render_footprint(&json!({
+            "filepath": outside_pcb.to_string_lossy(),
+            "component_name": "CHIP_0402",
+        }));
+        assert!(r.is_error);
+        assert!(
+            get_result_text(&r).contains("Access denied"),
+            "{}",
+            get_result_text(&r)
+        );
+
+        let outside_sch = other.path().join("Outside.SchLib");
+        create_test_schlib(&outside_sch);
+        let r = server.call_render_symbol(&json!({
+            "filepath": outside_sch.to_string_lossy(),
+            "component_name": "RESISTOR",
+        }));
+        assert!(r.is_error);
+        assert!(
+            get_result_text(&r).contains("Access denied"),
+            "{}",
+            get_result_text(&r)
+        );
+    }
+
+    #[test]
+    fn rendering_from_an_empty_library_says_so_rather_than_listing_nothing() {
+        // "Available symbols include: " with an empty list reads as a bug in
+        // the tool; naming the real cause points at the file instead.
+        use crate::altium::schlib::SchLib;
+
+        let dir = test_temp_dir();
+        let server = create_test_server(dir.path());
+        let path = dir.path().join("Empty.SchLib");
+        SchLib::new().save(&path).unwrap();
+
+        let r = server.call_render_symbol(&json!({
+            "filepath": path.to_string_lossy(),
+            "component_name": "ANY",
+        }));
+        assert!(r.is_error);
+        assert!(
+            get_result_text(&r).contains("Library is empty"),
+            "{}",
+            get_result_text(&r)
+        );
+    }
 }

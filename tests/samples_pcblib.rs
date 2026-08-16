@@ -936,6 +936,38 @@ fn samples_pcblib_component_body_placement_and_appearance() {
 }
 
 #[test]
+fn samples_pcblib_rotated_unplated_slot() {
+    let lib = PcbLib::open(sample("footprints.PcbLib")).expect("failed to open footprints.PcbLib");
+    let fp = lib.get("PRIMPROPS").expect("PRIMPROPS footprint not found");
+
+    // Every other hole in the library is unrotated and plated, so both arms read
+    // nothing but defaults. The slot is 20 mil across and 40 mil long, turned 30
+    // degrees, and unplated.
+    let pad = fp
+        .pads
+        .iter()
+        .find(|p| p.designator == "S1")
+        .expect("PRIMPROPS pad S1 not found");
+    assert_eq!(pad.hole_shape, HoleShape::Slot, "slotted hole");
+    assert!(
+        pad.hole_size.is_some_and(|h| approx_eq(h, 0.508, 1e-6)),
+        "20 mil slot width, got {:?}",
+        pad.hole_size
+    );
+    assert!(
+        approx_eq(pad.hole_slot_length, 1.016, 1e-6),
+        "40 mil slot length, got {}",
+        pad.hole_slot_length
+    );
+    assert!(
+        approx_eq(pad.hole_rotation, 30.0, 1e-9),
+        "slot rotated 30 degrees, got {}",
+        pad.hole_rotation
+    );
+    assert!(!pad.is_plated, "authored unplated");
+}
+
+#[test]
 fn samples_pcblib_text_stroke_fonts() {
     let lib = PcbLib::open(sample("footprints.PcbLib")).expect("failed to open footprints.PcbLib");
     let fp = lib.get("PRIMPROPS").expect("PRIMPROPS footprint not found");

@@ -934,6 +934,7 @@ impl McpServer {
                                                 "color": { "type": "integer", "description": "Curve BGR colour. Default: 0x000080 (128, dark red)" },
                                                 "is_not_accessible": { "type": "boolean", "description": "Whether the curve is marked not-accessible (Altium tags every shape; default true)" },
                                                 "owner_part_id": { "type": "integer", "description": "Part number (1-based). Default: 1" },
+                                                "graphically_locked": { "type": "boolean", "description": "Whether the shape is graphically locked. Default: false" },
                                                 "unique_id": { "type": "string", "description": "8-char Altium unique ID; preserved on read-modify-write, auto-generated if omitted" }
                                             },
                                             "required": ["x1", "y1", "x2", "y2", "x3", "y3", "x4", "y4"]

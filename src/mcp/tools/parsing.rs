@@ -2021,6 +2021,7 @@ impl McpServer {
             color,
             is_not_accessible,
             owner_part_id,
+            display_flags: parse_schlib_display_flags(json),
             unique_id: json_unique_id(json),
         })
     }

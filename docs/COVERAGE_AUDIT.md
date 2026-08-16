@@ -75,6 +75,7 @@ authoring it and reading the saved bytes back.
 | SchLib text-frame `Orientation` | not on `ISch_TextFrame` — `Frm.Orientation` does not compile, though it is real on label/parameter/pin |
 | SchLib image `ShowBorder` | not on `ISch_Image` — `Img.ShowBorder` does not compile, though it is real on `ISch_TextFrame` |
 | SchLib polyline fill (`AreaColor`/`IsSolid`/`Transparent`) | all three compile on `ISch_Polyline` and none is written; the rectangle and polygon records do persist theirs |
+| SchLib parameter area colour | there is no such property: `parse_parameter` reads no colour-fill key and no authored parameter record carries one |
 | SchLib text-frame `Transparent` | accepted, then not written — the saved `RECORD=28` has no `Transparent` key |
 | PcbLib region `ArcResolution` | not on `IPCB_Region` — `Rgn.ArcResolution` does not compile, though the name is real elsewhere in the identifier table |
 | PcbLib via mask expansion via DIRECT setters | `Via.SolderMaskExpansion*` / `.PasteMaskExpansion*` compile, then crash AD24 with a native access violation in `ScriptingSystem.DLL`. Set them through `TPadCache` (`GetState_Cache` → `SetState_Cache`) instead, which works |

@@ -548,6 +548,9 @@ pub struct Bezier {
     /// Owner part ID.
     #[serde(default = "default_owner_part")]
     pub owner_part_id: i32,
+    /// Universal display/lock flags; omitted from JSON when all default.
+    #[serde(default, flatten)]
+    pub display_flags: ShapeDisplayFlags,
     /// Altium unique ID (8-char). Preserved on read so a round-trip keeps the
     /// shape identity; a from-scratch shape generates a fresh one on write (#113).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -581,6 +584,7 @@ impl Bezier {
             color: 0x00_00_80, // Dark red (BGR)
             is_not_accessible: true,
             owner_part_id: 1,
+            display_flags: ShapeDisplayFlags::default(),
             unique_id: None,
         }
     }

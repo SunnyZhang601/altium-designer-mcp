@@ -1016,6 +1016,7 @@ mod tests {
         let mut bezier2 = Bezier::new(0, 0, 10, 20, 20, 20, 30, 0);
         bezier2.line_width = 2;
         bezier2.color = 0x00_00_FF; // Red
+        bezier2.display_flags.graphically_locked = true;
         symbol.add_bezier(bezier2);
 
         // Create library and write
@@ -1044,6 +1045,14 @@ mod tests {
         assert_eq!((b2.x1, b2.y1, b2.x4, b2.y4), (0.0, 0.0, 30.0, 0.0));
         assert_eq!(b2.line_width, 2);
         assert_eq!(b2.color, 0x00_00_FF);
+        assert!(
+            b2.display_flags.graphically_locked,
+            "the lock flag survives a write/read cycle"
+        );
+        assert!(
+            !b1.display_flags.graphically_locked,
+            "the untouched curve is the control"
+        );
     }
 
     #[test]

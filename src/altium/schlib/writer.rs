@@ -797,10 +797,11 @@ fn encode_bezier(bezier: &Bezier, index: usize) -> String {
         ""
     };
     format!(
-        "|RECORD=5{}{}|OwnerPartId={}|LineWidth={}{}|LocationCount=4{}{}{}{}{}{}{}{}|UniqueID={}",
+        "|RECORD=5{}{}|OwnerPartId={}{}|LineWidth={}{}|LocationCount=4{}{}{}{}{}{}{}{}|UniqueID={}",
         not_accessible,
         index_in_sheet(index),
         bezier.owner_part_id,
+        write_display_flags(bezier.display_flags),
         bezier.line_width,
         nonzero("Color", bezier.color),
         coord_param("X1", bezier.x1),

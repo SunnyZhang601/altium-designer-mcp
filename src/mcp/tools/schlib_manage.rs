@@ -1171,4 +1171,159 @@ mod tests {
             assert!(get_result_text(&result).contains("already linked"));
         }
     }
+
+    // ==================== optional parameter properties ======================
+    //
+    // `add` and `set` each carry their own copy of the optional-property block.
+    // Every one of these is omit-when-default on write, so an ignored argument
+    // is silent: the call reports success and the property simply is not there.
+
+    mod optional_properties {
+        use crate::altium::SchLib;
+        use crate::mcp::tools::test_support::{
+            create_test_schlib, create_test_server, get_result_text, test_temp_dir,
+        };
+        use serde_json::json;
+
+        #[test]
+        fn add_and_set_both_apply_the_optional_properties() {
+            let dir = test_temp_dir();
+            let server = create_test_server(dir.path());
+            let path = dir.path().join("Params.SchLib");
+            create_test_schlib(&path);
+
+            let added = server.call_manage_schlib_parameters(&json!({
+                "filepath": path.to_string_lossy(),
+                "component_name": "RESISTOR",
+                "operation": "add",
+                "parameter_name": "Tolerance",
+                "value": "1%",
+                "hidden": true,
+                "read_only_state": 1,
+                "param_type": 2,
+                "unique_id": "ABCDEFGH",
+            }));
+            assert!(!added.is_error, "{}", get_result_text(&added));
+
+            let read = || {
+                SchLib::open(&path)
+                    .unwrap()
+                    .get("RESISTOR")
+                    .unwrap()
+                    .parameters
+                    .iter()
+                    .find(|p| p.name == "Tolerance")
+                    .expect("the parameter should be there")
+                    .clone()
+            };
+
+            let param = read();
+            assert!(param.hidden);
+            assert_eq!(param.read_only_state, 1);
+            assert_eq!(param.param_type, 2);
+            assert_eq!(param.unique_id.as_deref(), Some("ABCDEFGH"));
+
+            // `set` carries its own copy of the same block, so changing them on
+            // an existing parameter has to work too.
+            let updated = server.call_manage_schlib_parameters(&json!({
+                "filepath": path.to_string_lossy(),
+                "component_name": "RESISTOR",
+                "operation": "set",
+                "parameter_name": "Tolerance",
+                "value": "5%",
+                "hidden": false,
+                "read_only_state": 0,
+                "param_type": 1,
+                "unique_id": "HGFEDCBA",
+            }));
+            assert!(!updated.is_error, "{}", get_result_text(&updated));
+
+            let param = read();
+            assert_eq!(param.value, "5%");
+            assert!(!param.hidden);
+            assert_eq!(param.param_type, 1);
+            assert_eq!(param.unique_id.as_deref(), Some("HGFEDCBA"));
+        }
+
+        #[test]
+        fn add_refuses_a_duplicate_and_set_refuses_a_missing_one() {
+            // The two operations are not interchangeable, and each rejection
+            // names the one the caller should have used.
+            let dir = test_temp_dir();
+            let server = create_test_server(dir.path());
+            let path = dir.path().join("Dup.SchLib");
+            create_test_schlib(&path);
+
+            let add = |name: &str, value: &str| {
+                server.call_manage_schlib_parameters(&json!({
+                    "filepath": path.to_string_lossy(),
+                    "component_name": "RESISTOR",
+                    "operation": "add",
+                    "parameter_name": name,
+                    "value": value,
+                }))
+            };
+
+            assert!(!add("Tolerance", "1%").is_error);
+
+            let duplicate = add("Tolerance", "2%");
+            assert!(duplicate.is_error);
+            assert!(
+                get_result_text(&duplicate).contains("Use 'set'"),
+                "{}",
+                get_result_text(&duplicate)
+            );
+
+            let missing = server.call_manage_schlib_parameters(&json!({
+                "filepath": path.to_string_lossy(),
+                "component_name": "RESISTOR",
+                "operation": "set",
+                "parameter_name": "NoSuchParameter",
+                "value": "x",
+            }));
+            assert!(missing.is_error);
+            assert!(
+                get_result_text(&missing).contains("Use 'add'"),
+                "{}",
+                get_result_text(&missing)
+            );
+
+            // `add` needs a value; there is nothing to default it to.
+            let no_value = server.call_manage_schlib_parameters(&json!({
+                "filepath": path.to_string_lossy(),
+                "component_name": "RESISTOR",
+                "operation": "add",
+                "parameter_name": "Another",
+            }));
+            assert!(no_value.is_error);
+        }
+
+        #[test]
+        fn a_parameter_coordinate_past_the_safe_range_is_refused() {
+            // Same reasoning as the write path: an out-of-range schematic
+            // coordinate saturates on save rather than failing loudly.
+            let dir = test_temp_dir();
+            let server = create_test_server(dir.path());
+            let path = dir.path().join("Far.SchLib");
+            create_test_schlib(&path);
+
+            for axis in ["x", "y"] {
+                let mut args = json!({
+                    "filepath": path.to_string_lossy(),
+                    "component_name": "RESISTOR",
+                    "operation": "add",
+                    "parameter_name": format!("Far{axis}"),
+                    "value": "1",
+                });
+                args[axis] = json!(99_999.0);
+                let r = server.call_manage_schlib_parameters(&args);
+                assert!(r.is_error, "{axis}: {}", get_result_text(&r));
+                assert!(
+                    get_result_text(&r).contains("exceeds the maximum safe range"),
+                    "{}",
+                    get_result_text(&r)
+                );
+            }
+        }
+    }
 }

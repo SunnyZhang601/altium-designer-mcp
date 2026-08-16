@@ -232,6 +232,121 @@ pub(super) fn parse_icon_storage(raw: &[u8]) -> Vec<Vec<u8>> {
 mod tests {
     use super::*;
 
+    // ==================== entry walking under corruption =====================
+    //
+    // `/Storage` payloads are matched to embedded images by ordinal, so an
+    // entry silently mis-read does not just lose its own image — it shifts
+    // every image after it onto the wrong bytes. The walk therefore stops at
+    // the first malformed entry rather than trying to resynchronise.
+
+    /// Wraps entry bytes in the header block the walker skips.
+    fn storage_stream(entries: &[u8]) -> Vec<u8> {
+        let mut out = Vec::new();
+        write_cstring_param_block(&mut out, b"|HEADER=Icon storage");
+        out.extend_from_slice(entries);
+        out
+    }
+
+    /// Collects the entries a walk yields.
+    fn walk(raw: &[u8]) -> Vec<(String, Vec<u8>)> {
+        let mut seen = Vec::new();
+        for_each_entry(raw, MAX_IMAGE_DECOMPRESSED, |name, payload| {
+            seen.push((name.to_string(), payload.to_vec()));
+        });
+        seen
+    }
+
+    #[test]
+    fn a_well_formed_entry_round_trips_through_the_walker() {
+        let mut entries = Vec::new();
+        write_entry(&mut entries, "logo.bmp", b"BMPBYTES").expect("entry should write");
+        let seen = walk(&storage_stream(&entries));
+        assert_eq!(seen.len(), 1);
+        assert_eq!(seen[0].0, "logo.bmp");
+        assert_eq!(seen[0].1, b"BMPBYTES");
+    }
+
+    #[test]
+    fn an_entry_name_longer_than_its_length_prefix_is_refused() {
+        // The key is a Pascal short string: one byte of length. Over 255 the
+        // prefix wraps and the reader takes the wrong byte count.
+        let err = write_entry(&mut Vec::new(), &"x".repeat(256), b"payload")
+            .expect_err("an oversize entry name must be refused");
+        assert!(err.to_string().contains("too long"), "{err}");
+    }
+
+    #[test]
+    fn the_walk_stops_at_the_first_malformed_entry() {
+        let mut good = Vec::new();
+        write_entry(&mut good, "first.bmp", b"ONE").expect("entry should write");
+
+        // A zero-length block: no way to know how far to step.
+        let mut zero = good.clone();
+        zero.extend_from_slice(&ENTRY_SIZE_FLAG.to_le_bytes());
+        assert_eq!(walk(&storage_stream(&zero)).len(), 1, "zero-size block");
+
+        // A block claiming more bytes than the stream holds.
+        let mut overrun = good.clone();
+        overrun.extend_from_slice(&(0x0100_0FFF_u32).to_le_bytes());
+        overrun.extend_from_slice(&[0xD0, 0x01, b'x']);
+        assert_eq!(walk(&storage_stream(&overrun)).len(), 1, "truncated block");
+
+        // A block whose tag is not 0xD0 — not an entry, so the layout after it
+        // is unknown.
+        let mut bad_tag = good.clone();
+        bad_tag.extend_from_slice(&(0x0100_0003_u32).to_le_bytes());
+        bad_tag.extend_from_slice(&[0x00, 0x01, b'x']);
+        assert_eq!(walk(&storage_stream(&bad_tag)).len(), 1, "missing 0xD0 tag");
+    }
+
+    #[test]
+    fn an_entry_that_will_not_inflate_is_skipped_without_stopping_the_walk() {
+        // A corrupt payload costs its own image, but the entry framing is still
+        // intact, so the walk keeps its place and later entries survive.
+        let mut entries = Vec::new();
+        write_entry(&mut entries, "first.bmp", b"ONE").expect("entry should write");
+
+        let garbage = b"not zlib at all";
+        let block_size = 1 + 1 + "bad.bmp".len() + 4 + garbage.len();
+        let block_size = u32::try_from(block_size).expect("fixture fits");
+        entries.extend_from_slice(&(block_size | ENTRY_SIZE_FLAG).to_le_bytes());
+        entries.push(ENTRY_TAG);
+        entries.push(7);
+        entries.extend_from_slice(b"bad.bmp");
+        let garbage_len = u32::try_from(garbage.len()).expect("fixture fits");
+        entries.extend_from_slice(&garbage_len.to_le_bytes());
+        entries.extend_from_slice(garbage);
+
+        write_entry(&mut entries, "last.bmp", b"TWO").expect("entry should write");
+
+        let seen = walk(&storage_stream(&entries));
+        assert_eq!(
+            seen.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>(),
+            vec!["first.bmp", "last.bmp"],
+            "a bad payload must not cost the entries after it"
+        );
+    }
+
+    #[test]
+    fn decompression_is_capped_so_a_zip_bomb_cannot_exhaust_memory() {
+        // A small entry can inflate to an arbitrary size; the cap is what stops
+        // a malicious library allocating until the process dies.
+        let payload = vec![0_u8; 4096];
+        let compressed = zlib_compress(&payload).expect("compress");
+        assert!(zlib_decompress(&compressed, 4096).is_some(), "at the cap");
+        assert!(
+            zlib_decompress(&compressed, 4095).is_none(),
+            "one byte over the cap must be refused"
+        );
+        assert!(zlib_decompress(b"not zlib", 4096).is_none());
+    }
+
+    #[test]
+    fn a_stream_too_short_to_hold_its_header_yields_nothing() {
+        assert!(walk(&[]).is_empty());
+        assert!(walk(&[1, 2, 3]).is_empty());
+    }
+
     #[test]
     fn empty_icon_storage_is_byte_identical_header_only() {
         // The oracle-guarded invariant: a library with no embedded images

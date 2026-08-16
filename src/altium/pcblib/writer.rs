@@ -3675,4 +3675,100 @@ mod tests {
             "must not have a trailing pipe before the null"
         );
     }
+
+    // ==================== V7_LAYER vocabulary ================================
+
+    #[test]
+    fn every_layer_maps_to_a_v7_token_and_no_two_share_one() {
+        // Altium resolves a Region's or ComponentBody's layer from this token,
+        // not from the common-header byte, and a token it cannot resolve leaves
+        // the primitive on Top Layer. So a wrong or duplicated entry does not
+        // fail the save — it silently moves copper to the other side of the
+        // board. The vocabulary is a fixed one from Advpcb.dll, and stripping
+        // spaces out of the display name is exactly the mistake that produces
+        // the unresolvable "BOTTOMLAYER".
+        use std::collections::HashSet;
+
+        // The named vocabulary, spot-checked against the golden.
+        let vocabulary = [
+            (Layer::TopLayer, "TOP"),
+            (Layer::BottomLayer, "BOTTOM"),
+            (Layer::MidLayer1, "MID1"),
+            (Layer::MidLayer30, "MID30"),
+            (Layer::TopOverlay, "TOPOVERLAY"),
+            (Layer::BottomOverlay, "BOTTOMOVERLAY"),
+            (Layer::TopPaste, "TOPPASTE"),
+            (Layer::BottomPaste, "BOTTOMPASTE"),
+            (Layer::TopSolder, "TOPSOLDER"),
+            (Layer::BottomSolder, "BOTTOMSOLDER"),
+            (Layer::InternalPlane1, "PLANE1"),
+            (Layer::InternalPlane16, "PLANE16"),
+            (Layer::DrillGuide, "DRILLGUIDE"),
+            (Layer::KeepOut, "KEEPOUT"),
+            (Layer::Mechanical1, "MECHANICAL1"),
+            (Layer::Mechanical16, "MECHANICAL16"),
+            (Layer::DrillDrawing, "DRILLDRAWING"),
+            (Layer::MultiLayer, "MULTILAYER"),
+            (Layer::ConnectLayer, "CONNECT"),
+            (Layer::BackgroundLayer, "BACKGROUND"),
+            (Layer::DRCErrorLayer, "DRCERRORS"),
+            (Layer::HighlightLayer, "SELECTIONS"),
+            (Layer::GridColor1, "VISIBLEGRID1X"),
+            (Layer::GridColor10, "VISIBLEGRID10X"),
+            (Layer::PadHoleLayer, "PADHOLES"),
+            (Layer::ViaHoleLayer, "VIAHOLES"),
+            // The extended mechanical range keeps counting from 17, not from 1.
+            (Layer::Mechanical17, "MECHANICAL17"),
+            (Layer::Mechanical32, "MECHANICAL32"),
+        ];
+        for (layer, token) in vocabulary {
+            assert_eq!(v7_layer_token(layer), token, "{layer:?}");
+        }
+
+        // Two layers sharing a token would merge on read-back, so within the
+        // vocabulary every token has to be its own.
+        let distinct: HashSet<&str> = vocabulary.iter().map(|&(_, token)| token).collect();
+        assert_eq!(
+            distinct.len(),
+            vocabulary.len(),
+            "two layers share a V7_LAYER token"
+        );
+
+        // The component-layer aliases deliberately do share their mechanical
+        // layer's token, because that is the layer Altium stores them on.
+        assert_eq!(v7_layer_token(Layer::TopAssembly), "MECHANICAL2");
+        assert_eq!(v7_layer_token(Layer::Top3DBody), "MECHANICAL6");
+    }
+
+    #[test]
+    fn a_full_stack_via_writes_its_per_layer_diameters() {
+        // A stacked via carries one diameter per layer. Falling back to the
+        // simple diameter for a layer the caller supplied would quietly resize
+        // the barrel on that layer.
+        let mut via = Via::new(0.0, 0.0, 0.6, 0.3);
+        via.diameter_stack_mode = ViaStackMode::FullStack;
+        via.per_layer_diameters = Some(vec![0.9; 32]);
+
+        let mut stacked = Vec::new();
+        encode_via(&mut stacked, &via);
+
+        let mut simple = Via::new(0.0, 0.0, 0.6, 0.3);
+        simple.diameter_stack_mode = ViaStackMode::Simple;
+        let mut plain = Vec::new();
+        encode_via(&mut plain, &simple);
+
+        assert_ne!(
+            stacked, plain,
+            "the per-layer diameters left no trace in the record"
+        );
+
+        // A short list falls back to the primary diameter for the layers it
+        // does not cover, rather than writing a zero-width barrel.
+        let mut partial = Via::new(0.0, 0.0, 0.6, 0.3);
+        partial.diameter_stack_mode = ViaStackMode::FullStack;
+        partial.per_layer_diameters = Some(vec![0.9; 4]);
+        let mut short = Vec::new();
+        encode_via(&mut short, &partial);
+        assert_eq!(short.len(), stacked.len());
+    }
 }

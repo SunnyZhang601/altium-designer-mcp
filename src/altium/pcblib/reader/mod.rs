@@ -840,6 +840,63 @@ mod tests {
     }
 
     #[test]
+    fn the_model_index_stops_at_a_corrupt_record_length() {
+        // Model records are length-prefixed and read back to back, so a wrong
+        // length has lost the reader's place. It stops rather than decoding the
+        // rest at the wrong offset.
+        let record = |body: &str| {
+            let mut out = u32::try_from(body.len()).unwrap().to_le_bytes().to_vec();
+            out.extend_from_slice(body.as_bytes());
+            out.push(0); // null terminator
+            out
+        };
+
+        let good = record("|ID=GUID-1|NAME=part.step");
+        assert_eq!(parse_model_data_stream(&good).len(), 1);
+
+        // A length running past the end of the stream.
+        let mut overrun = good.clone();
+        overrun[0] = 0xFF;
+        assert!(parse_model_data_stream(&overrun).is_empty());
+
+        // A zero length: no way to know how far to step.
+        assert!(parse_model_data_stream(&0_u32.to_le_bytes()).is_empty());
+
+        // A record with no ID key cannot be matched to a model stream, so it
+        // is skipped — but the scan keeps its place and later records survive.
+        let mut mixed = record("|NAME=orphan.step");
+        mixed.extend_from_slice(&good);
+        assert_eq!(parse_model_data_stream(&mixed).len(), 1);
+    }
+
+    #[test]
+    fn a_model_stream_without_a_guid_or_a_readable_payload_is_dropped() {
+        // Both skips lose a 3D body, which is why each logs: the library still
+        // opens, and the footprint simply has no model, so a silent drop would
+        // look like the model was never there.
+        let mut index = ModelIndex::new();
+        index.insert("GUID-1".to_string(), (0, "part.step".to_string()));
+
+        // Stream index 7 has no entry in the index.
+        let unmapped = parse_embedded_models(&index, &[(7, vec![1, 2, 3])]);
+        assert!(unmapped.is_empty(), "{unmapped:?}");
+
+        // Mapped, but the payload is not zlib.
+        let corrupt = parse_embedded_models(&index, &[(0, b"not zlib at all".to_vec())]);
+        assert!(corrupt.is_empty(), "{corrupt:?}");
+
+        // Mapped and readable: kept, with its id and name from the index.
+        let mut encoder = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::fast());
+        std::io::Write::write_all(&mut encoder, b"ISO-10303-21;").unwrap();
+        let compressed = encoder.finish().unwrap();
+        let models = parse_embedded_models(&index, &[(0, compressed)]);
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0].id, "GUID-1");
+        assert_eq!(models[0].name, "part.step");
+        assert_eq!(models[0].data, b"ISO-10303-21;");
+    }
+
+    #[test]
     fn an_unknown_record_type_stops_the_scan_rather_than_guessing_its_length() {
         // An unrecognised type has no known block layout, so there is no way to
         // step past it to the next record.

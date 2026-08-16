@@ -10,8 +10,29 @@
 
 ## Outstanding
 
-Nothing in the format layer. No field an Altium library can store is currently known to be
-lost on read or unreachable on write.
+**Per-primitive GUIDs are dropped on read (`PcbLib`).** Every footprint storage carries a
+`PrimitiveGuids` stream that the reader ignores entirely, so a read-modify-write discards
+Altium's stable identity for every pad, via, track, arc, region, text and body in the
+library. `write_io.rs` calls it "the editor's optional per-primitive GUID cache", but every
+Altium-authored footprint in the golden has one.
+
+The format is fixed-width and fully decoded:
+
+```text
+PrimitiveGuids/Header : u32   record count
+PrimitiveGuids/Data   : count x 24 bytes
+                        [object_kind : u32][index_within_kind : u32][guid : 16 bytes, LE]
+```
+
+`object_kind` is Altium's object id (1 arc, 2 pad, 3 via, 5 text, 89 region, 90 component
+body) and `index_within_kind` is the primitive's position among its own kind. Kind 85
+appears exactly once per footprint at index 0 — the footprint record itself. Counts match:
+`PRIMPROPS` has four regions, one body, two texts, one via and one pad, and its header
+reads 10.
+
+Closing it needs a stream reader, a per-primitive field to hold the GUID, and a writer that
+re-emits the stream in the same fixed-width form. Nothing else in the format layer is known
+to be lost on read or unreachable on write.
 
 The SchLib Parameter display properties are settled: `NotAutoPosition` and
 `Justification` are covered by a hand-authored fixture

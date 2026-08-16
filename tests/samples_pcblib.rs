@@ -7,7 +7,7 @@
 
 use altium_designer_mcp::altium::pcblib::{
     DrillLayerPairType, HoleShape, Layer, MaskExpansionMode, PadShape, PadStackMode, PcbFlags,
-    PcbLib, RegionKind, TextKind,
+    PcbLib, RegionKind, StrokeFont, TextKind,
 };
 use std::path::PathBuf;
 
@@ -933,6 +933,41 @@ fn samples_pcblib_component_body_placement_and_appearance() {
         "3D body opacity, got {}",
         b.body_opacity_3d
     );
+}
+
+#[test]
+fn samples_pcblib_text_stroke_fonts() {
+    let lib = PcbLib::open(sample("footprints.PcbLib")).expect("failed to open footprints.PcbLib");
+    let fp = lib.get("PRIMPROPS").expect("PRIMPROPS footprint not found");
+
+    // The reader only surfaces a stroke font when the geometry's font id at @25
+    // is above 1, so a library of default-font texts never reaches that arm.
+    // FontID 2 = Sans Serif, 3 = Serif; both also carry a non-default 12 mil
+    // stroke width, which no other text in the library sets.
+    let by_text = |t: &str| {
+        fp.text
+            .iter()
+            .find(|x| x.text == t)
+            .unwrap_or_else(|| panic!("PRIMPROPS text {t:?} not found"))
+    };
+
+    let sans = by_text("SANS");
+    assert_eq!(
+        sans.kind,
+        TextKind::Stroke,
+        "authored as stroke, not TrueType"
+    );
+    assert_eq!(sans.stroke_font, Some(StrokeFont::SansSerif), "FontID 2");
+    assert!(
+        sans.stroke_width
+            .is_some_and(|w| approx_eq(w, 0.3048, 1e-6)),
+        "12 mil stroke width, got {:?}",
+        sans.stroke_width
+    );
+
+    let serif = by_text("SERIF");
+    assert_eq!(serif.kind, TextKind::Stroke);
+    assert_eq!(serif.stroke_font, Some(StrokeFont::Serif), "FontID 3");
 }
 
 #[test]

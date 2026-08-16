@@ -689,6 +689,33 @@ begin
                                   PCBM_BoardRegisteration, Via.I_ObjectAddress);
 end;
 
+{ Stroke text selecting a non-default stroke font and a non-default stroke
+  width. Every other stroke text in the library leaves both at the factory
+  value, so the reader's font-id arm (geometry @25, only surfaced above 1) and
+  the stroke-width arm have no golden coverage. FontID 2 = Sans Serif,
+  3 = Serif. }
+procedure AddTextStrokeFont(Comp : IPCB_LibComponent; X : Integer; Y : Integer;
+                            Content : String; Height : Integer; AFontID : Integer;
+                            WidthMils : Integer);
+var
+    Txt : IPCB_Text;
+begin
+    Txt := PCBServer.PCBObjectFactory(eTextObject, eNoDimension, eCreate_Default);
+    if Txt = nil then Exit;
+    Txt.XLocation  := MilsToCoord(X);
+    Txt.YLocation  := MilsToCoord(Y);
+    Txt.Layer      := eTopOverlay;
+    Txt.Size       := MilsToCoord(Height);
+    Txt.Rotation   := 0;
+    Txt.UseTTFonts := False;      { stroke, not TrueType }
+    Txt.FontID     := AFontID;
+    Txt.Width      := MilsToCoord(WidthMils);
+    Txt.Text       := Content;
+    Comp.AddPCBObject(Txt);
+    PCBServer.SendMessageToRobots(Comp.I_ObjectAddress, c_Broadcast,
+                                  PCBM_BoardRegisteration, Txt.I_ObjectAddress);
+end;
+
 { ---- PcbLib authoring -------------------------------------------------------
 
   Footprints: PAD_SHAPES, PAD_HOLES, VIAS, TRACKS, ARCS, REGIONS, FILLS, TEXT_STROKE,
@@ -1320,6 +1347,8 @@ begin
         Lib.RegisterComponent(Comp);
         PCBServer.PreProcess;
         AddRegionNamed(Comp, -100, -50,   0,  50, 'NamedPour', eRegionKind_NamedRegion);
+        AddTextStrokeFont(Comp, -100, 120, 'SANS',  40, 2, 12);
+        AddTextStrokeFont(Comp,  100, 120, 'SERIF', 40, 3, 12);
         AddRegionNamed(Comp,   20, -50, 120,  50, 'CavityRgn', eRegionKind_Cavity);
         AddRegionNamed(Comp,  140, -50, 240,  50, 'BoardCut',  eRegionKind_BoardCutout);
         AddRegionNamed(Comp,  260, -50, 360,  50, 'PlainCut',  eRegionKind_Cutout);

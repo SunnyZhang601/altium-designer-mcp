@@ -545,9 +545,21 @@ impl PcbLib {
             &wide_strings_data,
         )?;
 
-        // PrimitiveGuids is the editor's optional per-primitive GUID cache.
-        // Altium (and AltiumSharp) omit it for from-scratch footprints, so we
-        // do too — writing it with a guessed record layout only risked rejection.
+        // PrimitiveGuids: Altium's stable per-primitive identity. Re-emitted only
+        // when the footprint was read from a file that had one — a from-scratch
+        // footprint has no identities to preserve, and inventing them would make
+        // every save produce different bytes.
+        if let Some(guid_data) = writer::encode_primitive_guids(footprint) {
+            let guid_storage = format!("{storage_path}/PrimitiveGuids");
+            crate::altium::create_storage(cfb, &guid_storage)?;
+            let count = u32::try_from(footprint.primitive_guids.len()).unwrap_or(u32::MAX);
+            crate::altium::write_stream(
+                cfb,
+                &format!("{guid_storage}/Header"),
+                &count.to_le_bytes(),
+            )?;
+            crate::altium::write_stream(cfb, &format!("{guid_storage}/Data"), &guid_data)?;
+        }
 
         // Write UniqueIDPrimitiveInformation streams if any primitives have unique IDs
         if let Some(uid_data) = writer::encode_unique_id_stream(footprint) {

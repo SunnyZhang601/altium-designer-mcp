@@ -1007,6 +1007,63 @@ fn samples_pcblib_text_stroke_fonts() {
 }
 
 #[test]
+fn samples_pcblib_primitive_guids_survive_a_rewrite() {
+    let src = sample("footprints.PcbLib");
+    let mut lib = PcbLib::open(&src).expect("failed to open footprints.PcbLib");
+
+    // Altium gives every primitive a stable GUID in the footprint's
+    // PrimitiveGuids stream and uses it to recognise that primitive across
+    // edits. We used to read none of it and write none of it, so a
+    // read-modify-write handed Altium a library in which everything looked new.
+    let arcs = lib.get("ARCS").expect("ARCS footprint not found");
+    assert!(
+        !arcs.primitive_guids.is_empty(),
+        "ARCS carries per-primitive GUIDs"
+    );
+    // Object kind 1 is an arc and 85 is the footprint record itself; the index
+    // counts within the kind, so two arcs give indices 0 and 1.
+    let arc_ids: Vec<u32> = arcs
+        .primitive_guids
+        .iter()
+        .filter(|g| g.object_kind == 1)
+        .map(|g| g.index)
+        .collect();
+    assert_eq!(
+        arc_ids,
+        vec![0, 1],
+        "one GUID per arc, indexed within the kind"
+    );
+    assert!(
+        arcs.primitive_guids.iter().any(|g| g.object_kind == 85),
+        "the footprint record has a GUID of its own"
+    );
+    for guid in &arcs.primitive_guids {
+        assert!(
+            guid.guid.starts_with('{') && guid.guid.ends_with('}') && guid.guid.len() == 38,
+            "GUID is brace-wrapped and 36 characters wide, got {:?}",
+            guid.guid
+        );
+    }
+
+    // The point of reading them is writing them back unchanged.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let out = dir.path().join("rewritten.PcbLib");
+    lib.save(&out).expect("write the library back");
+    let reread = PcbLib::open(&out).expect("reopen the rewritten library");
+
+    for footprint in lib.iter() {
+        let after = reread
+            .get(&footprint.name)
+            .unwrap_or_else(|| panic!("{} missing after rewrite", footprint.name));
+        assert_eq!(
+            after.primitive_guids, footprint.primitive_guids,
+            "{}: primitive GUIDs changed across a rewrite",
+            footprint.name
+        );
+    }
+}
+
+#[test]
 fn samples_pcblib_region_kinds_and_naming() {
     let lib = PcbLib::open(sample("footprints.PcbLib")).expect("failed to open footprints.PcbLib");
     let fp = lib.get("PRIMPROPS").expect("PRIMPROPS footprint not found");

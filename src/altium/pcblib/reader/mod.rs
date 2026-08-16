@@ -242,6 +242,46 @@ fn parse_unique_id_record(record: &str) -> Option<UniqueIdEntry> {
     })
 }
 
+/// Parses a footprint's `PrimitiveGuids/Data` stream.
+///
+/// Layout: 24-byte records of `[object_kind: u32][index_within_kind: u32][guid:
+/// 16 bytes]`, packed with no header of their own — the record count lives in
+/// the sibling `PrimitiveGuids/Header` stream, so the data is chunked instead.
+/// The GUID's first three fields are little-endian, the Windows `GUID` struct
+/// layout Altium follows, so it is reassembled rather than printed byte for
+/// byte.
+///
+/// A trailing partial record is ignored: its identity is unrecoverable, and a
+/// partial read beats refusing the whole footprint.
+#[must_use]
+pub fn parse_primitive_guids(data: &[u8]) -> Vec<crate::altium::pcblib::PrimitiveGuid> {
+    const RECORD: usize = 24;
+    data.chunks_exact(RECORD)
+        .map(|rec| crate::altium::pcblib::PrimitiveGuid {
+            object_kind: u32::from_le_bytes([rec[0], rec[1], rec[2], rec[3]]),
+            index: u32::from_le_bytes([rec[4], rec[5], rec[6], rec[7]]),
+            guid: format_guid(&rec[8..24]),
+        })
+        .collect()
+}
+
+/// Formats 16 GUID bytes as `{XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX}`.
+///
+/// The first three fields are little-endian, the last two are byte order as
+/// stored — the Microsoft `GUID` convention Altium follows.
+fn format_guid(b: &[u8]) -> String {
+    use std::fmt::Write as _;
+    debug_assert_eq!(b.len(), 16);
+    let mut tail = String::with_capacity(12);
+    for byte in &b[10..16] {
+        let _ = write!(tail, "{byte:02X}");
+    }
+    format!(
+        "{{{:02X}{:02X}{:02X}{:02X}-{:02X}{:02X}-{:02X}{:02X}-{:02X}{:02X}-{tail}}}",
+        b[3], b[2], b[1], b[0], b[5], b[4], b[7], b[6], b[8], b[9]
+    )
+}
+
 /// Applies unique IDs from the `UniqueIDPrimitiveInformation` stream to footprint primitives.
 ///
 /// `PRIMITIVEINDEX` is a single global 0-based ordinal over all primitives in

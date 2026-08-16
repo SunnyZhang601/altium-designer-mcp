@@ -27,9 +27,10 @@ field. The fix is always to enrich them (see the workflow below).
   DelphiScript). Header declares it *iterative by design*: generate → read back → add the next
   feature → regenerate, until coverage is complete.
 - **Standing workflow:** when a read test needs a feature the goldens don't carry, extend the
-  `.pas` (verified AD24 API names only — one bad identifier aborts the whole script compile),
-  kill any stale `X2` process, regenerate locally, commit the binaries, then write **exact**
-  (non-guarded) assertions against the authored values. No tolerant or skipping tests.
+  `.pas`, run `python scripts/altium/generate/preflight_names.py` and reduce it to **one**
+  unproven interface (one bad identifier aborts the whole script compile), kill any stale
+  `X2` process, regenerate locally, commit the binaries, then write **exact** (non-guarded)
+  assertions against the authored values. No tolerant or skipping tests.
 - **Documented negatives:** when Altium does not persist an authored property, record the
   negative in the `.pas` next to the helper so it is not retried blindly, and mark the row
   below 🚫. The evidence for each lives once, in
@@ -74,18 +75,18 @@ distinction stays visible: this is not an authoring gap waiting on an Altium run
 | Primitive | Exercised today | Not exercised (❌) |
 |-----------|-----------------|--------------------|
 | Pin | electrical types (all 8), orientations (0/90/180/270), name/designator visibility, edge decorations, dual-part `owner_part_id`; ✅ PinFrac off-grid coords (`FRACPINS`), ✅ PinSymbolLineWidth (`Symbol_LineWidth=eLarge`); ✅ swap-id tail (`SWAPPIN`: `SwapId_Pin`→`swap_id_group`='A', `SwapId_Part`→`part_and_sequence`='1', `DefaultValue`→`default_value`='3V3') | owner_part_display_mode (non-default), graphically_locked |
-| Line | plain segments; ✅ line_style dashed + dotted (`SHAPESTYLE`) | is_not_accessible=false, display flags |
-| Arc | plain arcs; ✅ `_Frac` coords (`FRACSHAPES`: centre (0.05, 0.05), radius 4.05 — AD24 omits the zero integer keys and stores frac-only) | fill/area colour, is_not_accessible=false, display flags |
-| Rectangle | plain rects; ✅ transparent (`SHAPESTYLE`), ✅ GraphicallyLocked (`LOCKFLAGS`); ✅ `_Frac` coords incl. negatives (`FRACSHAPES`: (-5.45, -2.45)–(5.55, 2.55)) | line_style; 🚫 Disabled/Dimmed (authored but not persisted by AD24) |
-| RoundRect | plain rounded rects | line_style, display flags; 🚫 transparent (authored but not persisted on a library round-rect) |
-| Ellipse | plain ellipses; ✅ transparent (batch 3) | display flags |
-| Polyline | plain polylines | line_style, start/end shapes, transparent, display flags |
-| Polygon | plain polygons; ✅ transparent (`SHAPESTYLE` triangle) | is_not_accessible=false, display flags (line_style: N/A — `ISch_Polygon` has no LineStyle in AD24) |
-| Pie | ✅ authored (`PIESYM`: 30–210°, radius 5 units, yellow fill, exact-asserted) | transparent, display flags, `_Frac` coords |
+| Line | plain segments; ✅ line_style dashed + dotted (`SHAPESTYLE`); ✅ non-default colour (`SHAPECOLOR`) | display flags; 🔒 is_not_accessible=false |
+| Arc | plain arcs; ✅ `_Frac` coords (`FRACSHAPES`: centre (0.05, 0.05), radius 4.05 — AD24 omits the zero integer keys and stores frac-only); ✅ non-default colour + non-zero `StartAngle` (`SHAPECOLOR`) | display flags; 🚫 fill/area colour (an `ISch_Arc` has no fill — `Arc.IsSolid` does not compile); 🔒 is_not_accessible=false |
+| Rectangle | plain rects; ✅ transparent (`SHAPESTYLE`), ✅ GraphicallyLocked (`LOCKFLAGS`); ✅ `_Frac` coords incl. negatives (`FRACSHAPES`: (-5.45, -2.45)–(5.55, 2.55)); ✅ non-default border + fill colour (`SHAPECOLOR`) | line_style; 🚫 Disabled/Dimmed (authored but not persisted by AD24) |
+| RoundRect | plain rounded rects; ✅ non-default border colour (`SHAPECOLOR`) | line_style (staged probe), display flags; 🚫 transparent (authored but not persisted on a library round-rect) |
+| Ellipse | plain ellipses; ✅ transparent (batch 3); ✅ non-default border colour (`SHAPECOLOR`) | display flags |
+| Polyline | plain polylines; ✅ non-default colour (`SHAPECOLOR`); ✅ line_style + start/end shapes + shape size (`SHAPESTYLE2`: dashed, arrow → solid arrow, eLarge — all four persist) | transparent, display flags |
+| Polygon | plain polygons; ✅ transparent (`SHAPESTYLE` triangle); ✅ non-default border colour (`SHAPECOLOR`) | display flags (line_style: N/A — `ISch_Polygon` has no LineStyle in AD24); 🔒 is_not_accessible=false |
+| Pie | ✅ authored (`PIESYM`: 30–210°, radius 5 units, yellow fill, exact-asserted); ✅ non-default border + fill colour (`SHAPECOLOR`) | display flags, `_Frac` coords; 🚫 transparent (`ISch_Pie` has none — `Pie.Transparent` does not compile) |
 | Image | ✅ authored (`IMAGESYM`: bounding box, `logo.bmp`, KeepAspect, non-embedded); ✅ embedded image bytes in the `/Storage` stream (`EMBIMGSYM`, exact-asserted against the committed `embed.bmp`) | show_border non-default, display flags |
-| Bezier | ✅ authored (`BEZIERSYM`, four control points exact-asserted) | non-default colour/width, display flags |
-| Label | plain labels; ✅ justification variants + rotation (`JUSTIFY`) | mirror, display flags |
-| Parameter | Value etc. | justification, orientation, is_mirrored, is_configurable, area colour; 🔒 autoposition / is_rule / is_system_parameter / text anchors — modelled and round-tripped, but AD24 does not expose them on `ISch_Parameter` so no script can author them, and the golden does not contain them naturally |
+| Bezier | ✅ authored (`BEZIERSYM`, four control points exact-asserted); ✅ non-default colour + eMedium width (`SHAPECOLOR`) | display flags |
+| Label | plain labels; ✅ justification variants + rotation (`JUSTIFY`); ✅ non-default colour (`SHAPECOLOR`) | mirror (staged probe), display flags |
+| Parameter | Value etc.; ✅ justification + orientation (`JUSTIFY`: `Justification=8` on Value, `Justification=4` + `Orientation=1` on the hidden Tol); ✅ autoposition + justification from the hand-authored `manual/parameters.SchLib` | is_mirrored, show_name, read_only_state, param_type (staged probes), area colour; 🚫 is_rule / is_system_parameter / is_configurable / text anchors — read-only or never written into a library |
 
 ### Cross-cutting (both formats)
 
@@ -107,9 +108,22 @@ distinction stays visible: this is not an authoring gap waiting on an Altium run
   off-grid coordinate; reader and writer now follow the signed toward-zero convention
   (see `docs/SCHLIB_FORMAT.md` § Fractional coordinates).
 
-## Remaining enrichment backlog (batch 5+)
+## Remaining enrichment backlog
 
-PcbLib: pad mask expansion. Pad thermal-relief / power-plane is 🚫 **FINAL** on the
-scripting side (native crash on a fresh library pad in every sequence tried — see the
-Pad row); a golden would need a non-scripted authoring route. Each batch: extend the
-`.pas` → regenerate locally → commit binaries → exact assertions.
+Each batch: extend the `.pas` → run `preflight_names.py` and reduce to one unproven
+interface → regenerate locally → commit binaries → exact assertions.
+
+**SchLib, staged probes** — each is a `(* *)`-commented helper in the `.pas` waiting for a
+run of its own, because each introduces an unproven interface: `RoundRect.LineStyle`,
+`Label.IsMirrored`, and the `Parameter` display set (`ShowName`, `ReadOnlyState`,
+`IsMirrored`). Uncomment the helper **and** its call site together — a body alone still
+compiles, and still aborts the run if the name is wrong.
+
+**SchLib, not yet attempted:** polyline/text-frame transparency, image `ShowBorder`,
+per-shape display flags, `*_Frac` coordinates on the remaining shapes.
+
+**PcbLib:** Region naming/net/`ArcResolution`/`UnionIndex`, Text stroke-font variants and
+`UseTTFonts=False`, ComponentBody `CavityHeight` and model 2D placement, Via paste/solder
+mask expansion, Pad slot geometry on an SMD pad. Pad thermal-relief / power-plane is
+🚫 **FINAL** on the scripting side (native crash on a fresh library pad in every sequence
+tried — see the Pad row); a golden would need a non-scripted authoring route.

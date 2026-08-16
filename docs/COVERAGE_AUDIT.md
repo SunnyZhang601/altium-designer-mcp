@@ -66,12 +66,38 @@ authoring it and reading the saved bytes back.
 | Net index (any primitive) | a `PcbLib` has no net table, so it is always `0xFFFF` |
 | SchLib `IsRule` | AD24 marks a rule by `Name=Rule` plus a `RULEKIND=…` payload in `Text`, not by a flag |
 | SchLib `IsSystemParameter` | absent even on `Comment`; not written into a library |
+| SchLib `IsConfigurable` | read-only — the identifier table has `GetState_` but no `SetState_` |
 | SchLib `TextHorzAnchor` / `TextVertAnchor` | absent from every parameter record in an authored library |
+| SchLib `IsNotAccesible` = false (Altium's spelling) | every graphic record in a library carries `=T`; no library case omits it |
+| SchLib arc fill (`IsSolid` / `AreaColor`) | `Arc.IsSolid` does not compile — an `ISch_Arc` is a stroked shape with no fill |
+| SchLib pie `Transparent` | `Pie.Transparent` does not compile — real on rectangle/round-rect/ellipse/polygon, absent from `ISch_Pie` |
 
-> **Deciding whether a property is settable at all.** Check whether the name appears in
-> **`Advpcb.dll`** (PCB) or `AdvSch.dll` (schematic) — the native Delphi engines. A missing
-> `Set*` counterpart proves nothing: `SolderMaskExpansionFromHoleEdge` and `BarCodeKind`
-> both lack one and both set fine. Names found only in the `Altium.*.dll` **.NET**
-> assemblies do not resolve in DelphiScript — `TextJustification` is one — and an
-> unresolved identifier aborts the entire script compile, taking every other footprint in
-> that run with it.
+### Deciding whether a property is settable at all
+
+Two separate questions, and answering only the first is what makes a run fail.
+
+**Does the name exist?** The DelphiScript engine's identifier table lives in
+**`ScriptingSystem.dll`** as **UTF-16LE** strings — not in `Advpcb.dll` / `AdvSch.dll`, and
+not in the `Altium.*.dll` .NET assemblies. A `SetState_<Name>` entry means settable, a
+`GetState_` without one means read-only, and absence means the name does not exist at all
+(`TextJustification`). Enum literals are in the same table: `eJustify_Center` is there,
+`eJustify_CenterCenter` is not. A missing `Set*` *method* proves nothing —
+`SolderMaskExpansionFromHoleEdge` and `BarCodeKind` both lack one and both set fine.
+
+```python
+import re
+b = open(r'C:\Program Files\Altium\AD24\System\ScriptingSystem.dll', 'rb').read()
+ids = set()
+for m in re.finditer(rb'(?:[\x20-\x7e]\x00){3,}', b):
+    ids |= set(re.findall(r'[A-Za-z_][A-Za-z0-9_]{2,}', m.group().decode('utf-16-le')))
+'SetState_CavityHeight' in ids     # True -> settable
+```
+
+**Does this interface carry it?** The table is global, so a hit only says the name is real
+*somewhere*. Resolution is per-interface and happens at compile time: `IsSolid` is in the
+table and genuine on a rectangle, yet `Arc.IsSolid` still fails with `Undeclared
+identifier: IsSolid`. Only a run settles this, so `scripts/altium/generate/preflight_names.py`
+lists every `(interface, property)` pair with no precedent in the committed `.pas` — keep
+it to **one unproven interface per run**, or a failure will not say which name was at
+fault. An unresolved identifier aborts the whole compile and takes every other footprint
+in that run with it; `try/except` cannot help, because nothing has run yet.

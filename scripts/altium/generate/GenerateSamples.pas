@@ -1347,7 +1347,8 @@ end;
 
 { Pie (filled circular sector, RECORD=9). VERIFIED: factory ePie (=12, NOT the
   record id 9); ISch_Pie inherits ISch_Arc geometry (Location/Radius/Start/End
-  angle) and adds IsSolid + Transparent + AreaColor. }
+  angle) and adds IsSolid + AreaColor. It has NO Transparent — see the
+  documented negative below. }
 procedure AddPie(Comp : ISch_Component; CX : Integer; CY : Integer; R : Integer;
                  AStart : Double; AEnd : Double; FillCol : TColor);
 var
@@ -1945,6 +1946,289 @@ begin
     SchServer.RobotManager.SendMessage(Comp.I_ObjectAddress, c_BroadCast, SCHM_PrimitiveRegistration, Bez.I_ObjectAddress);
 end;
 
+{ One of every shape type carrying a DISTINCT non-black Color. Every helper
+  above authors Color := $000000, which is the Altium default and is therefore
+  omitted from the saved record — so no shape parser's colour arm has ever been
+  exercised against a real file. The colours differ from each other so an
+  assertion cannot pass by matching the wrong primitive. TColor is $00BBGGRR. }
+procedure AddColourShapes(Comp : ISch_Component);
+var
+    Lin : ISch_Line;
+    Rct : ISch_Rectangle;
+    RRe : ISch_RoundRectangle;
+    Arc : ISch_Arc;
+    Ell : ISch_Ellipse;
+    Ply : ISch_Polyline;
+    Pgn : ISch_Polygon;
+    Pwe : ISch_Pie;
+    Bez : ISch_Bezier;
+    Lbl : ISch_Label;
+begin
+    Lin := SchServer.SchObjectFactory(eLine, eCreate_Default);
+    if Lin <> nil then
+    begin
+        Lin.Location := Point(MilsToCoord(-200), MilsToCoord(100));
+        Lin.Corner   := Point(MilsToCoord(-100), MilsToCoord(100));
+        Lin.LineWidth := eSmall;
+        Lin.Color     := $0000FF;                { red }
+        Lin.OwnerPartId := 1;
+        Lin.OwnerPartDisplayMode := Comp.DisplayMode;
+        Comp.AddSchObject(Lin);
+        SchServer.RobotManager.SendMessage(Comp.I_ObjectAddress, c_BroadCast, SCHM_PrimitiveRegistration, Lin.I_ObjectAddress);
+    end;
+
+    Rct := SchServer.SchObjectFactory(eRectangle, eCreate_Default);
+    if Rct <> nil then
+    begin
+        Rct.Location := Point(MilsToCoord(-200), MilsToCoord(40));
+        Rct.Corner   := Point(MilsToCoord(-100), MilsToCoord(80));
+        Rct.LineWidth := eSmall;
+        Rct.Color     := $00FF00;                { green }
+        Rct.AreaColor := $FFFF00;
+        Rct.IsSolid   := True;
+        Rct.OwnerPartId := 1;
+        Rct.OwnerPartDisplayMode := Comp.DisplayMode;
+        Comp.AddSchObject(Rct);
+        SchServer.RobotManager.SendMessage(Comp.I_ObjectAddress, c_BroadCast, SCHM_PrimitiveRegistration, Rct.I_ObjectAddress);
+    end;
+
+    RRe := SchServer.SchObjectFactory(eRoundRectangle, eCreate_Default);
+    if RRe <> nil then
+    begin
+        RRe.Location := Point(MilsToCoord(-200), MilsToCoord(-20));
+        RRe.Corner   := Point(MilsToCoord(-100), MilsToCoord(20));
+        RRe.CornerXRadius := MilsToCoord(10);
+        RRe.CornerYRadius := MilsToCoord(8);
+        RRe.LineWidth := eSmall;
+        RRe.Color     := $FF0000;                { blue }
+        RRe.OwnerPartId := 1;
+        RRe.OwnerPartDisplayMode := Comp.DisplayMode;
+        Comp.AddSchObject(RRe);
+        SchServer.RobotManager.SendMessage(Comp.I_ObjectAddress, c_BroadCast, SCHM_PrimitiveRegistration, RRe.I_ObjectAddress);
+    end;
+
+    Arc := SchServer.SchObjectFactory(eArc, eCreate_Default);
+    if Arc <> nil then
+    begin
+        Arc.Location := Point(MilsToCoord(-150), MilsToCoord(-80));
+        Arc.Radius   := MilsToCoord(30);
+        Arc.LineWidth := eSmall;
+        Arc.Color     := $00FFFF;                { yellow }
+        Arc.StartAngle := 45.0;                  { non-zero: the plain arcs all start at 0, which is omitted }
+        Arc.EndAngle   := 315.0;
+        Arc.OwnerPartId := 1;
+        Arc.OwnerPartDisplayMode := Comp.DisplayMode;
+        Comp.AddSchObject(Arc);
+        SchServer.RobotManager.SendMessage(Comp.I_ObjectAddress, c_BroadCast, SCHM_PrimitiveRegistration, Arc.I_ObjectAddress);
+    end;
+
+    Ell := SchServer.SchObjectFactory(eEllipse, eCreate_Default);
+    if Ell <> nil then
+    begin
+        Ell.Location := Point(MilsToCoord(0), MilsToCoord(100));
+        Ell.Radius   := MilsToCoord(40);
+        Ell.SecondaryRadius := MilsToCoord(25);
+        Ell.LineWidth := eSmall;
+        Ell.Color     := $FF00FF;                { magenta }
+        Ell.OwnerPartId := 1;
+        Ell.OwnerPartDisplayMode := Comp.DisplayMode;
+        Comp.AddSchObject(Ell);
+        SchServer.RobotManager.SendMessage(Comp.I_ObjectAddress, c_BroadCast, SCHM_PrimitiveRegistration, Ell.I_ObjectAddress);
+    end;
+
+    Ply := SchServer.SchObjectFactory(ePolyline, eCreate_Default);
+    if Ply <> nil then
+    begin
+        Ply.LineWidth := eSmall;
+        Ply.Color     := $808000;                { teal }
+        Ply.ClearAllVertices;
+        Ply.InsertVertex(1);  Ply.Vertex[1] := Point(MilsToCoord(60),  MilsToCoord(60));
+        Ply.InsertVertex(2);  Ply.Vertex[2] := Point(MilsToCoord(110), MilsToCoord(110));
+        Ply.InsertVertex(3);  Ply.Vertex[3] := Point(MilsToCoord(160), MilsToCoord(60));
+        Ply.OwnerPartId := 1;
+        Ply.OwnerPartDisplayMode := Comp.DisplayMode;
+        Comp.AddSchObject(Ply);
+        SchServer.RobotManager.SendMessage(Comp.I_ObjectAddress, c_BroadCast, SCHM_PrimitiveRegistration, Ply.I_ObjectAddress);
+    end;
+
+    Pgn := SchServer.SchObjectFactory(ePolygon, eCreate_Default);
+    if Pgn <> nil then
+    begin
+        Pgn.ClearAllVertices;
+        Pgn.InsertVertex(1);  Pgn.Vertex[1] := Point(MilsToCoord(60),  MilsToCoord(0));
+        Pgn.InsertVertex(2);  Pgn.Vertex[2] := Point(MilsToCoord(160), MilsToCoord(0));
+        Pgn.InsertVertex(3);  Pgn.Vertex[3] := Point(MilsToCoord(160), MilsToCoord(40));
+        Pgn.LineWidth := eSmall;
+        Pgn.Color     := $000080;                { dark red }
+        Pgn.AreaColor := $C0C0C0;
+        Pgn.IsSolid   := True;
+        Pgn.OwnerPartId := 1;
+        Pgn.OwnerPartDisplayMode := Comp.DisplayMode;
+        Comp.AddSchObject(Pgn);
+        SchServer.RobotManager.SendMessage(Comp.I_ObjectAddress, c_BroadCast, SCHM_PrimitiveRegistration, Pgn.I_ObjectAddress);
+    end;
+
+    Pwe := SchServer.SchObjectFactory(ePie, eCreate_Default);
+    if Pwe <> nil then
+    begin
+        Pwe.Location := Point(MilsToCoord(110), MilsToCoord(-60));
+        Pwe.Radius   := MilsToCoord(35);
+        Pwe.StartAngle := 20.0;
+        Pwe.EndAngle   := 160.0;
+        Pwe.LineWidth := eSmall;
+        Pwe.Color     := $008080;                { olive }
+        Pwe.AreaColor := $00A5FF;
+        Pwe.IsSolid   := True;
+        Pwe.OwnerPartId := 1;
+        Pwe.OwnerPartDisplayMode := Comp.DisplayMode;
+        Comp.AddSchObject(Pwe);
+        SchServer.RobotManager.SendMessage(Comp.I_ObjectAddress, c_BroadCast, SCHM_PrimitiveRegistration, Pwe.I_ObjectAddress);
+    end;
+
+    Bez := SchServer.SchObjectFactory(eBezier, eCreate_Default);
+    if Bez <> nil then
+    begin
+        Bez.LineWidth := eMedium;                { non-default width, alongside the colour }
+        Bez.Color     := $804000;                { navy-ish }
+        Bez.ClearAllVertices;
+        Bez.InsertVertex(1);  Bez.SetState_Vertex(1, Point(MilsToCoord(-200), MilsToCoord(-140)));
+        Bez.InsertVertex(2);  Bez.SetState_Vertex(2, Point(MilsToCoord(-150), MilsToCoord(-100)));
+        Bez.InsertVertex(3);  Bez.SetState_Vertex(3, Point(MilsToCoord(-100), MilsToCoord(-100)));
+        Bez.InsertVertex(4);  Bez.SetState_Vertex(4, Point(MilsToCoord(-50),  MilsToCoord(-140)));
+        Bez.OwnerPartId := 1;
+        Bez.OwnerPartDisplayMode := Comp.DisplayMode;
+        Comp.AddSchObject(Bez);
+        SchServer.RobotManager.SendMessage(Comp.I_ObjectAddress, c_BroadCast, SCHM_PrimitiveRegistration, Bez.I_ObjectAddress);
+    end;
+
+    Lbl := SchServer.SchObjectFactory(eLabel, eCreate_Default);
+    if Lbl <> nil then
+    begin
+        Lbl.Location := Point(MilsToCoord(60), MilsToCoord(-120));
+        Lbl.Orientation := eRotate0;
+        Lbl.FontID   := 1;
+        Lbl.Justification := eJustify_BottomLeft;
+        Lbl.Color    := $4080FF;                 { orange }
+        Lbl.Text     := 'COLOURED';
+        Lbl.OwnerPartId := 1;
+        Lbl.OwnerPartDisplayMode := Comp.DisplayMode;
+        Comp.AddSchObject(Lbl);
+        SchServer.RobotManager.SendMessage(Comp.I_ObjectAddress, c_BroadCast, SCHM_PrimitiveRegistration, Lbl.I_ObjectAddress);
+    end;
+end;
+
+{ Polyline carrying every styling property it owns: a non-default LineStyle,
+  both end shapes, the end-shape size, and Transparent. All five names resolve
+  in the DelphiScript identifier table (see docs/COVERAGE_AUDIT.md for how that
+  is checked); whether AD24 persists each is what this fixture establishes. }
+procedure AddPolylineStyled(Comp : ISch_Component; X1 : Integer; Y1 : Integer;
+                            X2 : Integer; Y2 : Integer; X3 : Integer; Y3 : Integer);
+var PL : ISch_Polyline;
+begin
+    PL := SchServer.SchObjectFactory(ePolyline, eCreate_Default);
+    if PL = nil then Exit;
+    PL.LineWidth      := eSmall;
+    PL.Color          := $000000;
+    PL.LineStyle      := eLineStyleDashed;
+    PL.StartLineShape := eLineShapeArrow;
+    PL.EndLineShape   := eLineShapeSolidArrow;
+    PL.LineShapeSize  := eLarge;
+    PL.ClearAllVertices;
+    PL.InsertVertex(1);  PL.Vertex[1] := Point(MilsToCoord(X1), MilsToCoord(Y1));
+    PL.InsertVertex(2);  PL.Vertex[2] := Point(MilsToCoord(X2), MilsToCoord(Y2));
+    PL.InsertVertex(3);  PL.Vertex[3] := Point(MilsToCoord(X3), MilsToCoord(Y3));
+    PL.OwnerPartId := 1;
+    PL.OwnerPartDisplayMode := Comp.DisplayMode;
+    Comp.AddSchObject(PL);
+    SchServer.RobotManager.SendMessage(Comp.I_ObjectAddress, c_BroadCast, SCHM_PrimitiveRegistration, PL.I_ObjectAddress);
+end;
+
+{ STAGED PROBE — not compiled. `LineStyle` is real on ISch_Line but unproven on
+  ISch_RoundRectangle, and an unresolved name is a compile error that costs the
+  whole run, so this waits its turn as the single unproven family of a later
+  run. Uncomment the body AND its call site together; a body alone still
+  compiles. Round rectangle with a non-default LineStyle. }
+(*
+procedure AddRoundRectStyled(Comp : ISch_Component; X1 : Integer; Y1 : Integer;
+                             X2 : Integer; Y2 : Integer);
+var RR : ISch_RoundRectangle;
+begin
+    RR := SchServer.SchObjectFactory(eRoundRectangle, eCreate_Default);
+    if RR = nil then Exit;
+    RR.Location      := Point(MilsToCoord(X1), MilsToCoord(Y1));
+    RR.Corner        := Point(MilsToCoord(X2), MilsToCoord(Y2));
+    RR.CornerXRadius := MilsToCoord(12);
+    RR.CornerYRadius := MilsToCoord(12);
+    RR.LineWidth     := eSmall;
+    RR.Color         := $000000;
+    RR.LineStyle     := eLineStyleDotted;
+    RR.OwnerPartId   := 1;
+    RR.OwnerPartDisplayMode := Comp.DisplayMode;
+    Comp.AddSchObject(RR);
+    SchServer.RobotManager.SendMessage(Comp.I_ObjectAddress, c_BroadCast, SCHM_PrimitiveRegistration, RR.I_ObjectAddress);
+end;
+*)
+
+{ DOCUMENTED NEGATIVE (AD24): an arc has NO FILL. `Arc.IsSolid := True` is a
+  COMPILE error, "Undeclared identifier: IsSolid" — ISch_Arc is a stroked shape
+  and carries neither IsSolid nor AreaColor. A SchLib arc record can therefore
+  never gain a fill from Altium; the reader keeps the fields for hand-edited
+  files only. Do not reintroduce a filled-arc helper. }
+
+{ DOCUMENTED NEGATIVE (AD24): a pie has NO Transparent. `Pie.Transparent`
+  is a COMPILE error, "Undeclared identifier: Transparent" — the property is
+  real on ISch_Rectangle/RoundRectangle/Ellipse/Polygon but absent from
+  ISch_Pie, which carries only IsSolid + AreaColor. Do not reintroduce a
+  transparent-pie helper. }
+
+{ STAGED PROBE — not compiled; `IsMirrored` is unproven on ISch_Label. See the
+  note on AddRoundRectStyled for why these wait. Label with the mirror flag. }
+(*
+procedure AddLabelFlagged(Comp : ISch_Component; X : Integer; Y : Integer; AText : String);
+var L : ISch_Label;
+begin
+    L := SchServer.SchObjectFactory(eLabel, eCreate_Default);
+    if L = nil then Exit;
+    L.Location      := Point(MilsToCoord(X), MilsToCoord(Y));
+    L.Orientation   := eRotate0;
+    L.FontID        := 1;
+    L.Justification := eJustify_BottomLeft;
+    L.Color         := $000000;
+    L.Text          := AText;
+    L.IsMirrored    := True;
+    L.OwnerPartId   := 1;
+    L.OwnerPartDisplayMode := Comp.DisplayMode;
+    Comp.AddSchObject(L);
+    SchServer.RobotManager.SendMessage(Comp.I_ObjectAddress, c_BroadCast, SCHM_PrimitiveRegistration, L.I_ObjectAddress);
+end;
+*)
+
+{ STAGED PROBE — not compiled; `ShowName`, `ReadOnlyState` and `IsMirrored` are
+  unproven on ISch_Parameter (ReadOnlyState is at least real on the designator
+  record). See the note on AddRoundRectStyled. Parameter display properties. }
+(*
+procedure AddParameterProps(Comp : ISch_Component; AName : String; AValue : String;
+                            X : Integer; Y : Integer);
+var Par : ISch_Parameter;
+begin
+    Par := SchServer.SchObjectFactory(eParameter, eCreate_Default);
+    if Par = nil then Exit;
+    Par.Location      := Point(MilsToCoord(X), MilsToCoord(Y));
+    Par.Name          := AName;
+    Par.Text          := AValue;
+    Par.FontID        := 1;
+    Par.Color         := $000000;
+    Par.IsHidden      := False;
+    Par.ShowName      := True;
+    Par.ReadOnlyState := 1;
+    Par.IsMirrored    := True;
+    Par.OwnerPartId   := 1;
+    Par.OwnerPartDisplayMode := Comp.DisplayMode;
+    Comp.AddSchObject(Par);
+    SchServer.RobotManager.SendMessage(Comp.I_ObjectAddress, c_BroadCast, SCHM_PrimitiveRegistration, Par.I_ObjectAddress);
+end;
+*)
+
 { ---- SchLib authoring -------------------------------------------------------
 
   Build order step 1: PINS_ETYPE — one pin per PinElectricalType, the densest
@@ -2174,10 +2458,11 @@ begin
       COVERAGE ENRICHMENT (docs/FIXTURE_COVERAGE.md): exercise the non-default
       property values that the plain symbols above never set, so the Rust
       READ tests verify them against a REAL Altium file rather than only via a
-      self-round-trip. Each symbol is in its own try/except: an unverified AD24
-      property name fails ONLY that symbol, the rest of the library still saves.
-      Property names not already proven by a helper above are best-effort (from
-      AltiumSharp DTOs); on-site failures are expected to be iterated.
+      self-round-trip. Each symbol is in its own try/except: a runtime failure
+      costs ONLY that symbol, the rest of the library still saves. An unresolved
+      identifier is different — it is a COMPILE error and aborts the whole run,
+      so check every property and enum name against the DelphiScript identifier
+      table first (docs/COVERAGE_AUDIT.md gives the one-liner).
       ====================================================================== }
 
     { ---- SHAPESTYLE — non-default LineStyle lines + a transparent rectangle + a
@@ -2322,6 +2607,33 @@ begin
         Comp := NewSymbol(Lib, 'Резистор', 'описание Ω', 1);
         if Comp <> nil then
             AddRect(Comp, -50, -25, 50, 25, False, $FFFFFF);
+    except
+    end;
+
+    { ---- SHAPECOLOR — one of every shape type in a distinct non-black colour.
+      Every other symbol authors black, which Altium omits as the default, so
+      this is the only golden coverage of the shape parsers' colour arms. ---- }
+    try
+        Comp := NewSymbol(Lib, 'SHAPECOLOR', 'Non-default colour on every shape', 1);
+        if Comp <> nil then
+            AddColourShapes(Comp);
+    except
+    end;
+
+    { ---- SHAPESTYLE2 — the styling properties no other symbol reaches. Only the
+      polyline is authored today: it is the single unproven interface/property
+      family this run risks, and an unresolved name would cost every other
+      symbol in the run. The staged probes below follow one run at a time. ---- }
+    try
+        Comp := NewSymbol(Lib, 'SHAPESTYLE2', 'Remaining shape styling properties', 1);
+        if Comp <> nil then
+        begin
+            AddPolylineStyled(Comp, -150, 80, -100, 130, -50, 80);
+            { STAGED, one unproven family per run — see the note on each helper:
+              AddRoundRectStyled(Comp, -150, 0, -50, 50);
+              AddLabelFlagged(Comp, -150, -80, 'MIRRORED');
+              AddParameterProps(Comp, 'Rating', '10V', 50, -80); }
+        end;
     except
     end;
 

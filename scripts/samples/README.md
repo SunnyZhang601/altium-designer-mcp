@@ -11,6 +11,22 @@ so CI can read them without Altium. Regenerate and re-commit whenever the author
 > Building these is iterative — generate, read back with the Rust tests, extend the
 > primitive set, regenerate. Coverage grows component by component.
 
+## NEVER open-and-save a committed golden in Altium
+
+An AD load+save cycle silently damages fixtures (measured 2026-08-16 by resaving
+`symbols.SchLib` through AD and diffing all 84 symbols with our reader):
+
+- the five known-damaged i18n symbols (`_JV`, `_BN`, `_CR`, `_IU`, `_SB`) degrade
+  *further* — AD's reader is the broken component, and each cycle compounds it;
+- `ꆈꌠ_YI` (Yi) is a sixth, slower victim: intact in the committed golden, but one
+  load+save turns its pin/label/parameter texts to mojibake;
+- `PARAMS` loses a parameter value outright: `100nF` comes back as `*` — not an
+  encoding issue, AD's own parameter handling.
+
+Regeneration via `Generate-Samples.ps1` is fine (it authors from scratch); opening a
+committed golden in the AD UI to "just fix one thing" and saving is not. Hand-fix work
+happens in a fresh library committed under `manual/` instead.
+
 ## `manual/` — hand-authored, do NOT regenerate
 
 `Generate-Samples.ps1` cannot produce everything: a few properties exist only in Altium's

@@ -1006,46 +1006,36 @@ fn samples_pcblib_text_stroke_fonts() {
     assert_eq!(serif.stroke_font, Some(StrokeFont::Serif), "FontID 3");
 }
 
+/// A borrowed list of per-primitive identity GUIDs, one entry per primitive.
+type GuidList<'a> = Vec<&'a Option<String>>;
+
 #[test]
 fn samples_pcblib_primitive_guids_survive_a_rewrite() {
     let src = sample("footprints.PcbLib");
     let mut lib = PcbLib::open(&src).expect("failed to open footprints.PcbLib");
 
-    // Altium gives every primitive a stable GUID in the footprint's
-    // PrimitiveGuids stream and uses it to recognise that primitive across
-    // edits. We used to read none of it and write none of it, so a
-    // read-modify-write handed Altium a library in which everything looked new.
+    // Identities ride on the primitives themselves, so a structural edit moves
+    // them with their primitive instead of re-pointing the survivors. ARCS: two
+    // arcs, each with its own GUID, plus the footprint record's own (kind 85).
     let arcs = lib.get("ARCS").expect("ARCS footprint not found");
-    assert!(
-        !arcs.primitive_guids.is_empty(),
-        "ARCS carries per-primitive GUIDs"
+    let (a, b) = (
+        arcs.arcs[0].guid.as_deref().expect("arc 0 carries a GUID"),
+        arcs.arcs[1].guid.as_deref().expect("arc 1 carries a GUID"),
     );
-    // Object kind 1 is an arc and 85 is the footprint record itself; the index
-    // counts within the kind, so two arcs give indices 0 and 1.
-    let arc_ids: Vec<u32> = arcs
-        .primitive_guids
-        .iter()
-        .filter(|g| g.object_kind == 1)
-        .map(|g| g.index)
-        .collect();
-    assert_eq!(
-        arc_ids,
-        vec![0, 1],
-        "one GUID per arc, indexed within the kind"
-    );
-    assert!(
-        arcs.primitive_guids.iter().any(|g| g.object_kind == 85),
-        "the footprint record has a GUID of its own"
-    );
-    for guid in &arcs.primitive_guids {
+    assert_ne!(a, b, "each arc has its own identity");
+    for guid in [a, b] {
         assert!(
-            guid.guid.starts_with('{') && guid.guid.ends_with('}') && guid.guid.len() == 38,
-            "GUID is brace-wrapped and 36 characters wide, got {:?}",
-            guid.guid
+            guid.starts_with('{') && guid.ends_with('}') && guid.len() == 38,
+            "GUID is brace-wrapped and 36 characters wide, got {guid:?}"
         );
     }
+    assert!(
+        arcs.guid.is_some(),
+        "the footprint record has a GUID of its own"
+    );
 
-    // The point of reading them is writing them back unchanged.
+    // The point of reading them is writing them back unchanged — on every
+    // primitive of every footprint.
     let dir = tempfile::tempdir().expect("tempdir");
     let out = dir.path().join("rewritten.PcbLib");
     lib.save(&out).expect("write the library back");
@@ -1056,10 +1046,59 @@ fn samples_pcblib_primitive_guids_survive_a_rewrite() {
             .get(&footprint.name)
             .unwrap_or_else(|| panic!("{} missing after rewrite", footprint.name));
         assert_eq!(
-            after.primitive_guids, footprint.primitive_guids,
-            "{}: primitive GUIDs changed across a rewrite",
+            after.guid, footprint.guid,
+            "{}: footprint GUID",
             footprint.name
         );
+        let pairs: [(&str, GuidList, GuidList); 8] = [
+            (
+                "arcs",
+                footprint.arcs.iter().map(|p| &p.guid).collect(),
+                after.arcs.iter().map(|p| &p.guid).collect(),
+            ),
+            (
+                "pads",
+                footprint.pads.iter().map(|p| &p.guid).collect(),
+                after.pads.iter().map(|p| &p.guid).collect(),
+            ),
+            (
+                "vias",
+                footprint.vias.iter().map(|p| &p.guid).collect(),
+                after.vias.iter().map(|p| &p.guid).collect(),
+            ),
+            (
+                "tracks",
+                footprint.tracks.iter().map(|p| &p.guid).collect(),
+                after.tracks.iter().map(|p| &p.guid).collect(),
+            ),
+            (
+                "text",
+                footprint.text.iter().map(|p| &p.guid).collect(),
+                after.text.iter().map(|p| &p.guid).collect(),
+            ),
+            (
+                "regions",
+                footprint.regions.iter().map(|p| &p.guid).collect(),
+                after.regions.iter().map(|p| &p.guid).collect(),
+            ),
+            (
+                "fills",
+                footprint.fills.iter().map(|p| &p.guid).collect(),
+                after.fills.iter().map(|p| &p.guid).collect(),
+            ),
+            (
+                "bodies",
+                footprint.component_bodies.iter().map(|p| &p.guid).collect(),
+                after.component_bodies.iter().map(|p| &p.guid).collect(),
+            ),
+        ];
+        for (kind, before_guids, after_guids) in pairs {
+            assert_eq!(
+                after_guids, before_guids,
+                "{}: {kind} GUIDs changed across a rewrite",
+                footprint.name
+            );
+        }
     }
 }
 
@@ -1480,83 +1519,71 @@ fn samples_pcblib_golden_survives_a_read_modify_write() {
 }
 
 #[test]
-fn samples_pcblib_read_order_matches_the_guid_ordinals() {
-    // Altium's object ids, as they appear in a PrimitiveGuids record.
-    fn kind_of(object_kind: u32) -> Option<PrimitiveKind> {
-        match object_kind {
-            1 => Some(PrimitiveKind::Arc),
-            2 => Some(PrimitiveKind::Pad),
-            3 => Some(PrimitiveKind::Via),
-            4 => Some(PrimitiveKind::Track),
-            5 => Some(PrimitiveKind::Text),
-            6 => Some(PrimitiveKind::Fill),
-            89 => Some(PrimitiveKind::Region),
-            90 => Some(PrimitiveKind::ComponentBody),
-            // 85 is the footprint record itself, which is not a primitive and
-            // sits outside the ordinal space (always index 0).
-            _ => None,
-        }
-    }
+fn samples_pcblib_every_guid_record_attaches_to_its_primitive() {
+    use std::io::Read as _;
 
-    // PrimitiveGuids keys each GUID by the primitive's ordinal among ALL of the
-    // footprint's primitives — not among its own kind. Checking our read order
-    // against that ordinal space is a cross-check between two independent
-    // streams of the same file: if they disagreed, every GUID we write back
-    // would name a different primitive than Altium meant.
-    let lib = PcbLib::open(sample("footprints.PcbLib")).expect("failed to open footprints.PcbLib");
+    // The stream keys each GUID by the primitive's ordinal among ALL of the
+    // footprint's primitives. The reader attaches each record to the primitive
+    // at that ordinal (kind cross-checked), so for the golden — whose ordinal
+    // space is known-good — every non-85 record must land: the multiset of
+    // attached GUIDs equals the multiset in the raw stream.
+    let path = sample("footprints.PcbLib");
+    let lib = PcbLib::open(&path).expect("failed to open footprints.PcbLib");
+    let file = std::fs::File::open(&path).expect("open");
+    let mut cfb = cfb::CompoundFile::open(file).expect("parse OLE");
 
     let mut checked = 0;
-    let mut interleaved = 0;
     for footprint in lib.iter() {
-        if footprint.primitive_guids.is_empty() {
+        let stream = format!("/{}/PrimitiveGuids/Data", footprint.name);
+        let Ok(mut s) = cfb.open_stream(&stream) else {
             continue;
-        }
-        let mut by_ordinal: Vec<(u32, PrimitiveKind)> = footprint
-            .primitive_guids
-            .iter()
-            .filter_map(|g| kind_of(g.object_kind).map(|k| (g.index, k)))
+        };
+        let mut raw = Vec::new();
+        s.read_to_end(&mut raw).expect("read stream");
+
+        // Raw records: [kind: u32][ordinal: u32][guid: 16 bytes].
+        let mut stream_guids: Vec<(u32, [u8; 16])> = raw
+            .chunks_exact(24)
+            .map(|r| {
+                let kind = u32::from_le_bytes([r[0], r[1], r[2], r[3]]);
+                let mut g = [0u8; 16];
+                g.copy_from_slice(&r[8..24]);
+                (kind, g)
+            })
             .collect();
-        by_ordinal.sort_unstable_by_key(|&(ordinal, _)| ordinal);
+        stream_guids.retain(|&(kind, _)| kind != 85);
 
-        let ordinals: Vec<u32> = by_ordinal.iter().map(|&(o, _)| o).collect();
+        let mut attached: Vec<&str> = footprint
+            .arcs
+            .iter()
+            .map(|p| p.guid.as_deref())
+            .chain(footprint.pads.iter().map(|p| p.guid.as_deref()))
+            .chain(footprint.vias.iter().map(|p| p.guid.as_deref()))
+            .chain(footprint.tracks.iter().map(|p| p.guid.as_deref()))
+            .chain(footprint.text.iter().map(|p| p.guid.as_deref()))
+            .chain(footprint.regions.iter().map(|p| p.guid.as_deref()))
+            .chain(footprint.fills.iter().map(|p| p.guid.as_deref()))
+            .chain(footprint.component_bodies.iter().map(|p| p.guid.as_deref()))
+            .flatten()
+            .collect();
+        attached.sort_unstable();
+
         assert_eq!(
-            ordinals,
-            (0..u32::try_from(by_ordinal.len()).expect("footprint fits u32")).collect::<Vec<_>>(),
-            "{}: PrimitiveGuids ordinals are a permutation of 0..n-1",
+            attached.len(),
+            stream_guids.len(),
+            "{}: every non-85 record must attach to exactly one primitive",
             footprint.name
         );
-
-        let from_guids: Vec<PrimitiveKind> = by_ordinal.into_iter().map(|(_, k)| k).collect();
-        assert_eq!(
-            footprint.primitive_order, from_guids,
-            "{}: the order we read the primitives in must be the order the \
-             GUID ordinals describe",
+        assert!(
+            footprint.guid.is_some(),
+            "{}: the kind-85 record becomes the footprint's own GUID",
             footprint.name
         );
-
-        // A footprint whose kinds come out in blocks would pass the check above
-        // even if we grouped by type, so at least one has to actually interleave
-        // for this to be worth anything.
-        let mut seen: Vec<PrimitiveKind> = Vec::new();
-        if from_guids.windows(2).any(|w| w[0] != w[1]) {
-            for kind in &from_guids {
-                if seen.last() != Some(kind) {
-                    if seen.contains(kind) {
-                        interleaved += 1;
-                        break;
-                    }
-                    seen.push(*kind);
-                }
-            }
-        }
         checked += 1;
     }
-
-    assert!(checked >= 20, "only {checked} footprints carried GUIDs");
     assert!(
-        interleaved > 0,
-        "no golden footprint interleaves its primitive kinds, so this test \
-         cannot tell a preserved order from a type-grouped one"
+        checked >= 20,
+        "only {checked} footprints carried GUID streams"
     );
 }
 

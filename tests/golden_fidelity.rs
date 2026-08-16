@@ -344,30 +344,43 @@ fn pcblib_golden_survives_a_round_trip() {
         );
     }
 
-    // 4. The identity streams, byte for byte. Both key a primitive by its
-    //    ordinal among all of the footprint's primitives, and a block-level
-    //    diff cannot see a reordering. `PrimitiveGuids` is replayed as read, so
-    //    equality there means the replay is intact; the unique-id records are
-    //    rebuilt from the write sequence, so equality there means the order the
-    //    ordinals refer to survived.
+    // 4. The identity streams. Both key a primitive by its ordinal among all
+    //    of the footprint's primitives, and a block-level diff cannot see a
+    //    reordering. The unique-id records are rebuilt in ordinal order, which
+    //    is also the order Altium stores them — compared byte for byte.
+    //    PrimitiveGuids records are keyed (kind, ordinal, guid) but Altium
+    //    scrambles their order in the stream while our writer emits them
+    //    canonically, so they are compared as record SETS: same identities on
+    //    the same primitives, which is the property that matters.
     for (canonical, g_path) in &before {
-        if !canonical.ends_with("primitiveguids/data")
-            && !canonical.ends_with("uniqueidprimitiveinformation/data")
-        {
-            continue;
-        }
         if is_known(canonical) {
             continue;
         }
-        let g = stream_bytes(&src, g_path).expect("walked stream exists");
-        match after.get(canonical).and_then(|p| stream_bytes(&out, p)) {
-            Some(o) if o == g => {}
-            Some(o) => failures.push(format!(
-                "{canonical} differs: {} bytes golden, {} ours",
-                g.len(),
-                o.len()
-            )),
-            None => failures.push(format!("{canonical} was not written back")),
+        if canonical.ends_with("uniqueidprimitiveinformation/data") {
+            let g = stream_bytes(&src, g_path).expect("walked stream exists");
+            match after.get(canonical).and_then(|p| stream_bytes(&out, p)) {
+                Some(o) if o == g => {}
+                Some(o) => failures.push(format!(
+                    "{canonical} differs: {} bytes golden, {} ours",
+                    g.len(),
+                    o.len()
+                )),
+                None => failures.push(format!("{canonical} was not written back")),
+            }
+        } else if canonical.ends_with("primitiveguids/data") {
+            let records = |bytes: &[u8]| -> std::collections::BTreeSet<Vec<u8>> {
+                bytes.chunks_exact(24).map(<[u8]>::to_vec).collect()
+            };
+            let g = stream_bytes(&src, g_path).expect("walked stream exists");
+            match after.get(canonical).and_then(|p| stream_bytes(&out, p)) {
+                Some(o) if records(&o) == records(&g) => {}
+                Some(o) => failures.push(format!(
+                    "{canonical} records differ: {} golden, {} ours",
+                    g.len() / 24,
+                    o.len() / 24
+                )),
+                None => failures.push(format!("{canonical} was not written back")),
+            }
         }
     }
 

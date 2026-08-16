@@ -78,6 +78,14 @@ pub struct Track {
     /// Unique ID assigned by Altium (8-character alphanumeric string).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unique_id: Option<String>,
+    /// Altium's stable identity for this primitive, from the footprint's
+    /// `PrimitiveGuids` stream (`{XXXXXXXX-…}`), or `None` for a primitive
+    /// with no recorded identity (anything built from scratch). Riding on the
+    /// primitive itself, the identity follows it through structural edits —
+    /// deleting a neighbour cannot re-point it, which the old footprint-level
+    /// ordinal list could not guarantee.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub guid: Option<String>,
     /// Solder mask expansion in mm. `None` (the default) writes 0; preserved
     /// when reading an Altium-authored track (round-trip fidelity, #113).
     #[serde(
@@ -107,6 +115,7 @@ impl Track {
             polygon_index: default_polygon_index(),
             component_index: default_component_index(),
             unique_id: None,
+            guid: None,
             solder_mask_expansion: None,
             keepout_restrictions: None,
         }
@@ -148,6 +157,7 @@ impl Track {
 ///     polygon_index: 0xFFFF,
 ///     component_index: -1,
 ///     unique_id: None,
+///     guid: None,
 ///     solder_mask_expansion: None,
 ///     keepout_restrictions: None,
 /// };
@@ -192,6 +202,14 @@ pub struct Arc {
     /// Unique ID assigned by Altium (8-character alphanumeric string).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unique_id: Option<String>,
+    /// Altium's stable identity for this primitive, from the footprint's
+    /// `PrimitiveGuids` stream (`{XXXXXXXX-…}`), or `None` for a primitive
+    /// with no recorded identity (anything built from scratch). Riding on the
+    /// primitive itself, the identity follows it through structural edits —
+    /// deleting a neighbour cannot re-point it, which the old footprint-level
+    /// ordinal list could not guarantee.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub guid: Option<String>,
     /// Solder mask expansion in mm. `None` (the default) writes 0; preserved
     /// when reading an Altium-authored arc (round-trip fidelity, #113).
     #[serde(
@@ -222,6 +240,7 @@ impl Arc {
             polygon_index: default_polygon_index(),
             component_index: default_component_index(),
             unique_id: None,
+            guid: None,
             solder_mask_expansion: None,
             keepout_restrictions: None,
         }
@@ -335,6 +354,14 @@ pub struct Region {
     /// Unique ID assigned by Altium (8-character alphanumeric string).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unique_id: Option<String>,
+    /// Altium's stable identity for this primitive, from the footprint's
+    /// `PrimitiveGuids` stream (`{XXXXXXXX-…}`), or `None` for a primitive
+    /// with no recorded identity (anything built from scratch). Riding on the
+    /// primitive itself, the identity follows it through structural edits —
+    /// deleting a neighbour cannot re-point it, which the old footprint-level
+    /// ordinal list could not guarantee.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub guid: Option<String>,
     /// The `V7_LAYER` token exactly as Altium wrote it, kept only when it names
     /// a different layer than [`Self::layer`].
     ///
@@ -416,6 +443,7 @@ impl Default for Region {
             union_index: 0,
             is_shape_based: false,
             unique_id: None,
+            guid: None,
             additional_parameters: Vec::new(),
         }
     }

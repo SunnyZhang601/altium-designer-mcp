@@ -11,11 +11,6 @@ record). The specialised worklists stay the single source of truth for their are
 
 ## A. Format / fidelity residue
 
-- [ ] **Attach identities to primitives (`PcbLib`)** — `PrimitiveGuids` and unique ids are
-      keyed by the global ordinal, so they survive a read-modify-write but a *structural*
-      edit (delete a pad, insert a region) silently re-points every later identity. Fix:
-      `guid: Option<String>` on the eight primitive structs + rebuild the stream from
-      `write_sequence()`; replaces `Footprint::primitive_guids`. (The audit's last code item.)
 - [ ] **Footprint-model record fidelity (`SchLib` RECORD=45)** — three defects in
       `encode_footprint_model`: `IsCurrent` is written as `index == 0` instead of the read
       `model.is_current` (a symbol whose current footprint is the second model gets flipped);
@@ -48,9 +43,10 @@ record). The specialised worklists stay the single source of truth for their are
 
 ## D. Release & distribution (no release exists yet)
 
-- [ ] Cut the **first tagged release** (v0.1.0) once the 99% gate is met — **maintainer
-      triggers it personally**. Tag-day steps: stamp the changelog heading/date,
-      `git tag v0.1.0`, push, watch the Release workflow, verify artefacts.
+- [ ] Cut **v0.1.0 as a pre-release** once §A above is complete (decision 2026-08-16) —
+      the 99% coverage climb continues calmly afterwards and stops gating the release.
+      **Maintainer triggers it personally.** Tag-day steps: stamp the changelog
+      heading/date, `git tag v0.1.0`, push, watch the Release workflow, verify artefacts.
 - [ ] Consider a `.dxt` Claude Desktop extension for one-click install (pattern from
       coffeenmusic/altium-mcp).
 

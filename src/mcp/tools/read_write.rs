@@ -789,6 +789,7 @@ impl McpServer {
                             layer: Layer::Top3DBody,
                             outline: Vec::new(),
                             unique_id: None,
+                            guid: None,
                             model_checksum: 0, // External reference: no embedded model.
                             name: " ".to_string(),
                             kind: 0,
@@ -927,6 +928,7 @@ impl McpServer {
                     polygon_index: 0xFFFF,
                     component_index: -1,
                     unique_id: None,
+                    guid: None,
                 });
             }
 
@@ -955,6 +957,7 @@ impl McpServer {
                     layer: Layer::Top3DBody,
                     outline: Vec::new(),
                     unique_id: None,
+                    guid: None,
                     model_checksum: 0,
                     name: " ".to_string(),
                     kind: 0,
@@ -2485,6 +2488,7 @@ mod tests {
             layer: Layer::Top3DBody,
             outline: Vec::new(),
             unique_id: None,
+            guid: None,
             model_checksum: 0,
             name: " ".to_string(),
             kind: 0,

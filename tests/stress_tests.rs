@@ -576,6 +576,7 @@ fn test_text_special_strings() {
         polygon_index: 0xFFFF,
         component_index: -1,
         unique_id: None,
+        guid: None,
     };
     fp.add_text(text1);
 
@@ -616,6 +617,7 @@ fn test_text_special_strings() {
         polygon_index: 0xFFFF,
         component_index: -1,
         unique_id: None,
+        guid: None,
     };
     fp.add_text(text2);
 
@@ -872,6 +874,7 @@ fn test_component_body_roundtrip() {
         layer: Layer::TopLayer,
         outline: Vec::new(),
         unique_id: None,
+        guid: None,
         model_checksum: 0,
         name: " ".to_string(),
         kind: 0,
@@ -934,6 +937,7 @@ fn test_component_body_with_rotation() {
         layer: Layer::TopLayer,
         outline: Vec::new(),
         unique_id: None,
+        guid: None,
         model_checksum: 0,
         name: " ".to_string(),
         kind: 0,
@@ -2766,6 +2770,7 @@ fn test_component_body_external_model_reference() {
         layer: Layer::Top3DBody,
         outline: Vec::new(),
         unique_id: None,
+        guid: None,
         model_checksum: 0,
         name: " ".to_string(),
         kind: 0,

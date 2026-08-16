@@ -272,6 +272,14 @@ pub struct Text {
     /// Unique ID assigned by Altium (8-character alphanumeric string).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unique_id: Option<String>,
+    /// Altium's stable identity for this primitive, from the footprint's
+    /// `PrimitiveGuids` stream (`{XXXXXXXX-…}`), or `None` for a primitive
+    /// with no recorded identity (anything built from scratch). Riding on the
+    /// primitive itself, the identity follows it through structural edits —
+    /// deleting a neighbour cannot re-point it, which the old footprint-level
+    /// ordinal list could not guarantee.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub guid: Option<String>,
 }
 
 /// A filled rectangle on a layer.
@@ -323,6 +331,14 @@ pub struct Fill {
     /// Unique ID assigned by Altium (8-character alphanumeric string).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unique_id: Option<String>,
+    /// Altium's stable identity for this primitive, from the footprint's
+    /// `PrimitiveGuids` stream (`{XXXXXXXX-…}`), or `None` for a primitive
+    /// with no recorded identity (anything built from scratch). Riding on the
+    /// primitive itself, the identity follows it through structural edits —
+    /// deleting a neighbour cannot re-point it, which the old footprint-level
+    /// ordinal list could not guarantee.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub guid: Option<String>,
 }
 
 impl Fill {
@@ -343,6 +359,7 @@ impl Fill {
             solder_mask_expansion: None,
             keepout_restrictions: None,
             unique_id: None,
+            guid: None,
         }
     }
 
@@ -365,6 +382,7 @@ impl Fill {
             solder_mask_expansion: None,
             keepout_restrictions: None,
             unique_id: None,
+            guid: None,
         }
     }
 }

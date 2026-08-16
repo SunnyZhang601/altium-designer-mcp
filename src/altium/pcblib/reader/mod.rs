@@ -267,6 +267,49 @@ pub fn parse_primitive_guids(data: &[u8]) -> Vec<crate::altium::pcblib::Primitiv
         .collect()
 }
 
+/// Attaches parsed `PrimitiveGuids` records to the primitives they name.
+///
+/// A record's `index` is the primitive's ordinal among all the footprint's
+/// primitives in Data-stream order; called right after parsing, that order is
+/// exactly what [`Footprint::write_sequence`] yields. The record's kind must
+/// agree with the primitive found at the ordinal or the record is skipped —
+/// a foreign file whose ordinal base does not line up mis-attaches nothing.
+/// Kind 85 names the footprint record itself.
+pub fn apply_primitive_guids(
+    footprint: &mut Footprint,
+    records: &[crate::altium::pcblib::PrimitiveGuid],
+) {
+    use crate::altium::pcblib::PrimitiveKind;
+
+    let sequence = footprint.write_sequence();
+    for record in records {
+        if record.object_kind == 85 {
+            footprint.guid = Some(record.guid.clone());
+            continue;
+        }
+        let Some(kind) = PrimitiveKind::from_altium_object_id(record.object_kind) else {
+            continue;
+        };
+        let Some(&(seq_kind, index)) = sequence.get(record.index as usize) else {
+            continue;
+        };
+        if seq_kind != kind {
+            continue;
+        }
+        let guid = Some(record.guid.clone());
+        match kind {
+            PrimitiveKind::Arc => footprint.arcs[index].guid = guid,
+            PrimitiveKind::Pad => footprint.pads[index].guid = guid,
+            PrimitiveKind::Via => footprint.vias[index].guid = guid,
+            PrimitiveKind::Track => footprint.tracks[index].guid = guid,
+            PrimitiveKind::Text => footprint.text[index].guid = guid,
+            PrimitiveKind::Region => footprint.regions[index].guid = guid,
+            PrimitiveKind::Fill => footprint.fills[index].guid = guid,
+            PrimitiveKind::ComponentBody => footprint.component_bodies[index].guid = guid,
+        }
+    }
+}
+
 /// Formats 16 GUID bytes as `{XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX}`.
 ///
 /// The first three fields are little-endian, the last two are byte order as

@@ -134,6 +134,14 @@ pub struct ComponentBody {
     /// Unique ID assigned by Altium (8-character alphanumeric string).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unique_id: Option<String>,
+    /// Altium's stable identity for this primitive, from the footprint's
+    /// `PrimitiveGuids` stream (`{XXXXXXXX-…}`), or `None` for a primitive
+    /// with no recorded identity (anything built from scratch). Riding on the
+    /// primitive itself, the identity follows it through structural edits —
+    /// deleting a neighbour cannot re-point it, which the old footprint-level
+    /// ordinal list could not guarantee.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub guid: Option<String>,
 
     /// Model integrity checksum (Altium `MODEL.CHECKSUM`). Round-tripped verbatim —
     /// never recomputed, because the checksum is over the raw (uncompressed) model
@@ -268,6 +276,7 @@ impl ComponentBody {
             layer: Layer::Top3DBody,
             outline: Vec::new(),
             unique_id: None,
+            guid: None,
             model_checksum: 0,
             name: default_body_name(),
             kind: 0,

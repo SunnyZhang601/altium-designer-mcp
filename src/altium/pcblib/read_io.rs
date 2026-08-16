@@ -457,11 +457,19 @@ impl PcbLib {
             Self::parse_primitives(&mut footprint, &data, &wide_strings);
         }
 
-        // PrimitiveGuids holds Altium's stable per-primitive identity. Losing it
-        // makes every primitive look new to Altium after a rewrite.
+        // PrimitiveGuids holds Altium's stable per-primitive identity, keyed
+        // by the primitive's ordinal among ALL the footprint's primitives in
+        // Data-stream order — which right after parsing is exactly the
+        // sequence `write_sequence()` yields. Each identity is attached to the
+        // primitive it names (with the record's kind cross-checked, so a
+        // foreign file with a shifted ordinal base mis-attaches nothing);
+        // kind 85 is the footprint record's own identity.
         let guid_path = storage_path.join("PrimitiveGuids/Data");
         if let Some(guid_data) = crate::altium::read_stream_opt(cfb, &guid_path) {
-            footprint.primitive_guids = reader::parse_primitive_guids(&guid_data);
+            reader::apply_primitive_guids(
+                &mut footprint,
+                &reader::parse_primitive_guids(&guid_data),
+            );
         }
 
         // Read UniqueIDPrimitiveInformation stream if present (contains unique IDs for primitives)

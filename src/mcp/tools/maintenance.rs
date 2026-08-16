@@ -1760,6 +1760,7 @@ mod tests {
                 polygon_index: 0xFFFF,
                 component_index: -1,
                 unique_id: None,
+                guid: None,
             });
             lib.add(fp);
             lib.save(path).expect("Failed to create rich PcbLib");

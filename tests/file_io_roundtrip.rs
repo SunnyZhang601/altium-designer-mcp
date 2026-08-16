@@ -181,6 +181,7 @@ fn pcblib_file_roundtrip_all_primitives() {
         polygon_index: 0xFFFF,
         component_index: -1,
         unique_id: None,
+        guid: None,
     };
     fp.add_text(text);
 
@@ -923,6 +924,7 @@ fn pcblib_roundtrip_preserves_numeric_silkscreen_text() {
         polygon_index: 0xFFFF,
         component_index: -1,
         unique_id: None,
+        guid: None,
     };
 
     let mut lib = PcbLib::new();

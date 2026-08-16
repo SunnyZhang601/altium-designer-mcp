@@ -1579,6 +1579,7 @@ mod tests {
             polygon_index: 0xFFFF,
             component_index: -1,
             unique_id: None,
+            guid: None,
         }
     }
 
@@ -2343,6 +2344,7 @@ mod tests {
                 layer: Layer::Top3DBody,
                 outline: Vec::new(),
                 unique_id: None,
+                guid: None,
                 model_checksum: 0,
                 name: " ".to_string(),
                 kind: 0,

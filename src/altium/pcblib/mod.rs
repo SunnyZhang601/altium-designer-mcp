@@ -135,17 +135,13 @@ pub struct Footprint {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model_3d: Option<Model3D>,
 
-    /// Altium's per-primitive GUIDs, from the footprint's `PrimitiveGuids`
-    /// stream, preserved in read order.
-    ///
-    /// These are the stable identities Altium uses to recognise a primitive
-    /// across edits; dropping them makes every primitive look new. They are held
-    /// as read rather than attached to the primitives themselves, so a
-    /// read-modify-write that leaves the primitive collections alone reproduces
-    /// them exactly. Adding or removing a primitive shifts the ordinals, and the
-    /// writer drops any entry that no longer points at a primitive.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub primitive_guids: Vec<PrimitiveGuid>,
+    /// Altium's stable identity for the footprint record itself — the
+    /// `PrimitiveGuids` stream's kind-85 entry. Each primitive's own identity
+    /// rides on the primitive (`guid` on all eight primitive structs), so a
+    /// structural edit moves identities with their primitives; this field
+    /// carries the one identity that names no primitive.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub guid: Option<String>,
 
     /// The order the primitives are stored in, one entry per primitive.
     ///
@@ -201,6 +197,39 @@ impl PrimitiveKind {
         Self::ComponentBody,
     ];
 
+    /// Altium's numeric object id for this kind, as a `PrimitiveGuids`
+    /// record stores it.
+    #[must_use]
+    pub const fn altium_object_id(self) -> u32 {
+        match self {
+            Self::Arc => 1,
+            Self::Pad => 2,
+            Self::Via => 3,
+            Self::Track => 4,
+            Self::Text => 5,
+            Self::Fill => 6,
+            Self::Region => 89,
+            Self::ComponentBody => 90,
+        }
+    }
+
+    /// The kind for one of Altium's numeric object ids, or `None` for an id
+    /// that names no library primitive (85 is the footprint record itself).
+    #[must_use]
+    pub const fn from_altium_object_id(id: u32) -> Option<Self> {
+        match id {
+            1 => Some(Self::Arc),
+            2 => Some(Self::Pad),
+            3 => Some(Self::Via),
+            4 => Some(Self::Track),
+            5 => Some(Self::Text),
+            6 => Some(Self::Fill),
+            89 => Some(Self::Region),
+            90 => Some(Self::ComponentBody),
+            _ => None,
+        }
+    }
+
     /// The `PRIMITIVEOBJECTID` token Altium writes for this kind in a
     /// `UniqueIDPrimitiveInformation` record.
     #[must_use]
@@ -218,7 +247,11 @@ impl PrimitiveKind {
     }
 }
 
-/// One `PrimitiveGuids` record: which primitive it names, and its GUID.
+/// One `PrimitiveGuids` record as it sits in the stream.
+///
+/// Which primitive it names, and its GUID. Parse/emit carrier only — the
+/// identities themselves live on the primitives (`guid`) and on
+/// [`Footprint::guid`].
 ///
 /// The stream is a `u32` count followed by that many 24-byte records of
 /// `[object_kind: u32][ordinal: u32][guid: 16 bytes, little-endian]`.
@@ -337,7 +370,7 @@ impl Footprint {
             fills: Vec::new(),
             component_bodies: Vec::new(),
             model_3d: None,
-            primitive_guids: Vec::new(),
+            guid: None,
             primitive_order: Vec::new(),
         }
     }
@@ -1102,6 +1135,7 @@ mod tests {
             polygon_index: 0xFFFF,
             component_index: -1,
             unique_id: None,
+            guid: None,
         });
         original.add_text(Text {
             barcode_full_width: None,
@@ -1139,6 +1173,7 @@ mod tests {
             polygon_index: 0xFFFF,
             component_index: -1,
             unique_id: None,
+            guid: None,
         });
 
         let data = writer::encode_data_stream(&original).expect("encoding should succeed");
@@ -1204,6 +1239,7 @@ mod tests {
             polygon_index: 0xFFFF,
             component_index: -1,
             unique_id: None,
+            guid: None,
         });
 
         let data = writer::encode_data_stream(&original).expect("encode");
@@ -1257,6 +1293,7 @@ mod tests {
             polygon_index: 0xFFFF,
             component_index: -1,
             unique_id: None,
+            guid: None,
         });
 
         let data = writer::encode_data_stream(&original).expect("encode");
@@ -1311,6 +1348,7 @@ mod tests {
                 polygon_index: 0xFFFF,
                 component_index: -1,
                 unique_id: None,
+                guid: None,
             },
             None,
         );
@@ -1383,6 +1421,7 @@ mod tests {
             polygon_index: 0xFFFF,
             component_index: -1,
             unique_id: None,
+            guid: None,
         });
 
         let data = writer::encode_data_stream(&original).expect("encode");
@@ -1444,6 +1483,7 @@ mod tests {
             polygon_index: 0xFFFF,
             component_index: -1,
             unique_id: None,
+            guid: None,
         };
         original.add_text(text.clone());
         text.text = ".Comment".to_string();
@@ -1584,6 +1624,7 @@ mod tests {
             polygon_index: 0xFFFF,
             component_index: -1,
             unique_id: None,
+            guid: None,
         });
 
         let data = writer::encode_data_stream(&original).expect("encode");
@@ -1652,6 +1693,7 @@ mod tests {
             polygon_index: 0xFFFF,
             component_index: -1,
             unique_id: None,
+            guid: None,
         });
 
         let data = writer::encode_data_stream(&original).expect("encoding should succeed");
@@ -1712,6 +1754,7 @@ mod tests {
             polygon_index: 0xFFFF,
             component_index: -1,
             unique_id: None,
+            guid: None,
         };
 
         let mut fp = Footprint::new("LONG_TEXT");
@@ -1893,6 +1936,7 @@ mod tests {
             polygon_index: 0xFFFF,
             component_index: 4,
             unique_id: None,
+            guid: None,
         });
 
         let data = writer::encode_data_stream(&original).expect("encoding should succeed");
@@ -2003,6 +2047,7 @@ mod tests {
             solder_mask_expansion: None,
             keepout_restrictions: None,
             unique_id: None,
+            guid: None,
         });
 
         let data = writer::encode_data_stream(&original).expect("encoding should succeed");
@@ -2078,6 +2123,7 @@ mod tests {
             layer: Layer::Top3DBody,
             outline: vec![(-2.0, 1.0), (-2.0, -1.0), (2.0, -1.0), (2.0, 1.0)],
             unique_id: None,
+            guid: None,
             model_checksum: 7_654_321,
             name: " ".to_string(),
             kind: 0,
@@ -2150,6 +2196,7 @@ mod tests {
                 layer: Layer::Top3DBody,
                 outline: Vec::new(), // exercise the synthesised-bbox fallback
                 unique_id: None,
+                guid: None,
                 model_checksum: 0,
                 name: " ".to_string(),
                 kind: 0,

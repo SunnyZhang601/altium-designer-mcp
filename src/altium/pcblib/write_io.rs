@@ -182,6 +182,7 @@ impl PcbLib {
                 layer: Layer::Top3DBody,
                 outline: Vec::new(), // Synthesised from the footprint extent on write
                 unique_id: None,
+                guid: None,
                 model_checksum: 0, // Fresh embed; Altium computes the real checksum on save.
                 name: " ".to_string(),
                 kind: 0,
@@ -627,7 +628,9 @@ impl PcbLib {
         if let Some(guid_data) = writer::encode_primitive_guids(footprint) {
             let guid_storage = format!("{storage_path}/PrimitiveGuids");
             crate::altium::create_storage(cfb, &guid_storage)?;
-            let count = u32::try_from(footprint.primitive_guids.len()).unwrap_or(u32::MAX);
+            // Header = record count; the data is fixed 24-byte records, so the
+            // count is exactly what was emitted.
+            let count = u32::try_from(guid_data.len() / 24).unwrap_or(u32::MAX);
             crate::altium::write_stream(
                 cfb,
                 &format!("{guid_storage}/Header"),

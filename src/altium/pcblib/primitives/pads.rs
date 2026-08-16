@@ -255,6 +255,14 @@ pub struct Pad {
     /// Unique ID assigned by Altium (8-character alphanumeric string).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unique_id: Option<String>,
+    /// Altium's stable identity for this primitive, from the footprint's
+    /// `PrimitiveGuids` stream (`{XXXXXXXX-…}`), or `None` for a primitive
+    /// with no recorded identity (anything built from scratch). Riding on the
+    /// primitive itself, the identity follows it through structural edits —
+    /// deleting a neighbour cannot re-point it, which the old footprint-level
+    /// ordinal list could not guarantee.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub guid: Option<String>,
 
     /// Per-pad identity GUID — extended-tail bytes @126-141 ("GUID-A"), read
     /// back verbatim as a braced uppercase GUID string (Windows little-endian
@@ -376,6 +384,7 @@ impl Pad {
             polygon_index: default_polygon_index(),
             component_index: default_component_index(),
             unique_id: None,
+            guid: None,
             identity_guid: None,
             identity_guid_b: None,
         }
@@ -430,6 +439,7 @@ impl Pad {
             polygon_index: default_polygon_index(),
             component_index: default_component_index(),
             unique_id: None,
+            guid: None,
             identity_guid: None,
             identity_guid_b: None,
         }
@@ -796,6 +806,14 @@ pub struct Via {
     /// Unique ID assigned by Altium (8-character alphanumeric string).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unique_id: Option<String>,
+    /// Altium's stable identity for this primitive, from the footprint's
+    /// `PrimitiveGuids` stream (`{XXXXXXXX-…}`), or `None` for a primitive
+    /// with no recorded identity (anything built from scratch). Riding on the
+    /// primitive itself, the identity follows it through structural edits —
+    /// deleting a neighbour cannot re-point it, which the old footprint-level
+    /// ordinal list could not guarantee.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub guid: Option<String>,
 }
 
 /// Default thermal relief gap (10 mils = 0.254mm).
@@ -863,6 +881,7 @@ impl Via {
             solder_mask_expansion_from_hole_edge: false,
             drill_layer_pair_type: DrillLayerPairType::Through,
             unique_id: None,
+            guid: None,
         }
     }
 
@@ -904,6 +923,7 @@ impl Via {
             solder_mask_expansion_from_hole_edge: false,
             drill_layer_pair_type: DrillLayerPairType::Through,
             unique_id: None,
+            guid: None,
         }
     }
 }

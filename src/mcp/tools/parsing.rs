@@ -123,6 +123,12 @@ fn json_unique_id(json: &Value) -> Option<String> {
         .map(str::to_string)
 }
 
+/// Reads a primitive's Altium identity GUID from its JSON, so a
+/// read-modify-write that passes through the tool layer keeps it.
+fn json_guid(json: &Value) -> Option<String> {
+    json.get("guid").and_then(Value::as_str).map(str::to_string)
+}
+
 /// Accepted pad-shape spellings, quoted in every shape error so the two tools
 /// give identical guidance.
 pub const PAD_SHAPE_HELP: &str = "Valid shapes are: rectangle, round (or circle), \
@@ -449,6 +455,7 @@ impl McpServer {
             component_index: json_component_index(json),
             flags: json_flags(json),
             unique_id: json_unique_id(json),
+            guid: json_guid(json),
             identity_guid,
             identity_guid_b,
         })
@@ -556,6 +563,7 @@ impl McpServer {
             polygon_index: json_polygon_index(json),
             component_index: json_component_index(json),
             unique_id: json_unique_id(json),
+            guid: json_guid(json),
             // Optional EE tail (mirrors the modelled optionals; absent keys keep
             // the default `None` so a from-scratch arc is byte-identical).
             solder_mask_expansion: json_f64(json, "solder_mask_expansion"),
@@ -682,6 +690,7 @@ impl McpServer {
             union_index,
             is_shape_based,
             unique_id: text_field("unique_id"),
+            guid: text_field("guid"),
             additional_parameters,
         })
     }
@@ -812,6 +821,7 @@ impl McpServer {
             polygon_index: json_polygon_index(json),
             component_index: json_component_index(json),
             unique_id: json_unique_id(json),
+            guid: json_guid(json),
             barcode_full_width: json_f64(json, "barcode_full_width"),
             barcode_full_height: json_f64(json, "barcode_full_height"),
             barcode_x_margin: json_f64(json, "barcode_x_margin"),
@@ -900,6 +910,7 @@ impl McpServer {
                 .get("unique_id")
                 .and_then(Value::as_str)
                 .map(str::to_string),
+            guid: json_guid(body_json),
             model_checksum: body_json
                 .get("model_checksum")
                 .and_then(Value::as_i64)

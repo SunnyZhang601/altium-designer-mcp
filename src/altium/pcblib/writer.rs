@@ -1918,20 +1918,43 @@ fn encode_unique_id_record(
 /// first three fields little-endian. A malformed GUID string is skipped rather
 /// than written as zeroes, which would claim an identity Altium never issued.
 ///
+/// Rebuilt from the primitives themselves: each carries its own `guid`, and
+/// its ordinal is its position in [`Footprint::write_sequence`] — so a
+/// structural edit (delete a pad, insert a region) moves every identity WITH
+/// its primitive instead of re-pointing the survivors. The footprint record's
+/// own identity (kind 85) leads, then the primitives in ordinal order; Altium
+/// scrambles its record order, but the records are keyed, not positional.
+///
 /// Nothing is emitted for a from-scratch footprint: it has no identities to
 /// preserve, and inventing them would make every save produce different bytes.
 pub fn encode_primitive_guids(footprint: &Footprint) -> Option<Vec<u8>> {
-    if footprint.primitive_guids.is_empty() {
-        return None;
+    let mut out = Vec::new();
+    let mut push = |kind: u32, ordinal: usize, guid: &str| {
+        if let Some(bytes) = parse_guid(guid) {
+            out.extend_from_slice(&kind.to_le_bytes());
+            #[allow(clippy::cast_possible_truncation)] // primitive counts are small
+            out.extend_from_slice(&(ordinal as u32).to_le_bytes());
+            out.extend_from_slice(&bytes);
+        }
+    };
+
+    if let Some(guid) = &footprint.guid {
+        push(85, 0, guid);
     }
-    let mut out = Vec::with_capacity(footprint.primitive_guids.len() * 24);
-    for entry in &footprint.primitive_guids {
-        let Some(bytes) = parse_guid(&entry.guid) else {
-            continue;
+    for (ordinal, (kind, index)) in footprint.write_sequence().into_iter().enumerate() {
+        let guid = match kind {
+            PrimitiveKind::Arc => &footprint.arcs[index].guid,
+            PrimitiveKind::Pad => &footprint.pads[index].guid,
+            PrimitiveKind::Via => &footprint.vias[index].guid,
+            PrimitiveKind::Track => &footprint.tracks[index].guid,
+            PrimitiveKind::Text => &footprint.text[index].guid,
+            PrimitiveKind::Region => &footprint.regions[index].guid,
+            PrimitiveKind::Fill => &footprint.fills[index].guid,
+            PrimitiveKind::ComponentBody => &footprint.component_bodies[index].guid,
         };
-        out.extend_from_slice(&entry.object_kind.to_le_bytes());
-        out.extend_from_slice(&entry.index.to_le_bytes());
-        out.extend_from_slice(&bytes);
+        if let Some(guid) = guid {
+            push(kind.altium_object_id(), ordinal, guid);
+        }
     }
     (!out.is_empty()).then_some(out)
 }
@@ -2210,6 +2233,7 @@ mod tests {
             polygon_index: 0xFFFF,
             component_index: -1,
             unique_id: None,
+            guid: None,
         };
         let geom = encode_text_geometry(&text, None);
         assert_eq!(geom[40], 0x01, "IsComment @40");
@@ -2301,6 +2325,7 @@ mod tests {
             polygon_index: 0xFFFF,
             component_index: -1,
             unique_id: None,
+            guid: None,
         };
         let geom = encode_text_geometry(&text, None);
         assert_eq!(
@@ -2373,6 +2398,7 @@ mod tests {
             polygon_index: 0xFFFF,
             component_index: -1,
             unique_id: None,
+            guid: None,
         };
         let geom = encode_text_geometry(&text, None);
         assert_eq!(geom[110], 0x01, "IsInverted @110");
@@ -3628,6 +3654,7 @@ mod tests {
             polygon_index: 0xFFFF,
             component_index: -1,
             unique_id: None,
+            guid: None,
         };
         let mut fp = Footprint::new("WS");
         fp.add_text(mk("AB")); // bytes 65, 66

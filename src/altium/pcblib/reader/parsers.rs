@@ -341,6 +341,7 @@ pub(super) fn parse_pad(data: &[u8], offset: usize) -> ParseResult<Pad> {
         component_index,
         flags,
         unique_id: None,
+        guid: None,
         identity_guid,
         identity_guid_b,
     };
@@ -609,6 +610,7 @@ pub(super) fn parse_via(data: &[u8], offset: usize) -> ParseResult<Via> {
         per_layer_diameters,
         flags,
         unique_id: None,
+        guid: None,
     };
 
     Ok((via, next))
@@ -687,6 +689,7 @@ pub(super) fn parse_track(data: &[u8], offset: usize) -> ParseResult<Track> {
         polygon_index,
         component_index,
         unique_id: None,
+        guid: None,
         solder_mask_expansion,
         keepout_restrictions,
     };
@@ -761,6 +764,7 @@ pub(super) fn parse_arc(data: &[u8], offset: usize) -> ParseResult<Arc> {
         polygon_index,
         component_index,
         unique_id: None,
+        guid: None,
         solder_mask_expansion,
         keepout_restrictions,
     };
@@ -1005,6 +1009,7 @@ pub(super) fn parse_text(
         polygon_index,
         component_index,
         unique_id: None,
+        guid: None,
         barcode_full_width,
         barcode_full_height,
         barcode_x_margin: barcode_margin_x,
@@ -1331,6 +1336,7 @@ pub(super) fn parse_region(data: &[u8], offset: usize) -> ParseResult<Region> {
         union_index,
         is_shape_based,
         unique_id: None,
+        guid: None,
         additional_parameters,
     };
 
@@ -1438,6 +1444,7 @@ pub(super) fn parse_fill(data: &[u8], offset: usize) -> ParseResult<Fill> {
         solder_mask_expansion,
         keepout_restrictions,
         unique_id: None,
+        guid: None,
     };
 
     Ok((fill, current))
@@ -1449,6 +1456,14 @@ pub(super) fn parse_fill(data: &[u8], offset: usize) -> ParseResult<Fill> {
 /// A `ComponentBody` is a single size-prefixed block (matching `AltiumSharp` and
 /// the `BODY_3D` golden libraries): the layer/flags header, a C-string
 /// parameter block, then the 2D outline polygon — all within the one block.
+/// The `MODEL.CHECKSUM` value, round-tripped verbatim (0 when absent).
+fn parse_model_checksum(params: &std::collections::HashMap<String, String>) -> i64 {
+    params
+        .get("MODEL.CHECKSUM")
+        .and_then(|v| v.parse::<i64>().ok())
+        .unwrap_or(0)
+}
+
 pub(super) fn parse_component_body(data: &[u8], offset: usize) -> ParseResult<ComponentBody> {
     // The single block holds the header, parameters and outline.
     let (block0, current) = read_block(data, offset).ok_or_else(|| {
@@ -1502,10 +1517,7 @@ pub(super) fn parse_component_body(data: &[u8], offset: usize) -> ParseResult<Co
 
     // MODEL.CHECKSUM is a plain integer. Round-trip it verbatim
     // (0 = default/valid) — it is not recomputed from the model bytes here.
-    let model_checksum = params
-        .get("MODEL.CHECKSUM")
-        .and_then(|v| v.parse::<i64>().ok())
-        .unwrap_or(0);
+    let model_checksum = parse_model_checksum(&params);
 
     // The body's layer is the CommonPrimitiveData layer byte at block offset 0 — the
     // authoritative source, exactly as AltiumSharp does (`result.Layer = layer`,
@@ -1580,6 +1592,7 @@ pub(super) fn parse_component_body(data: &[u8], offset: usize) -> ParseResult<Co
         layer,
         outline,
         unique_id: None,
+        guid: None,
         model_checksum,
         name,
         kind,

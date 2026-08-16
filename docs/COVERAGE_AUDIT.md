@@ -26,14 +26,6 @@ keys are ANSI `?` husks; real names in raw-UTF-8 `%UTF8%` twins; pin names only 
 suffix (`FIXTURE_INCONSISTENT` in `tests/golden_fidelity.rs`); never open-and-save that
 golden in AD (see `scripts/samples/README.md`).
 
-**Identity streams are keyed by ordinal, not attached to the primitive (`PcbLib`).** A
-footprint's `PrimitiveGuids` records and its unique ids both name a primitive by its
-position among all the footprint's primitives. That position is preserved across a
-read-modify-write, so both survive one — but a *structural* edit (deleting a pad, inserting
-a region) renumbers everything after it and silently re-points every later identity.
-Attaching the GUID to the primitive it names would fix it, and touches eight primitive
-structs.
-
 ## How to re-verify before trusting this
 
 An earlier edition went badly stale — 103 of its 129 entries named fields that had since

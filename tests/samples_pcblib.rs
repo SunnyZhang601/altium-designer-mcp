@@ -40,13 +40,12 @@ fn samples_exist() {
 fn samples_pcblib_pad_shapes() {
     let lib = PcbLib::open(sample("footprints.PcbLib")).expect("failed to open footprints.PcbLib");
 
-    // Seventeen footprints: twelve per-primitive-family footprints plus the five
-    // coverage-enrichment footprints (TEXT_STYLE, REGION_CUTOUT, TEXT_SPECIAL,
-    // MULTILAYER, EMBSTEP). Note: PAD_THERMAL remains a documented negative — the
-    // thermal-relief/power-plane setters crash AD24's scripting engine on a fresh
-    // library pad in every sequence tried (batch 4b final bisect); see
-    // GenerateSamples.pas.
-    assert_eq!(lib.len(), 21, "expected exactly twenty-one footprints");
+    // Twelve per-primitive-family footprints plus the coverage-enrichment ones
+    // (TEXT_STYLE, REGION_CUTOUT, TEXT_SPECIAL, MULTILAYER, EMBSTEP, PRIMPROPS).
+    // Note: PAD_THERMAL remains a documented negative — the thermal-relief /
+    // power-plane setters crash AD24's scripting engine on a fresh library pad in
+    // every sequence tried (batch 4b final bisect); see GenerateSamples.pas.
+    assert_eq!(lib.len(), 22, "expected exactly twenty-two footprints");
     let names = lib.names();
     for expected in [
         "PAD_SHAPES",
@@ -70,6 +69,7 @@ fn samples_pcblib_pad_shapes() {
         "LOCKFLAGS_PCB",
         "MULTILAYER",
         "EMBSTEP",
+        "PRIMPROPS",
     ] {
         assert!(
             names.iter().any(|n| n == expected),
@@ -863,6 +863,53 @@ fn samples_pcblib_text_style() {
     assert!(t.italic, "text is italic");
     assert!(t.mirror, "text is mirrored");
     assert_eq!(t.font_name, "Arial", "TrueType font name round-trips");
+}
+
+#[test]
+fn samples_pcblib_region_kinds_and_naming() {
+    let lib = PcbLib::open(sample("footprints.PcbLib")).expect("failed to open footprints.PcbLib");
+    let fp = lib.get("PRIMPROPS").expect("PRIMPROPS footprint not found");
+
+    // One region per TRegionKind AD24 offers. Authoring all four is the only way
+    // to pin the integer behind each name: nothing documents them, and a region
+    // whose kind we misread is indistinguishable from a plain copper pour.
+    let by_name = |n: &str| {
+        fp.regions
+            .iter()
+            .find(|r| r.name == n)
+            .unwrap_or_else(|| panic!("PRIMPROPS region {n:?} not found"))
+    };
+
+    // KIND=2. Also proves Name and UnionIndex survive: every other region in the
+    // library is unnamed and in no union.
+    let named = by_name("NamedPour");
+    assert_eq!(named.kind, RegionKind::NamedRegion, "KIND=2");
+    assert_eq!(named.union_index, 7, "authored union index");
+
+    // KIND=4.
+    assert_eq!(by_name("CavityRgn").kind, RegionKind::Cavity, "KIND=4");
+
+    // KIND=1, the plain polygon cutout.
+    assert_eq!(by_name("PlainCut").kind, RegionKind::Cutout, "KIND=1");
+
+    // eRegionKind_BoardCutout is NOT a kind on disk: AD24 rewrites it as copper
+    // on the keep-out layer with ISBOARDCUTOUT=TRUE, the same representation
+    // samples_pcblib_region_cutout asserts. Named here so the four authored
+    // kinds account for only three KIND integers.
+    let cut = by_name("BoardCut");
+    assert_eq!(cut.kind, RegionKind::Copper, "a board cutout stores KIND=0");
+    assert_eq!(
+        cut.layer,
+        Layer::KeepOut,
+        "and is moved to the keep-out layer"
+    );
+    assert!(
+        cut.additional_parameters
+            .iter()
+            .any(|(k, v)| k == "ISBOARDCUTOUT" && v == "TRUE"),
+        "the board-cutout flag is preserved, got {:?}",
+        cut.additional_parameters
+    );
 }
 
 #[test]

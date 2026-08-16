@@ -230,10 +230,15 @@ impl Arc {
 
 /// The kind of a region, from the `KIND` key of its nested parameter block.
 ///
-/// Altium serialises this as an integer (`KIND=0` for copper). We model the two
-/// documented values plus an `Other(i32)` catch-all so an unrecognised kind
+/// Altium serialises this as an integer (`KIND=0` for copper). Each value below
+/// was pinned by authoring one region per `TRegionKind` in AD24 and reading the
+/// saved `KIND` back, plus an `Other(i32)` catch-all so an unrecognised kind
 /// round-trips verbatim. `Copper` (=`KIND=0`) is the from-scratch default and the
 /// value the writer historically hard-coded.
+///
+/// `eRegionKind_BoardCutout` has no `KIND` of its own: AD24 stores a board cutout
+/// as a `Copper` region moved to the keep-out layer and tagged `ISBOARDCUTOUT=TRUE`
+/// in its parameter block, which the reader surfaces through `additional_parameters`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RegionKind {
@@ -242,17 +247,23 @@ pub enum RegionKind {
     Copper,
     /// Board / polygon cutout (`KIND=1`).
     Cutout,
+    /// Named region (`KIND=2`) — a labelled area carrying no copper.
+    NamedRegion,
+    /// Embedded-component cavity (`KIND=4`).
+    Cavity,
     /// Any other `KIND` integer Altium may write; preserved for round-trip.
     Other(i32),
 }
 
 impl RegionKind {
-    /// Creates from the Altium `KIND` integer (`0` = `Copper`, `1` = `Cutout`).
+    /// Creates from the Altium `KIND` integer.
     #[must_use]
     pub const fn from_id(id: i32) -> Self {
         match id {
             0 => Self::Copper,
             1 => Self::Cutout,
+            2 => Self::NamedRegion,
+            4 => Self::Cavity,
             other => Self::Other(other),
         }
     }
@@ -263,6 +274,8 @@ impl RegionKind {
         match self {
             Self::Copper => 0,
             Self::Cutout => 1,
+            Self::NamedRegion => 2,
+            Self::Cavity => 4,
             Self::Other(other) => other,
         }
     }

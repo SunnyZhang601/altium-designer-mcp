@@ -589,6 +589,110 @@ begin
                                   PCBM_BoardRegisteration, Body.I_ObjectAddress);
 end;
 
+{ Region carrying the descriptive properties a plain copper pour never sets:
+  a name, a union index and an explicit Kind. Every other region in the
+  library is an unnamed copper box, so these reader arms have no golden
+  coverage, and the numeric value behind each TRegionKind is only pinned by
+  authoring one region per kind.
+  DOCUMENTED NEGATIVE (AD24): ArcResolution is NOT on IPCB_Region —
+  `Rgn.ArcResolution` is a compile error, "Undeclared identifier". The name
+  is real in the scripting identifier table, but on another interface. }
+procedure AddRegionNamed(Comp : IPCB_LibComponent; X1 : Integer; Y1 : Integer;
+                         X2 : Integer; Y2 : Integer; RName : String;
+                         K : TRegionKind);
+var
+    Rgn  : IPCB_Region;
+    Cont : IPCB_Contour;
+begin
+    Rgn := PCBServer.PCBObjectFactory(eRegionObject, eNoDimension, eCreate_Default);
+    if Rgn = nil then Exit;
+    Rgn.Layer         := eTopLayer;
+    Rgn.Name          := RName;
+    Rgn.Kind          := K;
+    Rgn.UnionIndex    := 7;
+    Cont := Rgn.MainContour.Replicate;
+    Cont.Count := 4;
+    Cont.X[1] := MilsToCoord(X1);  Cont.Y[1] := MilsToCoord(Y1);
+    Cont.X[2] := MilsToCoord(X2);  Cont.Y[2] := MilsToCoord(Y1);
+    Cont.X[3] := MilsToCoord(X2);  Cont.Y[3] := MilsToCoord(Y2);
+    Cont.X[4] := MilsToCoord(X1);  Cont.Y[4] := MilsToCoord(Y2);
+    Rgn.SetOutlineContour(Cont);
+    Comp.AddPCBObject(Rgn);
+    PCBServer.SendMessageToRobots(Comp.I_ObjectAddress, c_Broadcast,
+                                  PCBM_BoardRegisteration, Rgn.I_ObjectAddress);
+end;
+
+{ STAGED PROBE — not compiled; CavityHeight / BodyColor3D / BodyOpacity3D are
+  unproven on IPCB_ComponentBody. Uncomment the body AND its call site together
+  for a run of its own. Component body with a non-zero standoff, cavity height,
+  colour and opacity. }
+(*
+procedure AddBodyProps(Comp : IPCB_LibComponent; CX : Integer; CY : Integer;
+                       WMils : Integer; HMils : Integer);
+var
+    Body  : IPCB_ComponentBody;
+    Cont  : IPCB_Contour;
+    HalfW : Integer;
+    HalfH : Integer;
+begin
+    HalfW := WMils div 2;
+    HalfH := HMils div 2;
+    Body := PCBServer.PCBObjectFactory(eComponentBodyObject, eNoDimension, eCreate_Default);
+    if Body = nil then Exit;
+    Body.BodyProjection := eBoardSide_Top;
+    Body.Layer          := LayerUtils.MechanicalLayer(13);
+    Body.StandoffHeight := MilsToCoord(10);
+    Body.OverallHeight  := MilsToCoord(50);
+    Body.CavityHeight   := MilsToCoord(5);
+    Body.BodyColor3D    := $0000FF;           { red, against the grey default }
+    Body.BodyOpacity3D  := 0.5;
+    Cont := Body.MainContour.Replicate;
+    Cont.Count := 4;
+    Cont.X[1] := MilsToCoord(CX - HalfW);  Cont.Y[1] := MilsToCoord(CY - HalfH);
+    Cont.X[2] := MilsToCoord(CX + HalfW);  Cont.Y[2] := MilsToCoord(CY - HalfH);
+    Cont.X[3] := MilsToCoord(CX + HalfW);  Cont.Y[3] := MilsToCoord(CY + HalfH);
+    Cont.X[4] := MilsToCoord(CX - HalfW);  Cont.Y[4] := MilsToCoord(CY + HalfH);
+    Body.SetOutlineContour(Cont);
+    Comp.AddPCBObject(Body);
+    PCBServer.SendMessageToRobots(Comp.I_ObjectAddress, c_Broadcast,
+                                  PCBM_BoardRegisteration, Body.I_ObjectAddress);
+end;
+*)
+
+{ STAGED PROBE — not compiled. A via's mask expansion must go through TPadCache
+  (GetState_Cache -> SetState_Cache), the same route AddPadMask uses; the direct
+  Via.SolderMaskExpansionMode / .PasteMaskExpansion setters compile but take
+  AD24 down with a native access violation in ScriptingSystem.DLL, exactly like
+  the pad thermal-relief setters. Reinstate via the cache, on a run of its own.
+  Uncomment the body AND its call site together. }
+(*
+procedure AddViaMask(Comp : IPCB_LibComponent; X : Integer; Y : Integer;
+                     PadDia : Integer; HoleDia : Integer);
+var
+    Via   : IPCB_Via;
+    Cache : TPadCache;
+begin
+    Via := PCBServer.PCBObjectFactory(eViaObject, eNoDimension, eCreate_Default);
+    if Via = nil then Exit;
+    Via.X         := MilsToCoord(X);
+    Via.Y         := MilsToCoord(Y);
+    Via.Size      := MilsToCoord(PadDia);
+    Via.HoleSize  := MilsToCoord(HoleDia);
+    Via.LowLayer  := eTopLayer;
+    Via.HighLayer := eBottomLayer;
+    Via.Mode      := ePadMode_Simple;
+    Cache := Via.GetState_Cache;
+    Cache.SolderMaskExpansionValid := eCacheManual;
+    Cache.SolderMaskExpansion      := MilsToCoord(7);
+    Cache.PasteMaskExpansionValid  := eCacheManual;
+    Cache.PasteMaskExpansion       := MilsToCoord(3);
+    Via.SetState_Cache             := Cache;
+    Comp.AddPCBObject(Via);
+    PCBServer.SendMessageToRobots(Comp.I_ObjectAddress, c_Broadcast,
+                                  PCBM_BoardRegisteration, Via.I_ObjectAddress);
+end;
+*)
+
 { ---- PcbLib authoring -------------------------------------------------------
 
   Footprints: PAD_SHAPES, PAD_HOLES, VIAS, TRACKS, ARCS, REGIONS, FILLS, TEXT_STROKE,
@@ -1206,6 +1310,26 @@ begin
         Lib.RegisterComponent(Comp);
         PCBServer.PreProcess;
         AddBodyStep(Comp, OUT_DIR + 'minimal.step');
+        PCBServer.PostProcess;
+    except
+    end;
+
+    // PRIMPROPS: the descriptive properties the plain primitives never set.
+    // Only the named region is authored today; the body and via probes are
+    // staged behind comments so a crash or a compile error names one interface
+    // rather than leaving the whole run ambiguous.
+    try
+        Comp := PCBServer.CreatePCBLibComp;
+        Comp.Name := 'PRIMPROPS';
+        Lib.RegisterComponent(Comp);
+        PCBServer.PreProcess;
+        AddRegionNamed(Comp, -100, -50,   0,  50, 'NamedPour', eRegionKind_NamedRegion);
+        AddRegionNamed(Comp,   20, -50, 120,  50, 'CavityRgn', eRegionKind_Cavity);
+        AddRegionNamed(Comp,  140, -50, 240,  50, 'BoardCut',  eRegionKind_BoardCutout);
+        AddRegionNamed(Comp,  260, -50, 360,  50, 'PlainCut',  eRegionKind_Cutout);
+        { STAGED, one unproven interface per run — see each helper's note:
+          AddBodyProps(Comp, 200, 0, 80, 60);
+          AddViaMask(Comp, 400, 0, 50, 25); }
         PCBServer.PostProcess;
     except
     end;

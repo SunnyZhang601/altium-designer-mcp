@@ -727,7 +727,7 @@ V7_LAYER={token}|NAME={name}|KIND={kind}|SUBPOLYINDEX={spi}|UNIONINDEX={uix}|ARC
 
 | Key | Description | Default |
 |-----|-------------|---------|
-| `V7_LAYER` | Canonical layer token — `MECHANICAL{n}` for mechanical layers, else the display name upper-cased with spaces stripped (e.g. `TOPLAYER`) | matches layer byte |
+| `V7_LAYER` | Canonical layer token from Altium's own vocabulary — `TOP`, `MECHANICAL4`, `PLANE3`, … (see below) | matches the layer byte, except on a board cutout |
 | `NAME` | Region name | empty |
 | `KIND` | Region kind (0 = copper/standard, 1 = cutout, ...) | 0 |
 | `SUBPOLYINDEX` | Sub-polygon index | -1 |
@@ -742,9 +742,31 @@ captured verbatim on read and re-emitted after the canonical set, so a read-modi
 drop them.
 
 > **Warning:** Altium resolves a Region's layer from the `V7_LAYER` token, NOT the header layer
-> byte. Mechanical layers MUST use their `MECHANICAL{n}` token (e.g. Top Courtyard →
-> `MECHANICAL4`); the space-stripped display name is not a valid token and makes Altium silently
-> drop the region onto Top Layer.
+> byte, and the token is a **fixed vocabulary** rather than the display name with the spaces taken
+> out. `TOPLAYER` and `BOTTOMLAYER` resolve to nothing, and an unresolved token leaves the region
+> on Top Layer — so the bottom-side case is a silent side swap.
+
+**The vocabulary**, held in `Advpcb.dll` as UTF-16LE strings. `MECHANICAL`, `MID` and `PLANE` take
+a number; the rest are literals.
+
+| Layer id | Token | | Layer id | Token |
+|----------|-------|-|----------|-------|
+| 1 | `TOP` | | 39-54 | `PLANE1`-`PLANE16` |
+| 2-31 | `MID1`-`MID30` | | 55 | `DRILLGUIDE` |
+| 32 | `BOTTOM` | | 56 | `KEEPOUT` |
+| 33 | `TOPOVERLAY` | | 57-72 | `MECHANICAL1`-`MECHANICAL16` |
+| 34 | `BOTTOMOVERLAY` | | 73 | `DRILLDRAWING` |
+| 35 | `TOPPASTE` | | 74 | `MULTILAYER` |
+| 36 | `BOTTOMPASTE` | | 75 | `CONNECT` |
+| 37 | `TOPSOLDER` | | 186-201 | `MECHANICAL17`-`MECHANICAL32` |
+| 38 | `BOTTOMSOLDER` | | | |
+
+**Board cutouts are the one case where the token and the layer byte disagree.** AD24 saves a
+cutout authored on the top layer with layer byte 56 (keep-out) and
+`LAYER=KEEPOUT|KEEPOUT=TRUE|ISBOARDCUTOUT=TRUE`, but leaves `V7_LAYER=TOP` — the layer it was
+drawn on, recorded nowhere else in the record. The golden's `REGION_CUTOUT` and `PRIMPROPS`
+cutouts both show this. Deriving the token from the layer byte would write `KEEPOUT` and lose it,
+so a divergent token is kept as read.
 
 **Vertex format:** each vertex is two IEEE 754 doubles (X then Y) in internal units. Values are
 whole internal units in real files; the reader rounds to integers before converting to mm.

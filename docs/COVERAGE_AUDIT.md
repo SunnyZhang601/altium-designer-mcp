@@ -22,10 +22,6 @@ writes a `SectionKeys` stream mapping the real `LibRef` back to the truncated na
 (`|KeyCount=N|%UTF8%LibRef0=…|||LibRef0=…|%UTF8%SectionKey0=…|…`). Without it a component
 with a long non-ASCII name keeps only its truncated storage name.
 
-**`V7_LAYER` is re-derived rather than replayed (`PcbLib`).** Altium writes the short token
-(`TOP`); we write the long form (`TOPLAYER`), and for a board cutout we write the resolved
-keep-out layer rather than the one stored in the record.
-
 **Identity streams are keyed by ordinal, not attached to the primitive (`PcbLib`).** A
 footprint's `PrimitiveGuids` records and its unique ids both name a primitive by its
 position among all the footprint's primitives. That position is preserved across a

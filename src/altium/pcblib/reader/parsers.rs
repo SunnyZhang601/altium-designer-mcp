@@ -1249,6 +1249,15 @@ pub(super) fn parse_region(data: &[u8], offset: usize) -> ParseResult<Region> {
     // is "additional".
     let additional_parameters = capture_additional_params(&params_str, REGION_MODELLED_PARAM_KEYS);
 
+    // Keep `V7_LAYER` only when it disagrees with the layer byte, which is what
+    // a board cutout does — see `Region::v7_layer`. Deriving it back from
+    // `layer` covers every other region, and leaving it `None` there means a
+    // caller that moves a region to another layer still gets the right token.
+    let v7_layer = params
+        .get("V7_LAYER")
+        .filter(|token| **token != crate::altium::pcblib::writer::v7_layer_token(layer))
+        .cloned();
+
     // Vertex data follows the parameter string.
     let vertex_offset = param_end;
 
@@ -1309,6 +1318,7 @@ pub(super) fn parse_region(data: &[u8], offset: usize) -> ParseResult<Region> {
         vertices,
         holes,
         layer,
+        v7_layer,
         flags,
         kind,
         name,

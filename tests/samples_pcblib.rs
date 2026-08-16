@@ -1136,9 +1136,8 @@ fn samples_pcblib_region_cutout() {
         "the board-cutout flag is preserved in additional_parameters, got {:?}",
         r.additional_parameters
     );
-    // Altium also silently MOVED the authored eTopLayer region onto the
-    // keep-out layer (LAYER=KEEPOUT + KEEPOUT=TRUE in the same param block) —
-    // the authored layer is not preserved for a board cutout. Assert the real
+    // Altium also MOVED the authored eTopLayer region onto the keep-out layer
+    // (LAYER=KEEPOUT + KEEPOUT=TRUE in the same param block). Assert the real
     // on-disk placement so the relocation is documented ground truth.
     assert_eq!(
         r.layer,
@@ -1151,6 +1150,37 @@ fn samples_pcblib_region_cutout() {
             .any(|(k, v)| k == "KEEPOUT" && v == "TRUE"),
         "the KEEPOUT flag is preserved in additional_parameters, got {:?}",
         r.additional_parameters
+    );
+    // The layer it was drawn on survives after all, in V7_LAYER: the layer byte
+    // says keep-out, the token still says TOP. Nothing else in the record
+    // records it, so deriving the token from `layer` would lose it.
+    assert_eq!(
+        r.v7_layer.as_deref(),
+        Some("TOP"),
+        "V7_LAYER keeps the authored layer even though the layer byte does not"
+    );
+}
+
+#[test]
+fn samples_pcblib_cutout_v7_layer_survives_a_read_modify_write() {
+    use std::io::Cursor;
+
+    let mut lib = PcbLib::open(sample("footprints.PcbLib")).expect("failed to open golden");
+    let mut buffer = Cursor::new(Vec::new());
+    lib.write(&mut buffer).expect("write the golden back");
+    buffer.set_position(0);
+    let after = PcbLib::read(&mut buffer).expect("read back");
+
+    let r = &after
+        .get("REGION_CUTOUT")
+        .expect("REGION_CUTOUT survives")
+        .regions[0];
+    assert_eq!(r.layer, Layer::KeepOut);
+    assert_eq!(
+        r.v7_layer.as_deref(),
+        Some("TOP"),
+        "re-deriving the token from the layer byte would write KEEPOUT and lose \
+         the layer the cutout was drawn on"
     );
 }
 

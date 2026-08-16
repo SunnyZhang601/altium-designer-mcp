@@ -15,18 +15,16 @@ golden, writes it back and diffs the OLE streams and every parameter block. Anyt
 still loses is listed in that test's `KNOWN_DEFECTS` and described here; the two lists are
 the same list, so an entry leaves both together.
 
-**Five i18n fixture symbols are internally inconsistent** (`_JV`, `_BN`, `_CR`, `_IU`,
-`_SB`) — and every scripted route is a **verified negative** (four runs, 2026-08-16). The
-root cause is **AD's reader**: it cannot losslessly decode these five byte sequences even
-from its own file. Run 1, source literals: storage correct, records shifted. Run 2, wide
-`Chr($A997)`: truncates to the low byte — the engine's strings are ANSI. Run 3, UTF-8 byte
-`Chr($EA)+…`: storage and `SectionKeys` byte-perfect, text records double-widened. Run 4,
-open+resave through AD itself: a fourth variant, *worse* than the input (replacement
-characters), proving the decode itself is the broken part — the script engine feeds
-literals through the same path. The cure is typing the five names once in the AD UI, which
-bypasses the decode entirely (UI input → real wide string; the writer is faithful, as the
-48 working symbols prove); the repo never re-opens goldens in AD afterwards. Until then
-`tests/golden_fidelity.rs` excuses exactly these five, by suffix (`FIXTURE_INCONSISTENT`).
+**Five i18n fixture symbols are internally inconsistent in the generated golden** (`_JV`,
+`_BN`, `_CR`, `_IU`, `_SB`) — root cause is **AD's reader**, and every scripted repair is a
+verified negative (four runs, 2026-08-16; see the `DOCUMENTED NEGATIVE` in
+`GenerateSamples.pas`). **Resolved for coverage** by the hand-authored
+`scripts/samples/manual/i18n5.SchLib` (AD24 UI, 2026-08-16), which carries all five scripts
+internally consistent and doubles as ground truth for the UI-authoring convention (plain
+keys are ANSI `?` husks; real names in raw-UTF-8 `%UTF8%` twins; pin names only in
+`PinWideText`). The damaged copies remain in the generated golden and stay excused by
+suffix (`FIXTURE_INCONSISTENT` in `tests/golden_fidelity.rs`); never open-and-save that
+golden in AD (see `scripts/samples/README.md`).
 
 **Identity streams are keyed by ordinal, not attached to the primitive (`PcbLib`).** A
 footprint's `PrimitiveGuids` records and its unique ids both name a primitive by its

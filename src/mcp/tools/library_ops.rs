@@ -3359,4 +3359,116 @@ mod tests {
             assert!(text.starts_with("Failed to write library"), "got: {text}");
         }
     }
+
+    // ==================== validator arms the write path cannot produce =======
+    //
+    // `write_pcblib` refuses degenerate geometry, so a library holding any can
+    // only be built through the struct API (or by a third-party tool). That is
+    // exactly the case `validate_library` exists to catch, so the fixtures here
+    // are authored directly rather than through the handler.
+
+    mod degenerate_libraries {
+        use crate::altium::pcblib::{Arc, Footprint, Layer, Pad, PcbLib, Track};
+        use crate::mcp::tools::test_support::{
+            create_test_server, get_result_text, parse_result_json, test_temp_dir,
+        };
+        use serde_json::json;
+
+        #[test]
+        fn validate_reports_degenerate_pads_tracks_and_arcs() {
+            let dir = test_temp_dir();
+            let server = create_test_server(dir.path());
+            let path = dir.path().join("Broken.PcbLib");
+
+            let mut fp = Footprint::new("BROKEN");
+            // A pad with no area, a track with no width and an arc with no
+            // radius: each writes without complaint and each is invisible or
+            // unmanufacturable, so each has its own check.
+            fp.add_pad(Pad::smd("1", 0.0, 0.0, 0.0, 0.0));
+            fp.add_pad(Pad::smd("2", 2.0, 0.0, 1.0, 1.0));
+            fp.add_track(Track::new(-1.0, 0.0, 1.0, 0.0, 0.0, Layer::TopOverlay));
+            fp.add_arc(Arc::circle(0.0, 0.0, 0.0, 0.2, Layer::TopOverlay));
+            let mut lib = PcbLib::new();
+            lib.add(fp);
+            lib.save(&path).unwrap();
+
+            let r = server.call_validate_library(&json!({ "filepath": path.to_string_lossy() }));
+            let issues = parse_result_json(&r)["issues"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter_map(|i| i["issue"].as_str().map(String::from))
+                .collect::<Vec<_>>()
+                .join("\n");
+
+            assert!(issues.contains("invalid dimensions"), "{issues}");
+            assert!(issues.contains("invalid width"), "{issues}");
+            assert!(issues.contains("invalid radius"), "{issues}");
+        }
+
+        #[test]
+        fn validate_reports_a_footprint_with_no_pads() {
+            // A pad-less footprint is legal to store (a fiducial outline, say)
+            // but is a warning rather than an error, so it must not be silent.
+            let dir = test_temp_dir();
+            let server = create_test_server(dir.path());
+            let path = dir.path().join("Padless.PcbLib");
+
+            let mut fp = Footprint::new("PADLESS");
+            fp.add_track(Track::new(-1.0, 0.0, 1.0, 0.0, 0.2, Layer::TopOverlay));
+            let mut lib = PcbLib::new();
+            lib.add(fp);
+            lib.save(&path).unwrap();
+
+            let r = server.call_validate_library(&json!({ "filepath": path.to_string_lossy() }));
+            let parsed = parse_result_json(&r);
+            let issues = parsed["issues"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter_map(|i| i["issue"].as_str().map(String::from))
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert!(issues.contains("no pads"), "{issues}");
+        }
+
+        #[test]
+        fn export_strips_a_uniform_stack_the_same_way_read_does() {
+            // export_library carries its own copy of the compact-pad logic, so
+            // a FullStack pad whose 32 layers all match reports as simple here
+            // too rather than dragging the redundant arrays into the JSON.
+            let dir = test_temp_dir();
+            let server = create_test_server(dir.path());
+            let path = dir.path().join("Stack.PcbLib");
+            let uniform: Vec<serde_json::Value> = (0..32)
+                .map(|_| json!({ "width": 1.0, "height": 1.0 }))
+                .collect();
+
+            let written = server.call_write_pcblib(&json!({
+                "filepath": path.to_string_lossy(),
+                "footprints": [{
+                    "name": "FP",
+                    "pads": [{
+                        "designator": "1", "x": 0.0, "y": 0.0, "width": 1.0, "height": 1.0,
+                        "stack_mode": "full_stack", "per_layer_sizes": uniform,
+                    }],
+                }],
+            }));
+            assert!(!written.is_error, "{}", get_result_text(&written));
+
+            let exported = server.call_export_library(&json!({
+                "filepath": path.to_string_lossy(),
+                "format": "json",
+                "compact": true,
+            }));
+            assert!(!exported.is_error, "{}", get_result_text(&exported));
+
+            let text = get_result_text(&exported);
+            assert!(text.contains("\"simple\""), "stack not downgraded: {text}");
+            assert!(
+                !text.contains("per_layer_sizes"),
+                "redundant stack arrays survived the export: {text}"
+            );
+        }
+    }
 }

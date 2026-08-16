@@ -3169,4 +3169,764 @@ mod tests {
             assert!(p["style"]["line_widths"]["count"].as_u64().unwrap() >= 1);
         }
     }
+
+    // ==================== rejection and failure paths ====================
+    //
+    // Every handler in this file answers a bad request by returning a
+    // `ToolCallResult::error` rather than by panicking, so the rejection is the
+    // contract and needs a test each. Grouped by handler, in call order.
+
+    mod failure_paths {
+        use crate::mcp::tools::test_support::{
+            create_test_server, get_result_text, parse_result_json, test_temp_dir,
+        };
+        use serde_json::{json, Value};
+
+        /// The minimal pad payload a footprint needs to be writable, so each
+        /// test can vary exactly one field away from a known-good request.
+        fn pad(designator: &str) -> Value {
+            json!({ "designator": designator, "x": 0.0, "y": 0.0, "width": 1.0, "height": 1.0 })
+        }
+
+        /// A footprint carrying one valid pad.
+        fn footprint(name: &str) -> Value {
+            json!({ "name": name, "pads": [pad("1")] })
+        }
+
+        /// A symbol carrying one valid pin.
+        fn symbol(name: &str) -> Value {
+            json!({
+                "name": name,
+                "pins": [{
+                    "name": "1", "designator": "1",
+                    "x": -20, "y": 0, "length": 10, "orientation": "left",
+                }],
+            })
+        }
+
+        /// Writes bytes that are not an OLE compound file, so `open` fails.
+        fn write_garbage(path: &std::path::Path) {
+            std::fs::write(path, b"not an OLE compound document").unwrap();
+        }
+
+        /// Flips a file's read-only bit, used to make a save fail without
+        /// depending on the caller running unprivileged.
+        /// Fails the library's next save — and ONLY the save — by occupying
+        /// the deterministic temp path `save_atomic` must create beside the
+        /// target (`<name>.pcblib.tmp` / `<name>.schlib.tmp`) with a
+        /// directory: `File::create` over a directory fails on every platform,
+        /// while the `.bak` backup (a plain copy) is untouched. Same mechanism
+        /// as `BlockedSave` in `library_ops.rs`. Permissions cannot do this
+        /// portably: a read-only FILE only blocks the rename-over on Windows
+        /// (on Unix that permission belongs to the parent directory), and a
+        /// read-only DIRECTORY fails the backup before the save is reached.
+        fn block_save(path: &std::path::Path, blocked: bool) {
+            let tmp_ext = if path
+                .extension()
+                .is_some_and(|e| e.eq_ignore_ascii_case("schlib"))
+            {
+                "schlib.tmp"
+            } else {
+                "pcblib.tmp"
+            };
+            let tmp = path.with_extension(tmp_ext);
+            if blocked {
+                std::fs::create_dir(&tmp).expect("occupy the save temp path");
+            } else {
+                let _ = std::fs::remove_dir(&tmp);
+            }
+        }
+
+        /// Asserts the call failed and its message mentions `needle`.
+        fn assert_error_mentions(result: &crate::mcp::server::ToolCallResult, needle: &str) {
+            let text = get_result_text(result);
+            assert!(result.is_error, "expected an error, got: {text}");
+            assert!(
+                text.contains(needle),
+                "expected the error to mention {needle:?}, got: {text}"
+            );
+        }
+
+        // ---- geometry helpers -------------------------------------------------
+
+        #[test]
+        fn segment_rect_misses_when_the_whole_segment_is_outside_the_slab() {
+            use super::super::segment_intersects_rect;
+            // Points away from the rect along +x while lying entirely to its
+            // left: the entering parameter overshoots the exit, which is the
+            // `t > u2` rejection rather than the `t < u1` one the other
+            // direction takes.
+            assert!(!segment_intersects_rect(
+                -5.0, 0.0, -3.0, 0.0, -1.0, -1.0, 1.0, 1.0
+            ));
+            // Mirror case in -y, so the vertical slab takes the same branch.
+            assert!(!segment_intersects_rect(
+                0.0, 5.0, 0.0, 3.0, -1.0, -1.0, 1.0, 1.0
+            ));
+        }
+
+        #[test]
+        fn silk_warning_follows_the_side_the_track_is_on() {
+            use super::super::silk_over_pad_warnings;
+            use crate::altium::pcblib::{Footprint, Layer, Pad, Track};
+
+            // Bottom overlay silk over a bottom-layer pad: reported.
+            let mut hit = Footprint::new("BOT");
+            let mut bottom_pad = Pad::smd("1", 0.0, 0.0, 1.0, 1.0);
+            bottom_pad.layer = Layer::BottomLayer;
+            hit.add_pad(bottom_pad);
+            hit.add_track(Track::new(-2.0, 0.0, 2.0, 0.0, 0.2, Layer::BottomOverlay));
+            let warnings = silk_over_pad_warnings(&hit);
+            assert_eq!(warnings.len(), 1, "{warnings:?}");
+            assert_eq!(warnings[0]["layer"], "Bottom Overlay");
+
+            // Same silk, but the pad is top-only: opposite sides never clash,
+            // so the pad is skipped even though the geometry overlaps.
+            let mut miss = Footprint::new("TOP");
+            let mut top_pad = Pad::smd("1", 0.0, 0.0, 1.0, 1.0);
+            top_pad.layer = Layer::TopLayer;
+            miss.add_pad(top_pad);
+            miss.add_track(Track::new(-2.0, 0.0, 2.0, 0.0, 0.2, Layer::BottomOverlay));
+            assert!(silk_over_pad_warnings(&miss).is_empty());
+        }
+
+        #[test]
+        fn pad_overlap_warnings_report_pairs_and_cap_the_list() {
+            use super::super::pad_copper_overlap_warnings;
+            use crate::altium::pcblib::{Footprint, Pad, MAX_REPORTED_PAD_OVERLAPS};
+
+            // Two overlapping pads: one warning naming both designators.
+            let mut two = Footprint::new("TWO");
+            two.add_pad(Pad::smd("1", 0.0, 0.0, 1.0, 1.0));
+            two.add_pad(Pad::smd("2", 0.2, 0.0, 1.0, 1.0));
+            let warnings = pad_copper_overlap_warnings(&two);
+            assert_eq!(warnings.len(), 1, "{warnings:?}");
+            assert_eq!(warnings[0]["type"], "pad_copper_overlap");
+            assert_eq!(warnings[0]["pads"], json!(["1", "2"]));
+
+            // Overlapping pairs are quadratic in pad count: 8 stacked pads make
+            // 28 pairs, which must truncate to the cap plus one summary line
+            // carrying the true total.
+            let mut many = Footprint::new("MANY");
+            for i in 0..8 {
+                many.add_pad(Pad::smd(format!("{i}"), 0.0, 0.0, 1.0, 1.0));
+            }
+            let warnings = pad_copper_overlap_warnings(&many);
+            assert_eq!(warnings.len(), MAX_REPORTED_PAD_OVERLAPS + 1);
+            let summary = warnings.last().unwrap()["message"].as_str().unwrap();
+            assert!(
+                summary.starts_with("28 overlapping pad pairs total"),
+                "{summary}"
+            );
+        }
+
+        // ---- write_pcblib -----------------------------------------------------
+
+        #[test]
+        fn write_pcblib_rejects_a_duplicate_name_within_one_request() {
+            let dir = test_temp_dir();
+            let server = create_test_server(dir.path());
+            let r = server.call_write_pcblib(&json!({
+                "filepath": dir.path().join("Dup.PcbLib").to_string_lossy(),
+                "footprints": [footprint("SAME"), footprint("SAME")],
+            }));
+            assert_error_mentions(&r, "Duplicate footprint name");
+        }
+
+        #[test]
+        fn write_pcblib_rejects_empty_and_invalid_names() {
+            let dir = test_temp_dir();
+            let server = create_test_server(dir.path());
+            let path = dir.path().join("Names.PcbLib");
+
+            let empty = server.call_write_pcblib(&json!({
+                "filepath": path.to_string_lossy(),
+                "footprints": [footprint("")],
+            }));
+            assert_error_mentions(&empty, "cannot be empty");
+
+            let invalid = server.call_write_pcblib(&json!({
+                "filepath": path.to_string_lossy(),
+                "footprints": [footprint("BAD/NAME")],
+            }));
+            assert_error_mentions(&invalid, "invalid character");
+        }
+
+        #[test]
+        fn write_pcblib_append_reports_an_unreadable_existing_library() {
+            let dir = test_temp_dir();
+            let server = create_test_server(dir.path());
+            let path = dir.path().join("Corrupt.PcbLib");
+            write_garbage(&path);
+            let r = server.call_write_pcblib(&json!({
+                "filepath": path.to_string_lossy(),
+                "append": true,
+                "footprints": [footprint("A")],
+            }));
+            assert_error_mentions(&r, "Failed to read existing library");
+        }
+
+        #[test]
+        fn write_pcblib_append_rejects_a_name_already_in_the_library() {
+            let dir = test_temp_dir();
+            let server = create_test_server(dir.path());
+            let path = dir.path().join("Existing.PcbLib");
+            server.call_write_pcblib(&json!({
+                "filepath": path.to_string_lossy(),
+                "footprints": [footprint("A")],
+            }));
+            let r = server.call_write_pcblib(&json!({
+                "filepath": path.to_string_lossy(),
+                "append": true,
+                "footprints": [footprint("A")],
+            }));
+            assert_error_mentions(&r, "already exists in the library");
+        }
+
+        #[test]
+        fn write_pcblib_reports_which_primitive_failed_to_parse() {
+            let dir = test_temp_dir();
+            let server = create_test_server(dir.path());
+            let path = dir.path().join("Parse.PcbLib");
+
+            // One case per primitive family, each malformed in its own way, so
+            // the index and family named in `details` are both exercised.
+            let cases: [(&str, Value, &str); 5] = [
+                (
+                    "pads",
+                    json!([{ "x": 0.0, "y": 0.0, "width": 1.0, "height": 1.0 }]),
+                    "pad at index 0",
+                ),
+                (
+                    "tracks",
+                    json!([{ "y1": 0.0, "x2": 1.0, "y2": 0.0, "width": 0.2 }]),
+                    "track at index 0",
+                ),
+                (
+                    "vias",
+                    json!([{ "x": 0.0, "y": 0.0, "diameter": 0.0, "hole_size": 0.3 }]),
+                    "via at index 0",
+                ),
+                (
+                    "fills",
+                    json!([{ "y1": 0.0, "x2": 1.0, "y2": 1.0 }]),
+                    "fill at index 0",
+                ),
+                (
+                    "arcs",
+                    json!([{ "x": 0.0, "y": 0.0, "radius": 1.0, "start_angle": 0.0, "end_angle": 90.0 }]),
+                    "arc at index 0",
+                ),
+            ];
+
+            for (key, payload, expected) in cases {
+                let mut fp = json!({ "name": "FP", "pads": [pad("1")] });
+                fp[key] = payload;
+                let r = server.call_write_pcblib(&json!({
+                    "filepath": path.to_string_lossy(),
+                    "footprints": [fp],
+                }));
+                assert_error_mentions(&r, expected);
+            }
+        }
+
+        #[test]
+        fn write_pcblib_gates_embedded_step_models_against_the_allowlist() {
+            // The embed source is read from disk at save time, so a path
+            // outside the allow-list would be an arbitrary-file read.
+            let allowed = test_temp_dir();
+            let outside = test_temp_dir();
+            let server = create_test_server(allowed.path());
+            let model = outside.path().join("secret.step");
+            std::fs::write(&model, b"ISO-10303-21;\n").unwrap();
+
+            let r = server.call_write_pcblib(&json!({
+                "filepath": allowed.path().join("Gated.PcbLib").to_string_lossy(),
+                "footprints": [{
+                    "name": "FP",
+                    "pads": [pad("1")],
+                    "step_model": { "filepath": model.to_string_lossy(), "embed": true },
+                }],
+            }));
+            assert!(r.is_error, "{}", get_result_text(&r));
+        }
+
+        #[test]
+        fn write_pcblib_embeds_a_permitted_step_model_and_keeps_external_refs() {
+            let dir = test_temp_dir();
+            let server = create_test_server(dir.path());
+            let model = dir.path().join("body.step");
+            std::fs::write(
+                &model,
+                b"ISO-10303-21;\nHEADER;\nENDSEC;\nEND-ISO-10303-21;\n",
+            )
+            .unwrap();
+
+            // embed = true takes the Model3D path and reports step-embedded.
+            let embedded = server.call_write_pcblib(&json!({
+                "filepath": dir.path().join("Embed.PcbLib").to_string_lossy(),
+                "footprints": [{
+                    "name": "FP",
+                    "pads": [pad("1")],
+                    "step_model": {
+                        "filepath": model.to_string_lossy(), "embed": true,
+                        "x_offset": 1.0, "y_offset": 2.0, "z_offset": 3.0, "rotation": 90.0,
+                    },
+                }],
+            }));
+            assert!(!embedded.is_error, "{}", get_result_text(&embedded));
+            assert_eq!(
+                parse_result_json(&embedded)["bodies"][0]["source"],
+                "step-embedded"
+            );
+
+            // embed = false stores a bare reference and never reads the file,
+            // so it is not gated and reports step-external.
+            let external = server.call_write_pcblib(&json!({
+                "filepath": dir.path().join("External.PcbLib").to_string_lossy(),
+                "footprints": [{
+                    "name": "FP",
+                    "pads": [pad("1")],
+                    "step_model": {
+                        "filepath": "3D_Models/elsewhere.step", "embed": false,
+                        "rotation": 45.0, "z_offset": 1.5,
+                    },
+                }],
+            }));
+            assert!(!external.is_error, "{}", get_result_text(&external));
+            let body = &parse_result_json(&external)["bodies"][0];
+            assert_eq!(body["source"], "step-external");
+            assert_eq!(body["model"], "3D_Models/elsewhere.step");
+        }
+
+        #[test]
+        fn write_pcblib_gates_model_3d_only_when_it_names_a_real_file() {
+            let allowed = test_temp_dir();
+            let outside = test_temp_dir();
+            let server = create_test_server(allowed.path());
+            let model = outside.path().join("outside.step");
+            std::fs::write(&model, b"ISO-10303-21;\n").unwrap();
+
+            // An existing file outside the allow-list is refused...
+            let gated = server.call_write_pcblib(&json!({
+                "filepath": allowed.path().join("M1.PcbLib").to_string_lossy(),
+                "footprints": [{
+                    "name": "FP",
+                    "pads": [pad("1")],
+                    "model_3d": { "filepath": model.to_string_lossy() },
+                }],
+            }));
+            assert!(gated.is_error, "{}", get_result_text(&gated));
+
+            // ...while the same key pointing inside the allow-list is accepted
+            // and lands on the footprint, so a read -> write replay keeps its
+            // model instead of dropping it.
+            let permitted = allowed.path().join("inside.step");
+            std::fs::write(&permitted, b"ISO-10303-21;\n").unwrap();
+            let replayed = server.call_write_pcblib(&json!({
+                "filepath": allowed.path().join("M2.PcbLib").to_string_lossy(),
+                "footprints": [{
+                    "name": "FP",
+                    "pads": [pad("1")],
+                    "model_3d": { "filepath": permitted.to_string_lossy(), "z_offset": 0.5 },
+                }],
+            }));
+            assert!(!replayed.is_error, "{}", get_result_text(&replayed));
+            assert_eq!(
+                parse_result_json(&replayed)["bodies"][0]["source"],
+                "step-embedded"
+            );
+        }
+
+        #[test]
+        fn write_pcblib_rejects_out_of_range_coordinates() {
+            let dir = test_temp_dir();
+            let server = create_test_server(dir.path());
+            let r = server.call_write_pcblib(&json!({
+                "filepath": dir.path().join("Far.PcbLib").to_string_lossy(),
+                "footprints": [{
+                    "name": "FP",
+                    "pads": [{ "designator": "1", "x": 99_999.0, "y": 0.0, "width": 1.0, "height": 1.0 }],
+                }],
+            }));
+            assert_error_mentions(&r, "exceeds the maximum safe range");
+        }
+
+        #[test]
+        fn write_pcblib_reports_backup_and_save_failures() {
+            let dir = test_temp_dir();
+            let server = create_test_server(dir.path());
+
+            // A directory sitting where the library should be: it exists, so a
+            // backup is attempted, and copying a directory fails.
+            let as_dir = dir.path().join("Blocked.PcbLib");
+            std::fs::create_dir(&as_dir).unwrap();
+            let backup = server.call_write_pcblib(&json!({
+                "filepath": as_dir.to_string_lossy(),
+                "footprints": [footprint("A")],
+            }));
+            assert_error_mentions(&backup, "backup");
+
+            // With the save temp path blocked, the backup still succeeds —
+            // it is a plain copy — so the save is what fails, and the failure
+            // is reported as a structured result rather than a panic.
+            let locked = dir.path().join("ReadOnly.PcbLib");
+            server.call_write_pcblib(&json!({
+                "filepath": locked.to_string_lossy(),
+                "footprints": [footprint("A")],
+            }));
+            block_save(&locked, true);
+            let save = server.call_write_pcblib(&json!({
+                "filepath": locked.to_string_lossy(),
+                "footprints": [footprint("B")],
+            }));
+            block_save(&locked, false); // frees the squatted temp path
+            assert!(save.is_error, "{}", get_result_text(&save));
+            assert_eq!(parse_result_json(&save)["status"], "error");
+        }
+
+        // ---- read_pcblib / read_schlib ---------------------------------------
+
+        #[test]
+        fn read_pcblib_compact_downgrades_a_uniform_full_stack_pad() {
+            // A FullStack pad whose per-layer values all match the primary pair
+            // carries no information: compact mode strips the arrays and
+            // reports the pad as simple. The reader always materialises all 32
+            // layers, so every one of them has to match or the pad is genuinely
+            // non-uniform and must keep its stack.
+            let dir = test_temp_dir();
+            let server = create_test_server(dir.path());
+            let path = dir.path().join("Stack.PcbLib");
+            let uniform: Vec<Value> = (0..32)
+                .map(|_| json!({ "width": 1.0, "height": 1.0 }))
+                .collect();
+            let written = server.call_write_pcblib(&json!({
+                "filepath": path.to_string_lossy(),
+                "footprints": [{
+                    "name": "FP",
+                    "pads": [{
+                        "designator": "1", "x": 0.0, "y": 0.0, "width": 1.0, "height": 1.0,
+                        "stack_mode": "full_stack",
+                        "per_layer_sizes": uniform,
+                    }],
+                }],
+            }));
+            assert!(!written.is_error, "{}", get_result_text(&written));
+
+            let r = server.call_read_pcblib(&json!({
+                "filepath": path.to_string_lossy(), "compact": true,
+            }));
+            let pad_json = &parse_result_json(&r)["footprints"][0]["pads"][0];
+            assert_eq!(pad_json["stack_mode"], "simple");
+            assert!(pad_json.get("per_layer_sizes").is_none());
+        }
+
+        #[test]
+        fn read_schlib_single_component_fetch_reports_no_more_pages() {
+            let dir = test_temp_dir();
+            let server = create_test_server(dir.path());
+            let path = dir.path().join("Two.SchLib");
+            server.call_write_schlib(&json!({
+                "filepath": path.to_string_lossy(),
+                "symbols": [symbol("A"), symbol("B")],
+            }));
+            let r = server.call_read_schlib(&json!({
+                "filepath": path.to_string_lossy(), "component_name": "A",
+            }));
+            let p = parse_result_json(&r);
+            assert_eq!(p["returned_count"], 1);
+            assert_eq!(p["total_count"], 2);
+            // Filtering is not pagination, so there is never a next page.
+            assert_eq!(p["has_more"], false);
+        }
+
+        #[test]
+        fn read_schlib_reports_an_unreadable_library() {
+            let dir = test_temp_dir();
+            let server = create_test_server(dir.path());
+            let path = dir.path().join("Corrupt.SchLib");
+            write_garbage(&path);
+            let r = server.call_read_schlib(&json!({ "filepath": path.to_string_lossy() }));
+            assert!(r.is_error, "{}", get_result_text(&r));
+            assert_eq!(parse_result_json(&r)["status"], "error");
+        }
+
+        // ---- write_schlib -----------------------------------------------------
+
+        #[test]
+        fn write_schlib_rejects_a_path_outside_the_allowlist() {
+            let allowed = test_temp_dir();
+            let outside = test_temp_dir();
+            let server = create_test_server(allowed.path());
+            let r = server.call_write_schlib(&json!({
+                "filepath": outside.path().join("Escape.SchLib").to_string_lossy(),
+                "symbols": [symbol("A")],
+            }));
+            assert!(r.is_error, "{}", get_result_text(&r));
+        }
+
+        #[test]
+        fn write_schlib_rejects_duplicate_empty_and_invalid_names() {
+            let dir = test_temp_dir();
+            let server = create_test_server(dir.path());
+            let path = dir.path().join("Names.SchLib");
+
+            let dup = server.call_write_schlib(&json!({
+                "filepath": path.to_string_lossy(),
+                "symbols": [symbol("SAME"), symbol("SAME")],
+            }));
+            assert_error_mentions(&dup, "Duplicate symbol name");
+
+            let empty = server.call_write_schlib(&json!({
+                "filepath": path.to_string_lossy(),
+                "symbols": [symbol("")],
+            }));
+            assert_error_mentions(&empty, "cannot be empty");
+
+            let invalid = server.call_write_schlib(&json!({
+                "filepath": path.to_string_lossy(),
+                "symbols": [symbol("BAD|NAME")],
+            }));
+            assert_error_mentions(&invalid, "invalid character");
+        }
+
+        #[test]
+        fn write_schlib_append_reports_an_unreadable_existing_library() {
+            let dir = test_temp_dir();
+            let server = create_test_server(dir.path());
+            let path = dir.path().join("Corrupt.SchLib");
+            write_garbage(&path);
+            let r = server.call_write_schlib(&json!({
+                "filepath": path.to_string_lossy(),
+                "append": true,
+                "symbols": [symbol("A")],
+            }));
+            assert_error_mentions(&r, "Failed to read existing library");
+        }
+
+        #[test]
+        fn write_schlib_append_rejects_a_name_already_in_the_library() {
+            let dir = test_temp_dir();
+            let server = create_test_server(dir.path());
+            let path = dir.path().join("Existing.SchLib");
+            server.call_write_schlib(&json!({
+                "filepath": path.to_string_lossy(), "symbols": [symbol("A")],
+            }));
+            let r = server.call_write_schlib(&json!({
+                "filepath": path.to_string_lossy(), "append": true, "symbols": [symbol("A")],
+            }));
+            assert_error_mentions(&r, "already exists in the library");
+        }
+
+        #[test]
+        fn write_schlib_keeps_the_supplied_designator_placement_and_identity() {
+            // A read-modify-write replays these three fields, so they must
+            // survive rather than reset to the AD24 defaults.
+            let dir = test_temp_dir();
+            let server = create_test_server(dir.path());
+            let path = dir.path().join("Desig.SchLib");
+            let mut sym = symbol("A");
+            sym["designator_x"] = json!(-12.0);
+            sym["designator_y"] = json!(18.0);
+            sym["designator_unique_id"] = json!("ABCDEFGH");
+            let w = server.call_write_schlib(&json!({
+                "filepath": path.to_string_lossy(), "symbols": [sym],
+            }));
+            assert!(!w.is_error, "{}", get_result_text(&w));
+
+            let r = server.call_read_schlib(&json!({ "filepath": path.to_string_lossy() }));
+            let s = &parse_result_json(&r)["symbols"][0];
+            assert_eq!(s["designator_x"], -12.0);
+            assert_eq!(s["designator_y"], 18.0);
+        }
+
+        #[test]
+        fn write_schlib_records_a_footprint_library_path() {
+            let dir = test_temp_dir();
+            let server = create_test_server(dir.path());
+            let path = dir.path().join("Linked.SchLib");
+            let mut sym = symbol("A");
+            sym["footprints"] = json!([{
+                "name": "CHIP_0402",
+                "description": "0402 chip",
+                "library_path": "Parts.PcbLib",
+            }]);
+            let w = server.call_write_schlib(&json!({
+                "filepath": path.to_string_lossy(), "symbols": [sym],
+            }));
+            assert!(!w.is_error, "{}", get_result_text(&w));
+
+            let r = server.call_read_schlib(&json!({ "filepath": path.to_string_lossy() }));
+            let fp = &parse_result_json(&r)["symbols"][0]["footprints"][0];
+            assert_eq!(fp["name"], "CHIP_0402");
+        }
+
+        #[test]
+        fn write_schlib_rejects_out_of_range_coordinates() {
+            let dir = test_temp_dir();
+            let server = create_test_server(dir.path());
+            let r = server.call_write_schlib(&json!({
+                "filepath": dir.path().join("Far.SchLib").to_string_lossy(),
+                "symbols": [{
+                    "name": "A",
+                    "pins": [{
+                        "name": "1", "designator": "1",
+                        "x": 999_999, "y": 0, "length": 10, "orientation": "left",
+                    }],
+                }],
+            }));
+            assert_error_mentions(&r, "exceeds the maximum safe range");
+        }
+
+        #[test]
+        fn write_schlib_reports_backup_and_save_failures() {
+            let dir = test_temp_dir();
+            let server = create_test_server(dir.path());
+
+            let as_dir = dir.path().join("Blocked.SchLib");
+            std::fs::create_dir(&as_dir).unwrap();
+            let backup = server.call_write_schlib(&json!({
+                "filepath": as_dir.to_string_lossy(), "symbols": [symbol("A")],
+            }));
+            assert_error_mentions(&backup, "backup");
+
+            let locked = dir.path().join("ReadOnly.SchLib");
+            server.call_write_schlib(&json!({
+                "filepath": locked.to_string_lossy(), "symbols": [symbol("A")],
+            }));
+            block_save(&locked, true);
+            let save = server.call_write_schlib(&json!({
+                "filepath": locked.to_string_lossy(), "symbols": [symbol("B")],
+            }));
+            block_save(&locked, false); // frees the squatted temp path
+            assert!(save.is_error, "{}", get_result_text(&save));
+            assert_eq!(parse_result_json(&save)["status"], "error");
+        }
+
+        // ---- write_libpkg -----------------------------------------------------
+
+        #[test]
+        fn write_libpkg_rejects_bad_requests() {
+            let allowed = test_temp_dir();
+            let outside = test_temp_dir();
+            let server = create_test_server(allowed.path());
+
+            let escaped = server.call_write_libpkg(&json!({
+                "filepath": outside.path().join("P.LibPkg").to_string_lossy(),
+                "documents": ["A.SchLib"],
+            }));
+            assert!(escaped.is_error, "{}", get_result_text(&escaped));
+
+            let no_docs = server.call_write_libpkg(&json!({
+                "filepath": allowed.path().join("P.LibPkg").to_string_lossy(),
+            }));
+            assert_error_mentions(&no_docs, "Missing required parameter: documents");
+
+            // Present but carrying nothing usable: the array exists, so the
+            // emptiness check is what rejects it.
+            let empty_docs = server.call_write_libpkg(&json!({
+                "filepath": allowed.path().join("P.LibPkg").to_string_lossy(),
+                "documents": [],
+            }));
+            assert_error_mentions(&empty_docs, "at least one");
+        }
+
+        #[test]
+        fn write_libpkg_reports_a_failed_write() {
+            let dir = test_temp_dir();
+            let server = create_test_server(dir.path());
+            // A directory occupying the target path: the extension check passes
+            // and the write is what fails.
+            let as_dir = dir.path().join("Blocked.LibPkg");
+            std::fs::create_dir(&as_dir).unwrap();
+            let r = server.call_write_libpkg(&json!({
+                "filepath": as_dir.to_string_lossy(),
+                "documents": ["A.SchLib"],
+            }));
+            assert_error_mentions(&r, "Failed to write LibPkg");
+        }
+
+        // ---- list_components / extract_style ---------------------------------
+
+        #[test]
+        fn list_components_reports_an_unreadable_schlib() {
+            let dir = test_temp_dir();
+            let server = create_test_server(dir.path());
+            let path = dir.path().join("Corrupt.SchLib");
+            write_garbage(&path);
+            let r = server.call_list_components(&json!({ "filepath": path.to_string_lossy() }));
+            assert!(r.is_error, "{}", get_result_text(&r));
+            assert_eq!(parse_result_json(&r)["status"], "error");
+        }
+
+        #[test]
+        fn extract_style_rejects_a_path_outside_the_allowlist() {
+            let allowed = test_temp_dir();
+            let outside = test_temp_dir();
+            let server = create_test_server(allowed.path());
+            let r = server.call_extract_style(&json!({
+                "filepath": outside.path().join("X.PcbLib").to_string_lossy(),
+            }));
+            assert!(r.is_error, "{}", get_result_text(&r));
+        }
+
+        #[test]
+        fn extract_style_pcblib_counts_the_layer_a_region_sits_on() {
+            let dir = test_temp_dir();
+            let server = create_test_server(dir.path());
+            let path = dir.path().join("Region.PcbLib");
+            let w = server.call_write_pcblib(&json!({
+                "filepath": path.to_string_lossy(),
+                "footprints": [{
+                    "name": "FP",
+                    "pads": [pad("1")],
+                    "regions": [{
+                        "layer": "Mechanical 1",
+                        "vertices": [
+                            { "x": -1.0, "y": -1.0 }, { "x": 1.0, "y": -1.0 },
+                            { "x": 1.0, "y": 1.0 }, { "x": -1.0, "y": 1.0 },
+                        ],
+                    }],
+                }],
+            }));
+            assert!(!w.is_error, "{}", get_result_text(&w));
+
+            let r = server.call_extract_style(&json!({ "filepath": path.to_string_lossy() }));
+            let p = parse_result_json(&r);
+            assert!(
+                p["style"]["layers_used"].get("Mechanical 1").is_some(),
+                "region layer missing from the tally: {p}"
+            );
+        }
+
+        #[test]
+        fn extract_style_schlib_reports_null_stats_for_a_bare_symbol() {
+            // A symbol with no pins and no lines has nothing to average, and the
+            // stats read null rather than a zero-count block.
+            let dir = test_temp_dir();
+            let server = create_test_server(dir.path());
+            let path = dir.path().join("Bare.SchLib");
+            let w = server.call_write_schlib(&json!({
+                "filepath": path.to_string_lossy(),
+                "symbols": [{ "name": "BARE" }],
+            }));
+            assert!(!w.is_error, "{}", get_result_text(&w));
+
+            let r = server.call_extract_style(&json!({ "filepath": path.to_string_lossy() }));
+            let p = parse_result_json(&r);
+            assert!(p["style"]["pin_lengths"].is_null(), "{p}");
+            assert!(p["style"]["line_widths"].is_null(), "{p}");
+        }
+
+        #[test]
+        fn extract_style_reports_an_unreadable_schlib() {
+            let dir = test_temp_dir();
+            let server = create_test_server(dir.path());
+            let path = dir.path().join("Corrupt.SchLib");
+            write_garbage(&path);
+            let r = server.call_extract_style(&json!({ "filepath": path.to_string_lossy() }));
+            assert!(r.is_error, "{}", get_result_text(&r));
+            assert_eq!(parse_result_json(&r)["status"], "error");
+        }
+    }
 }

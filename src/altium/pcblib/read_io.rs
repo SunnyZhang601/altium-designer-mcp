@@ -535,3 +535,110 @@ impl PcbLib {
         reader::parse_data_stream(footprint, data, Some(wide_strings));
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::PcbLib;
+    use std::io::Write;
+
+    /// Builds a minimal compound document carrying just a `/FileHeader`
+    /// stream, so the header paths can be driven without an Altium file.
+    fn library_with_header(path: &std::path::Path, header: &[u8]) {
+        let mut compound = cfb::create(path).expect("create compound document");
+        {
+            let mut stream = compound
+                .create_stream("/FileHeader")
+                .expect("create FileHeader");
+            stream.write_all(header).expect("write FileHeader");
+        }
+        compound.flush().expect("flush compound document");
+    }
+
+    fn temp_dir() -> tempfile::TempDir {
+        std::fs::create_dir_all(".tmp").expect("create .tmp");
+        let root = std::path::Path::new(".tmp")
+            .canonicalize()
+            .expect("canonicalise .tmp");
+        tempfile::tempdir_in(root).expect("create temp dir")
+    }
+
+    #[test]
+    fn the_legacy_pipe_delimited_header_still_parses() {
+        // Older libraries carry a key=value header instead of the binary
+        // version string, and the component order and descriptions live in it.
+        // Losing that ordering is what `reorder_components` writes, so the
+        // fallback has to keep working.
+        let dir = temp_dir();
+        let path = dir.path().join("Legacy.PcbLib");
+        library_with_header(
+            &path,
+            b"|HEADER=Protel for Windows - PCB Library|COMPCOUNT=2\
+              |LIBREF0=FIRST|LIBREF1=SECOND|COMPDESCR0=first part|COMPDESCR1=second part|",
+        );
+
+        let library = PcbLib::open(&path).expect("a legacy header should read");
+        assert_eq!(library.metadata.component_count, 2);
+        assert_eq!(library.metadata.component_names, vec!["FIRST", "SECOND"]);
+        assert_eq!(
+            library.metadata.component_descriptions,
+            vec!["first part", "second part"]
+        );
+    }
+
+    #[test]
+    fn out_of_order_indices_land_in_their_own_slots() {
+        // The indices are positional, not sequential, so a header listing
+        // LIBREF2 before LIBREF0 must still place each name at its own index
+        // rather than in arrival order.
+        let dir = temp_dir();
+        let path = dir.path().join("Sparse.PcbLib");
+        library_with_header(
+            &path,
+            b"|HEADER=Protel for Windows - PCB Library|LIBREF2=THIRD|LIBREF0=FIRST|",
+        );
+
+        let library = PcbLib::open(&path).expect("a sparse header should read");
+        assert_eq!(library.metadata.component_names.len(), 3);
+        assert_eq!(library.metadata.component_names[0], "FIRST");
+        // The gap is filled rather than shifting the later entry down.
+        assert_eq!(library.metadata.component_names[1], "");
+        assert_eq!(library.metadata.component_names[2], "THIRD");
+    }
+
+    #[test]
+    fn a_schematic_library_is_refused_by_name() {
+        // Opening a SchLib as a PcbLib has to say which it actually is —
+        // silently reading it as an empty footprint library would look like a
+        // library that lost all its parts.
+        let dir = temp_dir();
+        let path = dir.path().join("Actually.PcbLib");
+        library_with_header(&path, b"|HEADER=Protel for Windows - Schematic Library|");
+
+        let err = PcbLib::open(&path).expect_err("a schematic library must be refused");
+        let message = err.to_string();
+        assert!(message.contains("SchLib"), "{message}");
+    }
+
+    #[test]
+    fn an_unrecognised_header_names_itself_in_the_rejection() {
+        let dir = temp_dir();
+        let path = dir.path().join("Foreign.PcbLib");
+        library_with_header(&path, b"|HEADER=Some Other Tool Library|");
+
+        let err = PcbLib::open(&path).expect_err("a foreign header must be refused");
+        assert!(err.to_string().contains("Some Other Tool"), "{err}");
+    }
+
+    #[test]
+    fn a_header_stream_too_short_to_hold_a_version_string_is_not_fatal() {
+        // The binary form is length-prefixed; a truncated one must fall
+        // through to the key=value reader rather than slicing out of bounds.
+        let dir = temp_dir();
+        let path = dir.path().join("Short.PcbLib");
+        library_with_header(&path, &[1, 0, 0]);
+
+        let library = PcbLib::open(&path).expect("a short header should read as empty");
+        assert!(library.metadata.header.is_empty());
+        assert_eq!(library.len(), 0);
+    }
+}

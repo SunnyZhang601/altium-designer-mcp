@@ -2238,4 +2238,676 @@ mod tests {
             assert_eq!(parse_result_json(&r)["status"], "error");
         }
     }
+
+    // ==================== rejection paths, both file types ===================
+    //
+    // Each of the six tools here dispatches on the file extension into a
+    // PcbLib and a SchLib implementation that reject in the same places. The
+    // fixtures above exercise the happy path and the PcbLib side; these cover
+    // the argument guards, the dispatch arms, and every rejection on both
+    // sides, plus the write failure each one funnels through.
+
+    mod rejections {
+        use crate::altium::{PcbLib, SchLib};
+        use crate::mcp::tools::test_support::{
+            create_test_pcblib, create_test_schlib, create_test_server, get_result_text,
+            test_temp_dir,
+        };
+        use serde_json::json;
+        use tempfile::TempDir;
+
+        /// Bytes that are not an OLE compound file, so `open` fails.
+        fn write_garbage(path: &std::path::Path) {
+            std::fs::write(path, b"not an OLE compound document").unwrap();
+        }
+
+        /// Flips a file's read-only bit. A read-only library still opens and
+        /// still backs up (both only read it), so the save is what fails —
+        /// which is the branch each tool funnels its write errors through.
+        /// Fails the library's next save — and ONLY the save — by occupying
+        /// the deterministic temp path `save_atomic` must create beside the
+        /// target (`<name>.pcblib.tmp` / `<name>.schlib.tmp`) with a
+        /// directory: `File::create` over a directory fails on every platform,
+        /// while the `.bak` backup (a plain copy) is untouched. Same mechanism
+        /// as `BlockedSave` in `library_ops.rs`. Permissions cannot do this
+        /// portably: a read-only FILE only blocks the rename-over on Windows
+        /// (on Unix that permission belongs to the parent directory), and a
+        /// read-only DIRECTORY fails the backup before the save is reached.
+        fn block_save(path: &std::path::Path, blocked: bool) {
+            let tmp_ext = if path
+                .extension()
+                .is_some_and(|e| e.eq_ignore_ascii_case("schlib"))
+            {
+                "schlib.tmp"
+            } else {
+                "pcblib.tmp"
+            };
+            let tmp = path.with_extension(tmp_ext);
+            if blocked {
+                std::fs::create_dir(&tmp).expect("occupy the save temp path");
+            } else {
+                let _ = std::fs::remove_dir(&tmp);
+            }
+        }
+
+        /// A temp dir holding a populated library of each type, plus a corrupt
+        /// one of each, so a test can pick whichever shape it needs.
+        struct Fixtures {
+            dir: TempDir,
+        }
+
+        impl Fixtures {
+            fn new() -> Self {
+                let dir = test_temp_dir();
+                create_test_pcblib(&dir.path().join("Lib.PcbLib"));
+                create_test_schlib(&dir.path().join("Lib.SchLib"));
+                write_garbage(&dir.path().join("Bad.PcbLib"));
+                write_garbage(&dir.path().join("Bad.SchLib"));
+                Self { dir }
+            }
+
+            fn path(&self, name: &str) -> String {
+                self.dir.path().join(name).to_string_lossy().into_owned()
+            }
+        }
+
+        /// Asserts the call failed and its message mentions `needle`.
+        fn assert_error_mentions(result: &crate::mcp::server::ToolCallResult, needle: &str) {
+            let text = get_result_text(result);
+            assert!(result.is_error, "expected an error, got: {text}");
+            assert!(
+                text.contains(needle),
+                "expected the error to mention {needle:?}, got: {text}"
+            );
+        }
+
+        // ---- copy_component ---------------------------------------------------
+
+        #[test]
+        fn copy_component_names_each_missing_argument_and_bad_extension() {
+            let fx = Fixtures::new();
+            let server = create_test_server(fx.dir.path());
+
+            let missing_source = server.call_copy_component(&json!({
+                "filepath": fx.path("Lib.PcbLib"), "target_name": "NEW",
+            }));
+            assert_error_mentions(&missing_source, "source_name");
+
+            let missing_target = server.call_copy_component(&json!({
+                "filepath": fx.path("Lib.PcbLib"), "source_name": "CHIP_0402",
+            }));
+            assert_error_mentions(&missing_target, "target_name");
+
+            // A path with no extension cannot be dispatched at all.
+            let no_ext = server.call_copy_component(&json!({
+                "filepath": fx.path("Lib"), "source_name": "A", "target_name": "B",
+            }));
+            assert_error_mentions(&no_ext, "no extension");
+
+            let wrong_ext = server.call_copy_component(&json!({
+                "filepath": fx.path("Lib.txt"), "source_name": "A", "target_name": "B",
+            }));
+            assert_error_mentions(&wrong_ext, "Unsupported file type");
+        }
+
+        #[test]
+        fn copy_component_rejects_a_path_outside_the_allowlist() {
+            let fx = Fixtures::new();
+            let outside = test_temp_dir();
+            let server = create_test_server(fx.dir.path());
+            let r = server.call_copy_component(&json!({
+                "filepath": outside.path().join("X.PcbLib").to_string_lossy(),
+                "source_name": "A", "target_name": "B",
+            }));
+            assert!(r.is_error, "{}", get_result_text(&r));
+        }
+
+        #[test]
+        fn copy_component_rejects_unreadable_libraries_of_both_types() {
+            let fx = Fixtures::new();
+            let server = create_test_server(fx.dir.path());
+            for lib in ["Bad.PcbLib", "Bad.SchLib"] {
+                let r = server.call_copy_component(&json!({
+                    "filepath": fx.path(lib), "source_name": "A", "target_name": "B",
+                }));
+                assert_error_mentions(&r, "Failed to read library");
+            }
+        }
+
+        #[test]
+        fn copy_component_rejects_an_existing_target_and_a_missing_source() {
+            let fx = Fixtures::new();
+            let server = create_test_server(fx.dir.path());
+
+            // SchLib side: the PcbLib equivalents are covered by the fixtures
+            // above, but each implementation has its own copy of both guards.
+            let exists = server.call_copy_component(&json!({
+                "filepath": fx.path("Lib.SchLib"),
+                "source_name": "RESISTOR", "target_name": "CAPACITOR",
+            }));
+            assert_error_mentions(&exists, "already exists");
+
+            let missing = server.call_copy_component(&json!({
+                "filepath": fx.path("Lib.SchLib"),
+                "source_name": "GHOST", "target_name": "NEW",
+            }));
+            assert_error_mentions(&missing, "not found in library");
+        }
+
+        #[test]
+        fn copy_component_applies_the_description_and_reports_a_failed_write() {
+            let fx = Fixtures::new();
+            let server = create_test_server(fx.dir.path());
+            let path = fx.path("Lib.SchLib");
+
+            let copied = server.call_copy_component(&json!({
+                "filepath": &path,
+                "source_name": "RESISTOR", "target_name": "RESISTOR_2",
+                "description": "a copy with its own description",
+            }));
+            assert!(!copied.is_error, "{}", get_result_text(&copied));
+            let lib = SchLib::open(&path).unwrap();
+            assert_eq!(
+                lib.get("RESISTOR_2").unwrap().description,
+                "a copy with its own description"
+            );
+
+            block_save(std::path::Path::new(&path), true);
+            let blocked = server.call_copy_component(&json!({
+                "filepath": &path, "source_name": "RESISTOR", "target_name": "RESISTOR_3",
+            }));
+            block_save(std::path::Path::new(&path), false);
+            assert!(blocked.is_error, "{}", get_result_text(&blocked));
+        }
+
+        #[test]
+        fn copy_component_pcblib_reports_a_failed_write() {
+            let fx = Fixtures::new();
+            let server = create_test_server(fx.dir.path());
+            let path = fx.path("Lib.PcbLib");
+
+            block_save(std::path::Path::new(&path), true);
+            let blocked = server.call_copy_component(&json!({
+                "filepath": &path, "source_name": "CHIP_0402", "target_name": "CHIP_0402_COPY",
+            }));
+            block_save(std::path::Path::new(&path), false);
+            assert!(blocked.is_error, "{}", get_result_text(&blocked));
+        }
+
+        // ---- rename_component -------------------------------------------------
+
+        #[test]
+        fn rename_component_names_each_missing_argument_and_bad_name() {
+            let fx = Fixtures::new();
+            let outside = test_temp_dir();
+            let server = create_test_server(fx.dir.path());
+
+            let no_old = server.call_rename_component(&json!({
+                "filepath": fx.path("Lib.PcbLib"), "new_name": "NEW",
+            }));
+            assert_error_mentions(&no_old, "old_name");
+
+            let no_new = server.call_rename_component(&json!({
+                "filepath": fx.path("Lib.PcbLib"), "old_name": "CHIP_0402",
+            }));
+            assert_error_mentions(&no_new, "new_name");
+
+            let escaped = server.call_rename_component(&json!({
+                "filepath": outside.path().join("X.PcbLib").to_string_lossy(),
+                "old_name": "A", "new_name": "B",
+            }));
+            assert!(escaped.is_error, "{}", get_result_text(&escaped));
+
+            // An OLE storage name cannot carry path separators.
+            let bad_name = server.call_rename_component(&json!({
+                "filepath": fx.path("Lib.PcbLib"), "old_name": "CHIP_0402", "new_name": "A/B",
+            }));
+            assert_error_mentions(&bad_name, "invalid character");
+
+            let no_ext = server.call_rename_component(&json!({
+                "filepath": fx.path("Lib"), "old_name": "A", "new_name": "B",
+            }));
+            assert_error_mentions(&no_ext, "no extension");
+
+            let wrong_ext = server.call_rename_component(&json!({
+                "filepath": fx.path("Lib.txt"), "old_name": "A", "new_name": "B",
+            }));
+            assert_error_mentions(&wrong_ext, "Unsupported file type");
+        }
+
+        #[test]
+        fn rename_component_rejects_unreadable_libraries_of_both_types() {
+            let fx = Fixtures::new();
+            let server = create_test_server(fx.dir.path());
+            for lib in ["Bad.PcbLib", "Bad.SchLib"] {
+                let r = server.call_rename_component(&json!({
+                    "filepath": fx.path(lib), "old_name": "A", "new_name": "B",
+                }));
+                assert_error_mentions(&r, "Failed to read library");
+            }
+        }
+
+        #[test]
+        fn rename_component_schlib_rejects_a_taken_name_and_a_missing_source() {
+            let fx = Fixtures::new();
+            let server = create_test_server(fx.dir.path());
+
+            let taken = server.call_rename_component(&json!({
+                "filepath": fx.path("Lib.SchLib"), "old_name": "RESISTOR", "new_name": "CAPACITOR",
+            }));
+            assert_error_mentions(&taken, "already exists");
+
+            let missing = server.call_rename_component(&json!({
+                "filepath": fx.path("Lib.SchLib"), "old_name": "GHOST", "new_name": "NEW",
+            }));
+            assert_error_mentions(&missing, "not found in library");
+        }
+
+        #[test]
+        fn rename_component_reports_a_failed_write_for_both_types() {
+            let fx = Fixtures::new();
+            let server = create_test_server(fx.dir.path());
+
+            for (lib, old, new) in [
+                ("Lib.PcbLib", "CHIP_0402", "CHIP_0402_R"),
+                ("Lib.SchLib", "RESISTOR", "RESISTOR_R"),
+            ] {
+                let path = fx.path(lib);
+                block_save(std::path::Path::new(&path), true);
+                let r = server.call_rename_component(&json!({
+                    "filepath": &path, "old_name": old, "new_name": new,
+                }));
+                block_save(std::path::Path::new(&path), false);
+                assert!(r.is_error, "{}", get_result_text(&r));
+            }
+        }
+
+        // ---- copy_component_cross_library -------------------------------------
+
+        #[test]
+        fn cross_library_copy_names_each_missing_argument_and_bad_dispatch() {
+            let fx = Fixtures::new();
+            let outside = test_temp_dir();
+            let server = create_test_server(fx.dir.path());
+
+            let no_target = server.call_copy_component_cross_library(&json!({
+                "source_filepath": fx.path("Lib.PcbLib"), "component_name": "CHIP_0402",
+            }));
+            assert_error_mentions(&no_target, "target_filepath");
+
+            let no_component = server.call_copy_component_cross_library(&json!({
+                "source_filepath": fx.path("Lib.PcbLib"), "target_filepath": fx.path("T.PcbLib"),
+            }));
+            assert_error_mentions(&no_component, "component_name");
+
+            // Both paths are read or written, so each is gated separately.
+            let escaped_source = server.call_copy_component_cross_library(&json!({
+                "source_filepath": outside.path().join("S.PcbLib").to_string_lossy(),
+                "target_filepath": fx.path("T.PcbLib"), "component_name": "A",
+            }));
+            assert!(escaped_source.is_error);
+
+            let escaped_target = server.call_copy_component_cross_library(&json!({
+                "source_filepath": fx.path("Lib.PcbLib"),
+                "target_filepath": outside.path().join("T.PcbLib").to_string_lossy(),
+                "component_name": "A",
+            }));
+            assert!(escaped_target.is_error);
+
+            let bad_name = server.call_copy_component_cross_library(&json!({
+                "source_filepath": fx.path("Lib.PcbLib"), "target_filepath": fx.path("T.PcbLib"),
+                "component_name": "CHIP_0402", "new_name": "A|B",
+            }));
+            assert_error_mentions(&bad_name, "invalid character");
+
+            // Copying between a footprint library and a symbol library is not
+            // a conversion this tool performs.
+            let mixed = server.call_copy_component_cross_library(&json!({
+                "source_filepath": fx.path("Lib.PcbLib"), "target_filepath": fx.path("T.SchLib"),
+                "component_name": "CHIP_0402",
+            }));
+            assert_error_mentions(&mixed, "must be the same type");
+
+            let no_ext = server.call_copy_component_cross_library(&json!({
+                "source_filepath": fx.path("S"), "target_filepath": fx.path("T"),
+                "component_name": "A",
+            }));
+            assert_error_mentions(&no_ext, "no extension");
+
+            let wrong_ext = server.call_copy_component_cross_library(&json!({
+                "source_filepath": fx.path("S.txt"), "target_filepath": fx.path("T.txt"),
+                "component_name": "A",
+            }));
+            assert_error_mentions(&wrong_ext, "Unsupported file type");
+        }
+
+        #[test]
+        fn cross_library_copy_reports_unreadable_source_and_target() {
+            let fx = Fixtures::new();
+            let server = create_test_server(fx.dir.path());
+
+            for (source, target, component) in [
+                ("Bad.PcbLib", "T.PcbLib", "A"),
+                ("Bad.SchLib", "T.SchLib", "A"),
+            ] {
+                let r = server.call_copy_component_cross_library(&json!({
+                    "source_filepath": fx.path(source), "target_filepath": fx.path(target),
+                    "component_name": component,
+                }));
+                assert_error_mentions(&r, "Failed to read source library");
+            }
+
+            // An existing but corrupt target is a separate failure from a
+            // missing one, which is simply created.
+            for (source, component) in [("Lib.PcbLib", "CHIP_0402"), ("Lib.SchLib", "RESISTOR")] {
+                let target = if source.ends_with("PcbLib") {
+                    "Bad.PcbLib"
+                } else {
+                    "Bad.SchLib"
+                };
+                let r = server.call_copy_component_cross_library(&json!({
+                    "source_filepath": fx.path(source), "target_filepath": fx.path(target),
+                    "component_name": component,
+                }));
+                assert_error_mentions(&r, "Failed to read target library");
+            }
+        }
+
+        #[test]
+        fn cross_library_copy_reports_a_missing_component_and_a_taken_target_name() {
+            let fx = Fixtures::new();
+            let server = create_test_server(fx.dir.path());
+
+            for (source, target) in [("Lib.PcbLib", "T1.PcbLib"), ("Lib.SchLib", "T1.SchLib")] {
+                let r = server.call_copy_component_cross_library(&json!({
+                    "source_filepath": fx.path(source), "target_filepath": fx.path(target),
+                    "component_name": "GHOST",
+                }));
+                assert_error_mentions(&r, "not found in source library");
+            }
+
+            // Copying the same component twice: the second lands on a name the
+            // target already holds.
+            for (source, target, component) in [
+                ("Lib.PcbLib", "T2.PcbLib", "CHIP_0402"),
+                ("Lib.SchLib", "T2.SchLib", "RESISTOR"),
+            ] {
+                let args = json!({
+                    "source_filepath": fx.path(source), "target_filepath": fx.path(target),
+                    "component_name": component,
+                });
+                let first = server.call_copy_component_cross_library(&args);
+                assert!(!first.is_error, "{}", get_result_text(&first));
+                let second = server.call_copy_component_cross_library(&args);
+                assert_error_mentions(&second, "already exists in target library");
+            }
+        }
+
+        #[test]
+        fn cross_library_copy_reports_a_failed_write_for_both_types() {
+            let fx = Fixtures::new();
+            let server = create_test_server(fx.dir.path());
+
+            for (source, target, component) in [
+                ("Lib.PcbLib", "Locked.PcbLib", "CHIP_0402"),
+                ("Lib.SchLib", "Locked.SchLib", "RESISTOR"),
+            ] {
+                // Seed the target so it exists, then lock it.
+                let target_path = fx.path(target);
+                if target.ends_with("PcbLib") {
+                    PcbLib::new().save(&target_path).unwrap();
+                } else {
+                    SchLib::new().save(&target_path).unwrap();
+                }
+                block_save(std::path::Path::new(&target_path), true);
+                let r = server.call_copy_component_cross_library(&json!({
+                    "source_filepath": fx.path(source), "target_filepath": &target_path,
+                    "component_name": component,
+                }));
+                block_save(std::path::Path::new(&target_path), false);
+                assert!(r.is_error, "{}", get_result_text(&r));
+            }
+        }
+
+        // ---- merge_libraries ---------------------------------------------------
+
+        #[test]
+        fn merge_names_each_missing_argument_and_rejects_a_bad_duplicate_policy() {
+            let fx = Fixtures::new();
+            let outside = test_temp_dir();
+            let server = create_test_server(fx.dir.path());
+
+            let no_sources = server.call_merge_libraries(&json!({
+                "target_filepath": fx.path("M.PcbLib"),
+            }));
+            assert_error_mentions(&no_sources, "source_filepaths");
+
+            // Present but carrying nothing usable, so the emptiness check is
+            // what rejects it rather than the missing-parameter guard.
+            let empty_sources = server.call_merge_libraries(&json!({
+                "source_filepaths": [], "target_filepath": fx.path("M.PcbLib"),
+            }));
+            assert_error_mentions(&empty_sources, "at least one path");
+
+            let no_target = server.call_merge_libraries(&json!({
+                "source_filepaths": [fx.path("Lib.PcbLib")],
+            }));
+            assert_error_mentions(&no_target, "target_filepath");
+
+            let bad_policy = server.call_merge_libraries(&json!({
+                "source_filepaths": [fx.path("Lib.PcbLib")],
+                "target_filepath": fx.path("M.PcbLib"), "on_duplicate": "overwrite",
+            }));
+            assert_error_mentions(&bad_policy, "must be one of");
+
+            let escaped_source = server.call_merge_libraries(&json!({
+                "source_filepaths": [outside.path().join("S.PcbLib").to_string_lossy()],
+                "target_filepath": fx.path("M.PcbLib"),
+            }));
+            assert!(escaped_source.is_error);
+
+            let escaped_target = server.call_merge_libraries(&json!({
+                "source_filepaths": [fx.path("Lib.PcbLib")],
+                "target_filepath": outside.path().join("M.PcbLib").to_string_lossy(),
+            }));
+            assert!(escaped_target.is_error);
+        }
+
+        #[test]
+        fn merge_requires_one_library_type_throughout() {
+            let fx = Fixtures::new();
+            let server = create_test_server(fx.dir.path());
+
+            // Sources disagreeing with each other is reported against the
+            // first source, naming the offender.
+            let mixed_sources = server.call_merge_libraries(&json!({
+                "source_filepaths": [fx.path("Lib.PcbLib"), fx.path("Lib.SchLib")],
+                "target_filepath": fx.path("M.PcbLib"),
+            }));
+            assert_error_mentions(&mixed_sources, "must be the same type");
+
+            // Sources agreeing but the target disagreeing is a separate check.
+            let mixed_target = server.call_merge_libraries(&json!({
+                "source_filepaths": [fx.path("Lib.PcbLib")],
+                "target_filepath": fx.path("M.SchLib"),
+            }));
+            assert_error_mentions(&mixed_target, "must match source libraries");
+
+            let no_ext = server.call_merge_libraries(&json!({
+                "source_filepaths": [fx.path("S")], "target_filepath": fx.path("M"),
+            }));
+            assert_error_mentions(&no_ext, "no extension");
+
+            let wrong_ext = server.call_merge_libraries(&json!({
+                "source_filepaths": [fx.path("S.txt")], "target_filepath": fx.path("M.txt"),
+            }));
+            assert_error_mentions(&wrong_ext, "Unsupported file type");
+        }
+
+        #[test]
+        fn merge_reports_unreadable_sources_and_targets_of_both_types() {
+            let fx = Fixtures::new();
+            let server = create_test_server(fx.dir.path());
+
+            for (source, target) in [("Lib.PcbLib", "Bad.PcbLib"), ("Lib.SchLib", "Bad.SchLib")] {
+                let r = server.call_merge_libraries(&json!({
+                    "source_filepaths": [fx.path(source)], "target_filepath": fx.path(target),
+                }));
+                assert_error_mentions(&r, "Failed to read target library");
+            }
+
+            for (source, target) in [("Bad.PcbLib", "MA.PcbLib"), ("Bad.SchLib", "MA.SchLib")] {
+                let r = server.call_merge_libraries(&json!({
+                    "source_filepaths": [fx.path(source)], "target_filepath": fx.path(target),
+                }));
+                assert_error_mentions(&r, "Failed to read source library");
+            }
+        }
+
+        #[test]
+        fn merge_renames_a_duplicate_rather_than_dropping_it() {
+            // Merging a library into itself makes every name a duplicate, so
+            // the rename policy has to invent a free name for each one — and
+            // the dry run must simulate that without touching the target.
+            let fx = Fixtures::new();
+            let server = create_test_server(fx.dir.path());
+
+            for (source, target) in [("Lib.PcbLib", "R.PcbLib"), ("Lib.SchLib", "R.SchLib")] {
+                let args = json!({
+                    "source_filepaths": [fx.path(source), fx.path(source)],
+                    "target_filepath": fx.path(target),
+                    "on_duplicate": "rename",
+                });
+
+                let dry = server.call_merge_libraries(&json!({
+                    "source_filepaths": [fx.path(source), fx.path(source)],
+                    "target_filepath": fx.path(target),
+                    "on_duplicate": "rename",
+                    "dry_run": true,
+                }));
+                assert!(!dry.is_error, "{}", get_result_text(&dry));
+                assert!(
+                    !std::path::Path::new(&fx.path(target)).exists(),
+                    "a dry run must not create the target"
+                );
+
+                let real = server.call_merge_libraries(&args);
+                assert!(!real.is_error, "{}", get_result_text(&real));
+                let names: Vec<String> = if target.ends_with("PcbLib") {
+                    PcbLib::open(fx.path(target)).unwrap().names()
+                } else {
+                    SchLib::open(fx.path(target)).unwrap().names()
+                };
+                assert_eq!(names.len(), 4, "both copies should survive: {names:?}");
+                assert!(
+                    names.iter().any(|n| n.ends_with("_1")),
+                    "the duplicate should be renamed, got: {names:?}"
+                );
+            }
+        }
+
+        #[test]
+        fn merge_reports_a_failed_write_for_both_types() {
+            let fx = Fixtures::new();
+            let server = create_test_server(fx.dir.path());
+
+            for (source, target) in [("Lib.PcbLib", "ML.PcbLib"), ("Lib.SchLib", "ML.SchLib")] {
+                let target_path = fx.path(target);
+                if target.ends_with("PcbLib") {
+                    PcbLib::new().save(&target_path).unwrap();
+                } else {
+                    SchLib::new().save(&target_path).unwrap();
+                }
+                block_save(std::path::Path::new(&target_path), true);
+                let r = server.call_merge_libraries(&json!({
+                    "source_filepaths": [fx.path(source)], "target_filepath": &target_path,
+                }));
+                block_save(std::path::Path::new(&target_path), false);
+                assert!(r.is_error, "{}", get_result_text(&r));
+            }
+        }
+
+        // ---- reorder_components ------------------------------------------------
+
+        #[test]
+        fn reorder_names_each_missing_argument_and_bad_extension() {
+            let fx = Fixtures::new();
+            let outside = test_temp_dir();
+            let server = create_test_server(fx.dir.path());
+
+            let escaped = server.call_reorder_components(&json!({
+                "filepath": outside.path().join("X.PcbLib").to_string_lossy(),
+                "component_order": ["A"],
+            }));
+            assert!(escaped.is_error, "{}", get_result_text(&escaped));
+
+            let no_order = server.call_reorder_components(&json!({
+                "filepath": fx.path("Lib.PcbLib"),
+            }));
+            assert_error_mentions(&no_order, "component_order");
+
+            // Present but holding nothing readable as a name.
+            let empty_order = server.call_reorder_components(&json!({
+                "filepath": fx.path("Lib.PcbLib"), "component_order": [1, 2],
+            }));
+            assert_error_mentions(&empty_order, "empty or contains no strings");
+
+            let wrong_ext = server.call_reorder_components(&json!({
+                "filepath": fx.path("Lib.txt"), "component_order": ["A"],
+            }));
+            assert_error_mentions(&wrong_ext, "Unknown file type");
+        }
+
+        #[test]
+        fn reorder_reports_unreadable_libraries_of_both_types() {
+            let fx = Fixtures::new();
+            let server = create_test_server(fx.dir.path());
+            for lib in ["Bad.PcbLib", "Bad.SchLib"] {
+                let r = server.call_reorder_components(&json!({
+                    "filepath": fx.path(lib), "component_order": ["A"],
+                }));
+                assert!(r.is_error, "{}", get_result_text(&r));
+            }
+        }
+
+        #[test]
+        fn reorder_reports_names_it_could_not_place_and_ones_it_appended() {
+            // A caller listing a name the library does not hold, and omitting
+            // one it does, gets both facts back rather than a silent reorder.
+            let fx = Fixtures::new();
+            let server = create_test_server(fx.dir.path());
+
+            for (lib, present) in [("Lib.PcbLib", "CHIP_0603"), ("Lib.SchLib", "CAPACITOR")] {
+                let r = server.call_reorder_components(&json!({
+                    "filepath": fx.path(lib), "component_order": [present, "GHOST"],
+                }));
+                assert!(!r.is_error, "{}", get_result_text(&r));
+                let text = get_result_text(&r);
+                assert!(text.contains("GHOST"), "{text}");
+                assert!(text.contains("not found"), "{text}");
+                assert!(text.contains("appended at end"), "{text}");
+            }
+        }
+
+        #[test]
+        fn reorder_reports_a_failed_write_for_both_types() {
+            let fx = Fixtures::new();
+            let server = create_test_server(fx.dir.path());
+
+            for (lib, present) in [("Lib.PcbLib", "CHIP_0603"), ("Lib.SchLib", "CAPACITOR")] {
+                let path = fx.path(lib);
+                block_save(std::path::Path::new(&path), true);
+                let r = server.call_reorder_components(&json!({
+                    "filepath": &path, "component_order": [present],
+                }));
+                block_save(std::path::Path::new(&path), false);
+                assert!(r.is_error, "{}", get_result_text(&r));
+                assert!(
+                    get_result_text(&r).contains("Failed to write library"),
+                    "{}",
+                    get_result_text(&r)
+                );
+            }
+        }
+    }
 }

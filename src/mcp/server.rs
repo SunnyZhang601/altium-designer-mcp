@@ -3156,4 +3156,146 @@ mod tests {
             assert_eq!(remaining, 5);
         }
     }
+
+    // ==================== path gate and backup retention =====================
+
+    mod path_and_backups {
+        use crate::mcp::server::McpServer;
+        use crate::mcp::tools::test_support::test_temp_dir;
+
+        #[test]
+        fn a_configured_allowed_path_that_does_not_exist_is_skipped_not_trusted() {
+            // An allow-list entry pointing at a directory that was never
+            // created cannot be canonicalised. Skipping it must not open the
+            // gate — a path is allowed only by matching an entry that resolves.
+            let real = test_temp_dir();
+            let server = McpServer::new(vec![
+                real.path().join("never_created"),
+                real.path().to_path_buf(),
+            ]);
+
+            // Inside the entry that does resolve: allowed.
+            assert!(server
+                .validate_path(&real.path().join("Lib.PcbLib").to_string_lossy())
+                .is_ok());
+
+            // With only the unresolvable entry configured, nothing is allowed.
+            let blind = McpServer::new(vec![real.path().join("never_created")]);
+            let err = blind
+                .validate_path(&real.path().join("Lib.PcbLib").to_string_lossy())
+                .expect_err("an unresolvable allow-list must not permit anything");
+            assert!(err.contains("Access denied"), "{err}");
+        }
+
+        #[test]
+        fn validate_path_reports_a_missing_parent_without_leaking_it() {
+            // Write targets are checked through their parent directory, and
+            // the message names only the file — never the resolved path.
+            let dir = test_temp_dir();
+            let server = McpServer::new(vec![dir.path().to_path_buf()]);
+            let missing = dir.path().join("no_such_dir").join("Lib.PcbLib");
+
+            let err = server
+                .validate_path(&missing.to_string_lossy())
+                .expect_err("a missing parent directory must be refused");
+            assert!(err.contains("Lib.PcbLib"), "{err}");
+            assert!(
+                !err.contains("no_such_dir"),
+                "the message leaked the directory: {err}"
+            );
+        }
+
+        #[test]
+        fn backup_then_save_reports_a_failed_backup_before_saving() {
+            // The backup runs first, so a failure there must stop the write
+            // rather than let a save proceed with no recovery point. A
+            // directory standing where the library should be exists, so a
+            // backup is attempted, and copying a directory fails.
+            let dir = test_temp_dir();
+            let as_dir = dir.path().join("Blocked.PcbLib");
+            std::fs::create_dir(&as_dir).unwrap();
+
+            let mut saved = false;
+            let result = McpServer::backup_then_save(&as_dir.to_string_lossy(), || {
+                saved = true;
+                Ok(())
+            });
+            assert!(result.is_err(), "a failed backup must abort the save");
+            assert!(!saved, "the save ran despite the backup failing");
+        }
+
+        #[test]
+        fn backup_retention_keeps_the_newest_and_prunes_the_rest() {
+            // Backups accumulate on every mutating call, so retention is what
+            // stops a busy library filling the directory. Newest are kept.
+            let dir = test_temp_dir();
+            let lib = dir.path().join("Lib.PcbLib");
+            std::fs::write(&lib, b"library").unwrap();
+
+            // Seven stamped backups, oldest first, plus two near-misses that
+            // are not retention's business: an unstamped `.bak` and a file
+            // belonging to a different library.
+            let stamps: Vec<String> = (1..=7).map(|i| format!("2026010{i}_010101")).collect();
+            for stamp in &stamps {
+                std::fs::write(dir.path().join(format!("Lib.PcbLib.{stamp}.bak")), b"old").unwrap();
+            }
+            std::fs::write(dir.path().join("Lib.PcbLib.bak"), b"unstamped").unwrap();
+            std::fs::write(
+                dir.path().join("Other.PcbLib.20260101_010101.bak"),
+                b"other",
+            )
+            .unwrap();
+
+            McpServer::cleanup_old_backups(&lib.to_string_lossy());
+
+            let survivors: Vec<String> = std::fs::read_dir(dir.path())
+                .unwrap()
+                .filter_map(Result::ok)
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .filter(|n| {
+                    n.starts_with("Lib.PcbLib.")
+                        && std::path::Path::new(n)
+                            .extension()
+                            .is_some_and(|e| e.eq_ignore_ascii_case("bak"))
+                })
+                .collect();
+
+            // Five stamped survivors plus the unstamped one, which retention
+            // deliberately does not touch.
+            assert_eq!(survivors.len(), 6, "{survivors:?}");
+            for stamp in &stamps[2..] {
+                assert!(
+                    survivors.iter().any(|n| n.contains(stamp.as_str())),
+                    "newest backup {stamp} was pruned: {survivors:?}"
+                );
+            }
+            for stamp in &stamps[..2] {
+                assert!(
+                    !survivors.iter().any(|n| n.contains(stamp.as_str())),
+                    "oldest backup {stamp} survived: {survivors:?}"
+                );
+            }
+            assert!(survivors.iter().any(|n| n == "Lib.PcbLib.bak"));
+            assert!(dir.path().join("Other.PcbLib.20260101_010101.bak").exists());
+        }
+
+        #[test]
+        fn creating_a_backup_of_a_missing_file_is_a_no_op() {
+            // Every mutating tool calls this, including on a brand-new
+            // library, so "nothing to back up" has to succeed quietly.
+            let dir = test_temp_dir();
+            let absent = dir.path().join("Nope.PcbLib");
+            assert_eq!(
+                McpServer::create_backup(&absent.to_string_lossy()),
+                Ok(None)
+            );
+
+            let present = dir.path().join("Here.PcbLib");
+            std::fs::write(&present, b"library").unwrap();
+            let made = McpServer::create_backup(&present.to_string_lossy())
+                .expect("an existing file should back up");
+            let made = made.expect("a backup path should be reported");
+            assert!(std::path::Path::new(&made).exists(), "{made}");
+        }
+    }
 }

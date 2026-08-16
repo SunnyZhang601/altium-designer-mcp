@@ -995,4 +995,346 @@ mod tests {
             .any(|p| p.name == "Tolerance" && p.value == "1%");
         assert!(has_param, "the parameter was added to at least one symbol");
     }
+
+    // ==================== rejection paths and the remaining arms =============
+
+    mod rejections {
+        use crate::altium::pcblib::Layer;
+        use crate::mcp::server::McpServer;
+        use crate::mcp::tools::test_support::{
+            create_test_pcblib, create_test_schlib, create_test_server, get_result_text,
+            parse_result_json, test_temp_dir,
+        };
+        use serde_json::json;
+
+        fn write_garbage(path: &std::path::Path) {
+            std::fs::write(path, b"not an OLE compound document").unwrap();
+        }
+
+        /// Fails the library's next save — and ONLY the save — by occupying
+        /// the deterministic temp path `save_atomic` must create beside the
+        /// target (`<name>.pcblib.tmp` / `<name>.schlib.tmp`) with a
+        /// directory: `File::create` over a directory fails on every platform,
+        /// while the `.bak` backup (a plain copy) is untouched. Same mechanism
+        /// as `BlockedSave` in `library_ops.rs`. Permissions cannot do this
+        /// portably: a read-only FILE only blocks the rename-over on Windows
+        /// (on Unix that permission belongs to the parent directory), and a
+        /// read-only DIRECTORY fails the backup before the save is reached.
+        fn block_save(path: &std::path::Path, blocked: bool) {
+            let tmp_ext = if path
+                .extension()
+                .is_some_and(|e| e.eq_ignore_ascii_case("schlib"))
+            {
+                "schlib.tmp"
+            } else {
+                "pcblib.tmp"
+            };
+            let tmp = path.with_extension(tmp_ext);
+            if blocked {
+                std::fs::create_dir(&tmp).expect("occupy the save temp path");
+            } else {
+                let _ = std::fs::remove_dir(&tmp);
+            }
+        }
+
+        fn assert_error_mentions(result: &crate::mcp::server::ToolCallResult, needle: &str) {
+            let text = get_result_text(result);
+            assert!(result.is_error, "expected an error, got: {text}");
+            assert!(
+                text.contains(needle),
+                "expected the error to mention {needle:?}, got: {text}"
+            );
+        }
+
+        /// A footprint with one primitive on Top Overlay in every family the
+        /// layer rename walks, so a single rename exercises all four loops.
+        fn write_overlay_library(server: &McpServer, path: &str) {
+            let r = server.call_write_pcblib(&json!({
+                "filepath": path,
+                "footprints": [{
+                    "name": "OVERLAY",
+                    "pads": [{ "designator": "1", "x": 0.0, "y": 0.0, "width": 1.0, "height": 1.0 }],
+                    "tracks": [{ "x1": -1.0, "y1": 0.0, "x2": 1.0, "y2": 0.0, "width": 0.2, "layer": "Top Overlay" }],
+                    "arcs": [{ "x": 0.0, "y": 0.0, "radius": 2.0, "start_angle": 0.0, "end_angle": 90.0, "width": 0.2, "layer": "Top Overlay" }],
+                    "text": [{ "x": 0.0, "y": 3.0, "text": "REF", "height": 1.0, "layer": "Top Overlay" }],
+                    "regions": [{
+                        "layer": "Top Overlay",
+                        "vertices": [
+                            { "x": -1.0, "y": -1.0 }, { "x": 1.0, "y": -1.0 }, { "x": 0.0, "y": 1.0 },
+                        ],
+                    }],
+                }],
+            }));
+            assert!(!r.is_error, "{}", get_result_text(&r));
+        }
+
+        // ---- dispatch ----------------------------------------------------------
+
+        #[test]
+        fn batch_update_guards_its_path_and_file_type() {
+            let dir = test_temp_dir();
+            let outside = test_temp_dir();
+            let server = create_test_server(dir.path());
+
+            let escaped = server.call_batch_update(&json!({
+                "filepath": outside.path().join("X.PcbLib").to_string_lossy(),
+                "operation": "rename_layer", "parameters": {},
+            }));
+            assert!(escaped.is_error, "{}", get_result_text(&escaped));
+
+            let wrong_ext = server.call_batch_update(&json!({
+                "filepath": dir.path().join("X.txt").to_string_lossy(),
+                "operation": "rename_layer", "parameters": {},
+            }));
+            assert_error_mentions(&wrong_ext, "only supports .PcbLib and .SchLib");
+        }
+
+        #[test]
+        fn batch_update_reports_unreadable_libraries_and_unknown_operations() {
+            let dir = test_temp_dir();
+            let server = create_test_server(dir.path());
+            let pcb = dir.path().join("Bad.PcbLib");
+            let sch = dir.path().join("Bad.SchLib");
+            write_garbage(&pcb);
+            write_garbage(&sch);
+
+            for path in [&pcb, &sch] {
+                let r = server.call_batch_update(&json!({
+                    "filepath": path.to_string_lossy(),
+                    "operation": "rename_layer", "parameters": {},
+                }));
+                assert_error_mentions(&r, "Failed to read library");
+            }
+
+            // Each file type has its own operation vocabulary, and each names
+            // what it does accept.
+            let good_pcb = dir.path().join("Lib.PcbLib");
+            let good_sch = dir.path().join("Lib.SchLib");
+            create_test_pcblib(&good_pcb);
+            create_test_schlib(&good_sch);
+
+            let pcb_op = server.call_batch_update(&json!({
+                "filepath": good_pcb.to_string_lossy(),
+                "operation": "update_parameters", "parameters": {},
+            }));
+            assert_error_mentions(&pcb_op, "Unknown PcbLib operation");
+
+            let sch_op = server.call_batch_update(&json!({
+                "filepath": good_sch.to_string_lossy(),
+                "operation": "rename_layer", "parameters": {},
+            }));
+            assert_error_mentions(&sch_op, "Unknown SchLib operation");
+        }
+
+        // ---- update_parameters (SchLib) -----------------------------------------
+
+        #[test]
+        fn update_parameters_names_its_missing_arguments_and_bad_filter() {
+            let dir = test_temp_dir();
+            let server = create_test_server(dir.path());
+            let path = dir.path().join("Lib.SchLib");
+            create_test_schlib(&path);
+
+            let call = |parameters: serde_json::Value| {
+                server.call_batch_update(&json!({
+                    "filepath": path.to_string_lossy(),
+                    "operation": "update_parameters", "parameters": parameters,
+                }))
+            };
+
+            assert_error_mentions(&call(json!({ "param_value": "1%" })), "param_name");
+            assert_error_mentions(&call(json!({ "param_name": "Tolerance" })), "param_value");
+            assert_error_mentions(
+                &call(json!({
+                    "param_name": "Tolerance", "param_value": "1%", "symbol_filter": "RES[",
+                })),
+                "regex",
+            );
+        }
+
+        #[test]
+        fn update_parameters_adds_a_missing_parameter_only_when_asked() {
+            let dir = test_temp_dir();
+            let server = create_test_server(dir.path());
+            let path = dir.path().join("Add.SchLib");
+            create_test_schlib(&path);
+
+            let call = |add: bool, dry: bool| {
+                server.call_batch_update(&json!({
+                    "filepath": path.to_string_lossy(),
+                    "operation": "update_parameters",
+                    "parameters": {
+                        "param_name": "Supplier", "param_value": "Acme",
+                        "add_if_missing": add,
+                    },
+                    "dry_run": dry,
+                }))
+            };
+
+            // Without the opt-in, a parameter no symbol carries is left alone.
+            let untouched = call(false, false);
+            assert!(!untouched.is_error, "{}", get_result_text(&untouched));
+            assert_eq!(
+                parse_result_json(&untouched)["summary"]["parameters_added"],
+                0
+            );
+
+            // A dry run reports what it would add without writing it.
+            let dry = call(true, true);
+            let dry_parsed = parse_result_json(&dry);
+            assert!(dry_parsed["summary"]["parameters_added"].as_u64().unwrap() > 0);
+            assert_eq!(dry_parsed["status"], "dry_run");
+
+            let real = call(true, false);
+            assert!(!real.is_error, "{}", get_result_text(&real));
+            let lib = crate::altium::SchLib::open(&path).unwrap();
+            assert!(lib
+                .iter()
+                .all(|s| s.parameters.iter().any(|p| p.name == "Supplier")));
+        }
+
+        #[test]
+        fn update_parameters_reports_a_failed_write() {
+            let dir = test_temp_dir();
+            let server = create_test_server(dir.path());
+            let path = dir.path().join("Locked.SchLib");
+            create_test_schlib(&path);
+
+            block_save(&path, true);
+            let r = server.call_batch_update(&json!({
+                "filepath": path.to_string_lossy(),
+                "operation": "update_parameters",
+                "parameters": {
+                    "param_name": "Supplier", "param_value": "Acme", "add_if_missing": true,
+                },
+            }));
+            block_save(&path, false);
+            assert!(r.is_error, "{}", get_result_text(&r));
+        }
+
+        // ---- rename_layer / update_track_width (PcbLib) --------------------------
+
+        #[test]
+        fn rename_layer_names_its_missing_arguments_and_unknown_layers() {
+            let dir = test_temp_dir();
+            let server = create_test_server(dir.path());
+            let path = dir.path().join("Lib.PcbLib");
+            create_test_pcblib(&path);
+
+            let call = |parameters: serde_json::Value| {
+                server.call_batch_update(&json!({
+                    "filepath": path.to_string_lossy(),
+                    "operation": "rename_layer", "parameters": parameters,
+                }))
+            };
+
+            assert_error_mentions(&call(json!({ "to_layer": "Top Layer" })), "from_layer");
+            assert_error_mentions(&call(json!({ "from_layer": "Top Layer" })), "to_layer");
+            // Both ends are parsed, so each rejects on its own.
+            assert_error_mentions(
+                &call(json!({ "from_layer": "Nowhere", "to_layer": "Top Layer" })),
+                "Invalid from_layer",
+            );
+            assert_error_mentions(
+                &call(json!({ "from_layer": "Top Layer", "to_layer": "Nowhere" })),
+                "Invalid to_layer",
+            );
+        }
+
+        #[test]
+        fn rename_layer_moves_every_primitive_family_that_sits_on_it() {
+            let dir = test_temp_dir();
+            let server = create_test_server(dir.path());
+            let path = dir.path().join("Overlay.PcbLib");
+            let path_str = path.to_string_lossy().into_owned();
+            write_overlay_library(&server, &path_str);
+
+            let r = server.call_batch_update(&json!({
+                "filepath": &path_str,
+                "operation": "rename_layer",
+                "parameters": { "from_layer": "Top Overlay", "to_layer": "Bottom Overlay" },
+            }));
+            assert!(!r.is_error, "{}", get_result_text(&r));
+
+            // Tracks, arcs, regions and text each have their own loop, so all
+            // four have to be counted or a family would silently stay behind.
+            // Text counts two: write_pcblib injects a `.Designator` on the
+            // overlay alongside the one authored here.
+            let changes = &parse_result_json(&r)["footprints_updated"][0];
+            for family in ["tracks", "arcs", "regions"] {
+                assert_eq!(changes[family], 1, "{family} not renamed: {changes}");
+            }
+            assert_eq!(changes["text"], 2, "text not renamed: {changes}");
+
+            let lib = crate::altium::PcbLib::open(&path).unwrap();
+            let fp = lib.get("OVERLAY").unwrap();
+            assert_eq!(fp.tracks[0].layer, Layer::BottomOverlay);
+            assert_eq!(fp.arcs[0].layer, Layer::BottomOverlay);
+            assert_eq!(fp.regions[0].layer, Layer::BottomOverlay);
+            assert_eq!(fp.text[0].layer, Layer::BottomOverlay);
+        }
+
+        #[test]
+        fn pcblib_batch_operations_report_a_failed_write() {
+            let dir = test_temp_dir();
+            let server = create_test_server(dir.path());
+            let path = dir.path().join("Locked.PcbLib");
+            let path_str = path.to_string_lossy().into_owned();
+            write_overlay_library(&server, &path_str);
+
+            for (operation, parameters) in [
+                (
+                    "rename_layer",
+                    json!({ "from_layer": "Top Overlay", "to_layer": "Bottom Overlay" }),
+                ),
+                (
+                    "update_track_width",
+                    json!({ "from_width": 0.2, "to_width": 0.3 }),
+                ),
+            ] {
+                block_save(&path, true);
+                let r = server.call_batch_update(&json!({
+                    "filepath": &path_str, "operation": operation, "parameters": parameters,
+                }));
+                block_save(&path, false);
+                assert!(r.is_error, "{operation}: {}", get_result_text(&r));
+            }
+        }
+
+        // ---- parse_layer_name ----------------------------------------------------
+
+        #[test]
+        fn layer_names_are_accepted_in_camel_case_as_well_as_spaced() {
+            // The spaced form is Altium's own spelling; the camelCase form is
+            // what a caller reading the serde representation would reach for.
+            let cases = [
+                ("TopLayer", Layer::TopLayer),
+                ("BottomLayer", Layer::BottomLayer),
+                ("TopOverlay", Layer::TopOverlay),
+                ("BottomOverlay", Layer::BottomOverlay),
+                ("TopPaste", Layer::TopPaste),
+                ("BottomPaste", Layer::BottomPaste),
+                ("TopSolder", Layer::TopSolder),
+                ("BottomSolder", Layer::BottomSolder),
+                ("MultiLayer", Layer::MultiLayer),
+                ("KeepOutLayer", Layer::KeepOut),
+                ("KeepOut", Layer::KeepOut),
+                ("MidLayer1", Layer::MidLayer1),
+                ("Mechanical1", Layer::Mechanical1),
+            ];
+            for (name, expected) in cases {
+                assert_eq!(
+                    McpServer::parse_layer_name(name),
+                    Some(expected),
+                    "{name} should resolve"
+                );
+            }
+
+            // Numbered families resolve through the same suffix path.
+            assert!(McpServer::parse_layer_name("InternalPlane1").is_some());
+            // A prefix with no number behind it is not a layer.
+            assert_eq!(McpServer::parse_layer_name("MidLayer"), None);
+            assert_eq!(McpServer::parse_layer_name("Nowhere"), None);
+        }
+    }
 }

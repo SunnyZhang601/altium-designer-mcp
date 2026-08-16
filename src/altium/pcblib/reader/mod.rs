@@ -831,6 +831,136 @@ mod tests {
     }
 
     #[test]
+    fn every_mapped_layer_id_resolves_to_a_distinct_layer() {
+        // This table is the reader-side twin of the writer's, and that family
+        // of table has been wrong before: a copy-pasted arm sent Mechanical
+        // 17-32 to the wrong layer, and a bottom-side region silently changed
+        // sides. Walking every id and demanding distinctness catches that
+        // class outright, which the spot-checks above cannot.
+        use std::collections::HashMap;
+
+        // Every id the table names explicitly. 74 is deliberately absent: it
+        // is Multi-Layer, which doubles as the fallback, so it cannot be
+        // distinct from an unknown id.
+        let mapped: Vec<u8> = (1..=73).chain(75..=85).chain(186..=201).collect();
+        assert_eq!(mapped.len(), 100, "the documented id set changed");
+
+        let mut seen: HashMap<String, u8> = HashMap::new();
+        for id in mapped {
+            let layer = layer_from_id(id);
+            assert_ne!(
+                layer,
+                Layer::MultiLayer,
+                "id {id} fell through to the fallback instead of naming a layer"
+            );
+            if let Some(previous) = seen.insert(format!("{layer:?}"), id) {
+                panic!("ids {previous} and {id} both resolve to {layer:?}");
+            }
+        }
+
+        // Multi-Layer's own id, and ids outside every documented range, land
+        // on the fallback rather than on a neighbouring layer.
+        for id in [0_u8, 74, 86, 100, 185, 202, 255] {
+            assert_eq!(layer_from_id(id), Layer::MultiLayer, "id {id}");
+        }
+    }
+
+    #[test]
+    fn pad_text_and_stroke_font_ids_map_exhaustively() {
+        // Small tables, but each unknown id has to reach the documented
+        // default rather than the first arm.
+        assert_eq!(pad_shape_from_id(1), PadShape::Round);
+        assert_eq!(pad_shape_from_id(2), PadShape::Rectangle);
+        assert_eq!(pad_shape_from_id(3), PadShape::Octagonal);
+        assert_eq!(pad_shape_from_id(9), PadShape::RoundedRectangle);
+        assert_eq!(pad_shape_from_id(0), PadShape::RoundedRectangle);
+
+        assert_eq!(text_kind_from_id(0), TextKind::Stroke);
+        assert_eq!(text_kind_from_id(1), TextKind::TrueType);
+        assert_eq!(text_kind_from_id(2), TextKind::BarCode);
+        assert_eq!(text_kind_from_id(200), TextKind::Stroke);
+
+        // The stroke-font ids are 1-based, so 0 is not "the first font".
+        assert_eq!(stroke_font_from_id(1), StrokeFont::Default);
+        assert_eq!(stroke_font_from_id(2), StrokeFont::SansSerif);
+        assert_eq!(stroke_font_from_id(3), StrokeFont::Serif);
+        assert_eq!(stroke_font_from_id(0), StrokeFont::Default);
+        assert_eq!(stroke_font_from_id(9999), StrokeFont::Default);
+    }
+
+    #[test]
+    fn flag_word_decoding_inverts_the_unlocked_bit() {
+        // A cleared "unlocked" bit means locked, so a primitive whose header
+        // is too short to carry the word must not read as locked by accident.
+        assert_eq!(read_flags(&[0, 0]), PcbFlags::empty());
+        assert!(read_flags(&[0, 0, 0]).contains(PcbFlags::LOCKED));
+
+        let with = |bits: u16| {
+            let [lo, hi] = bits.to_le_bytes();
+            read_flags(&[0, lo, hi])
+        };
+        assert!(!with(ALT_FLAG_UNLOCKED).contains(PcbFlags::LOCKED));
+        assert!(with(ALT_FLAG_UNLOCKED | ALT_FLAG_KEEPOUT).contains(PcbFlags::KEEPOUT));
+        assert!(with(ALT_FLAG_UNLOCKED | ALT_FLAG_TENTING_TOP).contains(PcbFlags::TENTING_TOP));
+        assert!(
+            with(ALT_FLAG_UNLOCKED | ALT_FLAG_TENTING_BOTTOM).contains(PcbFlags::TENTING_BOTTOM)
+        );
+        assert!(with(ALT_FLAG_UNLOCKED | ALT_FLAG_TESTPOINT_TOP).contains(PcbFlags::TESTPOINT_TOP));
+        assert!(with(ALT_FLAG_UNLOCKED | ALT_FLAG_TESTPOINT_BOTTOM)
+            .contains(PcbFlags::TESTPOINT_BOTTOM));
+    }
+
+    #[test]
+    fn unique_id_stream_stops_at_a_corrupt_length_prefix() {
+        // The stream is a run of length-prefixed records, so a wrong length
+        // would run the parser off the end or into the next record. It stops
+        // instead, keeping whatever it had already read.
+        let record = |body: &str| {
+            let len = u32::try_from(body.len()).expect("test record fits in u32");
+            let mut out = len.to_le_bytes().to_vec();
+            out.extend_from_slice(body.as_bytes());
+            out
+        };
+
+        let good = "|PRIMITIVEINDEX=1|PRIMITIVEOBJECTID=Pad|UNIQUEID=QHHMRSCB";
+        let parsed = parse_unique_id_stream(&record(good));
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0].primitive_index, 1);
+        assert_eq!(parsed[0].unique_id, "QHHMRSCB");
+
+        // A length running past the end of the buffer.
+        let mut overrun = record(good);
+        overrun[0] = 0xFF;
+        assert!(parse_unique_id_stream(&overrun).is_empty());
+
+        // A zero length, and one past the 10 kB sanity cap.
+        assert!(parse_unique_id_stream(&0_u32.to_le_bytes()).is_empty());
+        assert!(parse_unique_id_stream(&20_000_u32.to_le_bytes()).is_empty());
+
+        // A trailing partial prefix after a good record keeps the good one.
+        let mut trailing = record(good);
+        trailing.extend_from_slice(&[1, 2, 3]);
+        assert_eq!(parse_unique_id_stream(&trailing).len(), 1);
+
+        // A record whose content is not a usable record is skipped without
+        // stopping the scan.
+        let mut mixed = record("|NOTHING=USEFUL");
+        mixed.extend_from_slice(&record(good));
+        assert_eq!(parse_unique_id_stream(&mixed).len(), 1);
+    }
+
+    #[test]
+    fn wide_strings_skips_entries_it_cannot_decode() {
+        // Malformed entries have to be dropped individually: one bad index
+        // must not cost the caller the rest of the table.
+        let stream = b"|ENCODEDTEXT0=84,69,83,84|ENCODEDTEXTx=65|ENCODEDTEXT2=|NOTENCODED=1|";
+        let parsed = parse_wide_strings(stream);
+        assert_eq!(parsed.get(&0).map(String::as_str), Some("TEST"));
+        // A non-numeric index, an empty payload and an unrelated key all drop.
+        assert_eq!(parsed.len(), 1, "{parsed:?}");
+    }
+
+    #[test]
     fn test_hole_shape_from_id() {
         assert_eq!(hole_shape_from_id(0), HoleShape::Round);
         assert_eq!(hole_shape_from_id(1), HoleShape::Square);

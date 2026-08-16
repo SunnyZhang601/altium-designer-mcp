@@ -2290,4 +2290,474 @@ mod tests {
             assert_eq!(changes[0]["property"], "value");
         }
     }
+
+    // ==================== rejection paths and the remaining diff arms ========
+    //
+    // `compare_components` answers a malformed or unreadable request with an
+    // error result, and each primitive family has a difference arm of its own.
+    // The fixtures elsewhere in this file are pad-only and mostly identical, so
+    // the arms below need components built to differ on purpose.
+
+    mod every_arm {
+        use super::{make_text, McpServer};
+        use crate::altium::pcblib::{
+            Arc, ComponentBody, Fill, Footprint, Layer, Model3D, Pad, PcbLib, Region, Track,
+            Vertex, Via,
+        };
+        use crate::altium::schlib::{Parameter, Pin, PinOrientation, SchLib, Symbol};
+        use crate::mcp::tools::test_support::{
+            create_test_server, get_result_text, parse_result_json, test_temp_dir,
+        };
+        use serde_json::json;
+        use std::slice::from_ref;
+
+        /// A footprint carrying exactly one of every primitive family, so a
+        /// comparison against a deliberately richer twin walks every count arm
+        /// and every detail arm in a single pass.
+        fn one_of_each(name: &str) -> Footprint {
+            let mut fp = Footprint::new(name);
+            fp.description = "base".to_string();
+            fp.add_pad(Pad::smd("1", 0.0, 0.0, 1.0, 1.0));
+            fp.add_via(Via::new(0.0, 0.0, 0.6, 0.3));
+            fp.add_track(Track::new(-1.0, 0.0, 1.0, 0.0, 0.2, Layer::TopOverlay));
+            fp.add_arc(Arc::circle(0.0, 0.0, 1.0, 0.2, Layer::TopOverlay));
+            fp.add_region(Region::rectangle(-1.0, -1.0, 1.0, 1.0, Layer::TopCourtyard));
+            fp.add_text(make_text("REF", 0.0, 0.0));
+            fp.add_fill(Fill::new(-0.5, -0.5, 0.5, 0.5, Layer::TopOverlay));
+            fp
+        }
+
+        /// A placeholder extruded body, so the component-body count can differ.
+        fn body() -> ComponentBody {
+            ComponentBody {
+                model_id: String::new(),
+                model_name: String::new(),
+                embedded: false,
+                rotation_x: 0.0,
+                rotation_y: 0.0,
+                rotation_z: 0.0,
+                z_offset: 0.0,
+                overall_height: 1.0,
+                standoff_height: 0.0,
+                cavity_height: 0.0,
+                layer: Layer::Top3DBody,
+                outline: Vec::new(),
+                unique_id: None,
+                model_checksum: 0,
+                name: " ".to_string(),
+                kind: 0,
+                sub_poly_index: -1,
+                union_index: 0,
+                is_shape_based: false,
+                body_projection: 0,
+                body_color_3d: 8_421_504,
+                body_opacity_3d: 1.0,
+                model_2d_rotation: 0.0,
+                model_2d_x: 0.0,
+                model_2d_y: 0.0,
+                net_index: 0xFFFF,
+                polygon_index: 0xFFFF,
+                component_index: -1,
+                additional_parameters: Vec::new(),
+            }
+        }
+
+        /// Writes bytes that are not an OLE compound file, so `open` fails.
+        fn write_garbage(path: &std::path::Path) {
+            std::fs::write(path, b"not an OLE compound document").unwrap();
+        }
+
+        /// A one-pin symbol, the schematic counterpart of `one_of_each`.
+        fn simple_symbol(name: &str) -> Symbol {
+            let mut sym = Symbol::new(name);
+            sym.add_pin(Pin::new("1", "1", -20, 0, 10, PinOrientation::Left));
+            sym
+        }
+
+        // ---- request validation ----------------------------------------------
+
+        #[test]
+        fn compare_components_requires_the_b_side_identifiers_too() {
+            let dir = test_temp_dir();
+            let server = create_test_server(dir.path());
+            let path = dir.path().join("Lib.PcbLib");
+
+            let no_filepath_b = server.call_compare_components(&json!({
+                "filepath_a": path.to_string_lossy(), "component_a": "A",
+            }));
+            assert!(no_filepath_b.is_error);
+            assert!(get_result_text(&no_filepath_b).contains("filepath_b"));
+
+            let no_component_b = server.call_compare_components(&json!({
+                "filepath_a": path.to_string_lossy(), "component_a": "A",
+                "filepath_b": path.to_string_lossy(),
+            }));
+            assert!(no_component_b.is_error);
+            assert!(get_result_text(&no_component_b).contains("component_b"));
+        }
+
+        #[test]
+        fn compare_components_validates_the_second_path_as_well() {
+            // Both sides are read, so gating only filepath_a would leave a
+            // readable escape through filepath_b.
+            let allowed = test_temp_dir();
+            let outside = test_temp_dir();
+            let server = create_test_server(allowed.path());
+            let r = server.call_compare_components(&json!({
+                "filepath_a": allowed.path().join("A.PcbLib").to_string_lossy(),
+                "component_a": "A",
+                "filepath_b": outside.path().join("B.PcbLib").to_string_lossy(),
+                "component_b": "B",
+            }));
+            assert!(r.is_error, "{}", get_result_text(&r));
+        }
+
+        #[test]
+        fn compare_components_rejects_an_unrecognised_extension() {
+            // Matching extensions get past the same-type check, so an unknown
+            // pair falls through to the file-type arm rather than the mismatch.
+            let dir = test_temp_dir();
+            let server = create_test_server(dir.path());
+            let path = dir.path().join("Notes.txt");
+            std::fs::write(&path, b"x").unwrap();
+            let r = server.call_compare_components(&json!({
+                "filepath_a": path.to_string_lossy(), "component_a": "A",
+                "filepath_b": path.to_string_lossy(), "component_b": "B",
+            }));
+            assert!(r.is_error);
+            assert!(get_result_text(&r).contains("Unknown file type"));
+        }
+
+        // ---- footprint comparison --------------------------------------------
+
+        #[test]
+        fn compare_footprints_reports_an_unreadable_library_on_either_side() {
+            let dir = test_temp_dir();
+            let server = create_test_server(dir.path());
+            let good = dir.path().join("Good.PcbLib");
+            let bad = dir.path().join("Bad.PcbLib");
+            let mut lib = PcbLib::new();
+            lib.add(one_of_each("FP"));
+            lib.save(&good).unwrap();
+            write_garbage(&bad);
+
+            for (a, b) in [(&bad, &good), (&good, &bad)] {
+                let r = server.call_compare_components(&json!({
+                    "filepath_a": a.to_string_lossy(), "component_a": "FP",
+                    "filepath_b": b.to_string_lossy(), "component_b": "FP",
+                }));
+                assert!(r.is_error, "{}", get_result_text(&r));
+                assert!(get_result_text(&r).contains("Failed to read"));
+            }
+        }
+
+        #[test]
+        fn compare_footprints_reports_a_missing_component_on_the_b_side() {
+            let dir = test_temp_dir();
+            let server = create_test_server(dir.path());
+            let path = dir.path().join("Lib.PcbLib");
+            let mut lib = PcbLib::new();
+            lib.add(one_of_each("FP"));
+            lib.save(&path).unwrap();
+
+            let r = server.call_compare_components(&json!({
+                "filepath_a": path.to_string_lossy(), "component_a": "FP",
+                "filepath_b": path.to_string_lossy(), "component_b": "GHOST",
+            }));
+            assert!(r.is_error);
+            assert!(get_result_text(&r).contains("'GHOST' not found"));
+        }
+
+        #[test]
+        fn compare_footprints_reports_a_difference_in_every_family() {
+            let dir = test_temp_dir();
+            let server = create_test_server(dir.path());
+            let path = dir.path().join("Families.PcbLib");
+
+            let base = one_of_each("BASE");
+
+            // A richer twin: one extra of every family, placed where it cannot
+            // pair off with the original, so both the count arm and the detail
+            // arm fire for each.
+            let mut rich = one_of_each("RICH");
+            rich.description = "changed".to_string();
+            rich.add_pad(Pad::smd("2", 5.0, 5.0, 1.0, 1.0));
+            rich.add_via(Via::new(5.0, 5.0, 0.6, 0.3));
+            rich.add_track(Track::new(-9.0, 9.0, 9.0, 9.0, 0.2, Layer::TopOverlay));
+            rich.add_arc(Arc::circle(9.0, 9.0, 1.0, 0.2, Layer::TopOverlay));
+            rich.add_region(Region::rectangle(8.0, 8.0, 9.0, 9.0, Layer::TopCourtyard));
+            rich.add_text(make_text("EXTRA", 9.0, 9.0));
+            rich.add_fill(Fill::new(8.0, 8.0, 9.0, 9.0, Layer::TopOverlay));
+            rich.add_component_body(body());
+
+            let mut lib = PcbLib::new();
+            lib.add(base);
+            lib.add(rich);
+            lib.save(&path).unwrap();
+
+            let r = server.call_compare_components(&json!({
+                "filepath_a": path.to_string_lossy(), "component_a": "BASE",
+                "filepath_b": path.to_string_lossy(), "component_b": "RICH",
+            }));
+            assert!(!r.is_error, "{}", get_result_text(&r));
+            let parsed = parse_result_json(&r);
+            assert_eq!(parsed["identical"], false);
+
+            let fields: Vec<&str> = parsed["differences"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter_map(|d| d["field"].as_str())
+                .collect();
+            for expected in [
+                "description",
+                "pad_count",
+                "pads",
+                "via_count",
+                "vias",
+                "track_count",
+                "tracks",
+                "arc_count",
+                "arcs",
+                "region_count",
+                "regions",
+                "text_count",
+                "text",
+                "fill_count",
+                "fills",
+                "component_body_count",
+            ] {
+                assert!(
+                    fields.contains(&expected),
+                    "missing {expected:?} from the reported fields: {fields:?}"
+                );
+            }
+        }
+
+        #[test]
+        fn compare_footprints_reports_3d_model_presence_then_path() {
+            let dir = test_temp_dir();
+            let server = create_test_server(dir.path());
+            let path = dir.path().join("Models.PcbLib");
+
+            // The save path reads the model off disk, so each reference has to
+            // name a file that actually exists.
+            let model = |name: &str| {
+                let file = dir.path().join(name);
+                std::fs::write(
+                    &file,
+                    b"ISO-10303-21;\nHEADER;\nENDSEC;\nEND-ISO-10303-21;\n",
+                )
+                .unwrap();
+                Model3D {
+                    filepath: file.to_string_lossy().into_owned(),
+                    x_offset: 0.0,
+                    y_offset: 0.0,
+                    z_offset: 0.0,
+                    rotation: 0.0,
+                }
+            };
+
+            let plain = one_of_each("PLAIN");
+            let mut with_model = one_of_each("WITH_MODEL");
+            with_model.model_3d = Some(model("a.step"));
+            let mut other_model = one_of_each("OTHER_MODEL");
+            other_model.model_3d = Some(model("b.step"));
+
+            let mut lib = PcbLib::new();
+            lib.add(plain);
+            lib.add(with_model);
+            lib.add(other_model);
+            lib.save(&path).unwrap();
+
+            let compare = |a: &str, b: &str| {
+                let r = server.call_compare_components(&json!({
+                    "filepath_a": path.to_string_lossy(), "component_a": a,
+                    "filepath_b": path.to_string_lossy(), "component_b": b,
+                }));
+                assert!(!r.is_error, "{}", get_result_text(&r));
+                parse_result_json(&r)
+            };
+
+            // One side has a model and the other does not: a presence diff.
+            let presence = compare("PLAIN", "WITH_MODEL");
+            assert!(presence["differences"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|d| d["field"] == "external_3d_model"));
+
+            // Both have one, pointing at different files: a path diff instead.
+            let paths = compare("WITH_MODEL", "OTHER_MODEL");
+            assert!(paths["differences"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|d| d["field"] == "3d_model_path"));
+        }
+
+        // ---- primitive-level arms not reached by the fixtures above ----------
+
+        #[test]
+        fn compare_pads_reports_shape_layer_and_rotation_changes() {
+            use super::has_change;
+            use crate::altium::pcblib::PadShape;
+
+            let base = Pad::smd("1", 0.0, 0.0, 1.0, 1.0);
+
+            let mut shape = base.clone();
+            shape.shape = PadShape::Round;
+            let mut other = base.clone();
+            other.shape = PadShape::Rectangle;
+            assert!(has_change(
+                &McpServer::compare_pads(&[shape], &[other], 0.001),
+                "shape"
+            ));
+
+            let mut layer = base.clone();
+            layer.layer = Layer::BottomLayer;
+            assert!(has_change(
+                &McpServer::compare_pads(from_ref(&base), &[layer], 0.001),
+                "layer"
+            ));
+
+            let mut rotated = base.clone();
+            rotated.rotation = 90.0;
+            assert!(has_change(
+                &McpServer::compare_pads(from_ref(&base), &[rotated], 0.001),
+                "rotation"
+            ));
+
+            // One side drilled, the other not: a hole appearing is a change
+            // even though neither value can be compared numerically.
+            let mut drilled = base.clone();
+            drilled.hole_size = Some(0.5);
+            assert!(has_change(
+                &McpServer::compare_pads(&[base], &[drilled], 0.001),
+                "hole_size"
+            ));
+        }
+
+        #[test]
+        fn compare_vias_reports_diameter_span_and_one_sided_entries() {
+            use super::has_change;
+
+            let base = Via::new(0.0, 0.0, 0.6, 0.3);
+
+            let wider = Via::new(0.0, 0.0, 0.9, 0.3);
+            assert!(has_change(
+                &McpServer::compare_vias(from_ref(&base), &[wider], 0.001),
+                "diameter"
+            ));
+
+            let mut spanned = base.clone();
+            spanned.to_layer = Layer::Mechanical1;
+            assert!(has_change(
+                &McpServer::compare_vias(from_ref(&base), &[spanned], 0.001),
+                "layer_span"
+            ));
+
+            // A via with no counterpart within tolerance is reported whole, on
+            // whichever side it is missing from.
+            let moved = Via::new(9.0, 9.0, 0.6, 0.3);
+            let diffs = McpServer::compare_vias(from_ref(&base), from_ref(&moved), 0.001);
+            assert_eq!(diffs.len(), 2, "{diffs:?}");
+            assert_eq!(diffs[0]["status"], "only_in_a");
+            assert_eq!(diffs[1]["status"], "only_in_b");
+            assert_eq!(diffs[1]["position"]["x"], 9.0);
+        }
+
+        #[test]
+        fn compare_regions_reports_name_and_hole_count_changes() {
+            use super::has_change;
+
+            let base = Region::rectangle(-1.0, -1.0, 1.0, 1.0, Layer::TopCourtyard);
+
+            let mut renamed = base.clone();
+            renamed.name = "COURTYARD".to_string();
+            assert!(has_change(
+                &McpServer::compare_regions(from_ref(&base), &[renamed], 0.001),
+                "name"
+            ));
+
+            // The outline still matches, so a region that gained an inner
+            // contour is a modification rather than an add/remove pair.
+            let mut holed = base.clone();
+            holed.holes.push(vec![
+                Vertex { x: -0.5, y: -0.5 },
+                Vertex { x: 0.5, y: -0.5 },
+                Vertex { x: 0.5, y: 0.5 },
+                Vertex { x: -0.5, y: 0.5 },
+            ]);
+            assert!(has_change(
+                &McpServer::compare_regions(&[base], &[holed], 0.001),
+                "hole_count"
+            ));
+        }
+
+        #[test]
+        fn matched_counterparts_are_not_claimed_twice() {
+            // Two identical primitives per side: the first pairing consumes
+            // slot 0, so the second must skip it and take slot 1 instead of
+            // reporting a false one-sided difference.
+            let track = |width: f64| Track::new(-1.0, 0.0, 1.0, 0.0, width, Layer::TopOverlay);
+            let tracks_a = [track(0.2), track(0.2)];
+            let tracks_b = [track(0.2), track(0.2)];
+            assert!(McpServer::compare_tracks(&tracks_a, &tracks_b, 0.001).is_empty());
+
+            let arc = || Arc::circle(0.0, 0.0, 1.0, 0.2, Layer::TopOverlay);
+            let arcs_a = [arc(), arc()];
+            let arcs_b = [arc(), arc()];
+            assert!(McpServer::compare_pcb_arcs(&arcs_a, &arcs_b, 0.001).is_empty());
+
+            let via = || Via::new(0.0, 0.0, 0.6, 0.3);
+            assert!(McpServer::compare_vias(&[via(), via()], &[via(), via()], 0.001).is_empty());
+        }
+
+        #[test]
+        fn a_one_sided_parameter_occurrence_carries_its_value() {
+            // The keyed comparison describes a leftover occurrence rather than
+            // reporting a bare name, so the reader can see what was dropped.
+            let params_a = [Parameter::new("Value", "1k"), Parameter::new("Value", "2k")];
+            let params_b = [Parameter::new("Value", "1k")];
+
+            let diffs = McpServer::compare_parameters(&params_a, &params_b);
+            assert_eq!(diffs.len(), 1, "{diffs:?}");
+            assert_eq!(diffs[0]["status"], "only_in_a");
+            assert_eq!(diffs[0]["occurrence"], 1);
+            assert_eq!(diffs[0]["value"], "2k");
+        }
+
+        // ---- symbol comparison -----------------------------------------------
+
+        #[test]
+        fn compare_symbols_reports_unreadable_libraries_and_missing_components() {
+            let dir = test_temp_dir();
+            let server = create_test_server(dir.path());
+            let good = dir.path().join("Good.SchLib");
+            let bad = dir.path().join("Bad.SchLib");
+            let mut lib = SchLib::new();
+            lib.add(simple_symbol("SYM"));
+            lib.save(&good).unwrap();
+            write_garbage(&bad);
+
+            for (a, b) in [(&bad, &good), (&good, &bad)] {
+                let r = server.call_compare_components(&json!({
+                    "filepath_a": a.to_string_lossy(), "component_a": "SYM",
+                    "filepath_b": b.to_string_lossy(), "component_b": "SYM",
+                }));
+                assert!(r.is_error, "{}", get_result_text(&r));
+                assert!(get_result_text(&r).contains("Failed to read"));
+            }
+
+            for (a, b) in [("GHOST", "SYM"), ("SYM", "GHOST")] {
+                let r = server.call_compare_components(&json!({
+                    "filepath_a": good.to_string_lossy(), "component_a": a,
+                    "filepath_b": good.to_string_lossy(), "component_b": b,
+                }));
+                assert!(r.is_error);
+                assert!(get_result_text(&r).contains("'GHOST' not found"));
+            }
+        }
+    }
 }

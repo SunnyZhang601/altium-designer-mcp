@@ -11,10 +11,11 @@ record). The specialised worklists stay the single source of truth for their are
 
 ## A. Format / fidelity residue
 
-- [ ] **Pad binary-block fidelity** — the golden fidelity diff compares parameter text, not
-      the pad's binary geometry blocks. Byte-diff the golden's pads against a rewrite to
-      settle the two old RE findings: oblong/oval SMD pads routing to the 651 size/shape
-      block, and the multi-entry full-stack tail (count > 1). **Last §A item.**
+*(empty — §A completed 2026-08-16: every footprint Data stream in the golden is
+byte-identical through a read-modify-write, enforced by `golden_fidelity`. The two
+old RE findings dissolved: no 651 mis-routing exists, and the multi-entry
+full-stack tail is unexercised rather than broken — a fixture would be needed to
+claim more.)*
 
 ## B. Coverage (issue #302 owns the detail)
 

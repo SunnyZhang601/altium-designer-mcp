@@ -290,6 +290,7 @@ fn block_divergences(golden: &[u8], ours: &[u8], label: &str) -> Vec<String> {
 }
 
 #[test]
+#[allow(clippy::too_many_lines)] // five comparison passes, one straight-line block each
 fn pcblib_golden_survives_a_round_trip() {
     let src = sample("footprints.PcbLib");
     let dir = tempfile::tempdir().expect("tempdir");
@@ -380,6 +381,43 @@ fn pcblib_golden_survives_a_round_trip() {
                 )),
                 None => failures.push(format!("{canonical} was not written back")),
             }
+        }
+    }
+
+    // 5. The ultimate bar, reached 2026-08-16: every footprint's Data stream
+    //    byte-identical through the round trip. The parameter- and
+    //    record-level comparisons above localise a failure; this catches
+    //    everything else — template drift, invented identities, padding
+    //    rewrites. PcbLib has no per-save volatile bytes inside component
+    //    Data (unlike SchLib's regenerated UniqueIDs), so exact equality is
+    //    the honest requirement.
+    for (canonical, g_path) in &before {
+        let Some(name) = canonical
+            .strip_suffix("/data")
+            .filter(|n| !n.contains('/') && *n != "library")
+        else {
+            continue;
+        };
+        if is_known(canonical) {
+            continue;
+        }
+        let (Some(g), Some(o)) = (
+            stream_bytes(&src, g_path),
+            after.get(canonical).and_then(|p| stream_bytes(&out, p)),
+        ) else {
+            continue;
+        };
+        if g != o {
+            let first = g
+                .iter()
+                .zip(o.iter())
+                .position(|(a, b)| a != b)
+                .unwrap_or_else(|| g.len().min(o.len()));
+            failures.push(format!(
+                "{name}: Data stream not byte-identical (lens {}/{}, first divergence at {first:#x})",
+                g.len(),
+                o.len()
+            ));
         }
     }
 

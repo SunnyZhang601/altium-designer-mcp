@@ -577,6 +577,7 @@ fn test_text_special_strings() {
         component_index: -1,
         unique_id: None,
         guid: None,
+        raw_geometry: None,
     };
     fp.add_text(text1);
 
@@ -618,6 +619,7 @@ fn test_text_special_strings() {
         component_index: -1,
         unique_id: None,
         guid: None,
+        raw_geometry: None,
     };
     fp.add_text(text2);
 

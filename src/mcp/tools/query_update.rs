@@ -1677,6 +1677,178 @@ mod tests {
             }
         }
 
+        /// The preview helpers take `Option<&old>` and report a creation when
+        /// it is `None`. Both `update_*_component` entry points reject an
+        /// unknown name before they get here, so this arm is only reachable by
+        /// calling the helper directly — which pins the contract for any future
+        /// caller that does allow create-on-update.
+        #[test]
+        fn previewing_against_no_previous_component_reports_a_creation() {
+            use crate::altium::{pcblib::Footprint, schlib::Symbol};
+
+            let changes = McpServer::preview_footprint_changes(None, &Footprint::new("NEW"));
+            assert_eq!(changes, ["component will be created"], "{changes:?}");
+
+            let changes = McpServer::preview_symbol_changes(None, &Symbol::new("NEW"));
+            assert_eq!(changes, ["component will be created"], "{changes:?}");
+        }
+
+        #[test]
+        fn dry_run_that_changes_nothing_says_so_rather_than_listing_nothing() {
+            let dir = test_temp_dir();
+            let server = create_test_server(dir.path());
+
+            // Re-submitting CHIP_0402's own description and pad count leaves
+            // every compared field equal, so the preview must not come back
+            // as an empty change list.
+            let pcb = dir.path().join("NoopDry.PcbLib");
+            create_test_pcblib(&pcb);
+            let r = server.call_update_component(&json!({
+                "filepath": pcb.to_string_lossy(),
+                "component_name": "CHIP_0402",
+                "dry_run": true,
+                "footprint": {
+                    "description": "0402 chip resistor",
+                    "pads": [
+                        { "designator": "1", "x": -0.5, "y": 0.0, "width": 0.6, "height": 0.5 },
+                        { "designator": "2", "x": 0.5, "y": 0.0, "width": 0.6, "height": 0.5 },
+                    ],
+                },
+            }));
+            assert!(!r.is_error, "{}", get_result_text(&r));
+            let changes = change_strings(&parse_result_json(&r));
+            assert_eq!(changes, ["no structural changes detected"], "{changes:?}");
+
+            let sch = dir.path().join("NoopDry.SchLib");
+            create_test_schlib(&sch);
+            let (description, designator, pin_count, rects) = {
+                use crate::altium::SchLib;
+                let lib = SchLib::open(&sch).unwrap();
+                let s = lib.get("RESISTOR").unwrap();
+                (
+                    s.description.clone(),
+                    s.designator.clone(),
+                    s.pins.len(),
+                    s.rectangles.clone(),
+                )
+            };
+            let pins: Vec<Value> = (0..pin_count)
+                .map(|i| {
+                    json!({
+                        "designator": format!("{}", i + 1),
+                        "name": format!("P{}", i + 1),
+                        "x": 0, "y": 0, "length": 10, "orientation": "left",
+                    })
+                })
+                .collect();
+            let r = server.call_update_component(&json!({
+                "filepath": sch.to_string_lossy(),
+                "component_name": "RESISTOR",
+                "dry_run": true,
+                "symbol": {
+                    "description": description,
+                    "designator": designator,
+                    "pins": pins,
+                    "rectangles": rects,
+                },
+            }));
+            assert!(!r.is_error, "{}", get_result_text(&r));
+            let changes = change_strings(&parse_result_json(&r));
+            assert_eq!(changes, ["no structural changes detected"], "{changes:?}");
+        }
+
+        #[test]
+        fn update_reports_the_new_name_when_the_component_is_renamed() {
+            let dir = test_temp_dir();
+            let server = create_test_server(dir.path());
+
+            let pcb = dir.path().join("Rename.PcbLib");
+            create_test_pcblib(&pcb);
+            let r = server.call_update_component(&json!({
+                "filepath": pcb.to_string_lossy(),
+                "component_name": "CHIP_0402",
+                "footprint": { "name": "CHIP_0402_NEW", "description": "renamed" },
+            }));
+            assert!(!r.is_error, "{}", get_result_text(&r));
+            let p = parse_result_json(&r);
+            assert_eq!(p["renamed"], true);
+            assert!(
+                get_result_text(&r).contains("CHIP_0402_NEW"),
+                "{}",
+                get_result_text(&r)
+            );
+
+            // The SchLib side says the same thing in its own words, in both the
+            // preview and the committed update.
+            let sch = dir.path().join("Rename.SchLib");
+            create_test_schlib(&sch);
+            let renaming = json!({
+                "filepath": sch.to_string_lossy(),
+                "component_name": "RESISTOR",
+                "symbol": { "name": "RESISTOR_NEW", "description": "renamed" },
+            });
+            let mut preview = renaming.clone();
+            preview["dry_run"] = json!(true);
+            let r = server.call_update_component(&preview);
+            assert!(!r.is_error, "{}", get_result_text(&r));
+            assert_eq!(parse_result_json(&r)["would_rename"], true);
+            assert!(get_result_text(&r).contains("RESISTOR_NEW"));
+
+            let r = server.call_update_component(&renaming);
+            assert!(!r.is_error, "{}", get_result_text(&r));
+            assert_eq!(parse_result_json(&r)["renamed"], true);
+            assert!(get_result_text(&r).contains("RESISTOR_NEW"));
+        }
+
+        #[test]
+        fn a_missing_name_lists_only_the_first_ten_candidates() {
+            use crate::altium::{
+                pcblib::{Footprint, Pad},
+                schlib::Symbol,
+                PcbLib, SchLib,
+            };
+            let dir = test_temp_dir();
+            let server = create_test_server(dir.path());
+
+            // Twelve components: the error must name ten and count the rest,
+            // rather than spilling the whole library into the message.
+            let pcb = dir.path().join("Many.PcbLib");
+            let mut lib = PcbLib::new();
+            for i in 0..12 {
+                let mut fp = Footprint::new(format!("FP_{i:02}"));
+                fp.add_pad(Pad::smd("1", 0.0, 0.0, 0.6, 0.5));
+                lib.add(fp);
+            }
+            lib.save(&pcb).unwrap();
+
+            let r = server.call_get_component(&json!({
+                "filepath": pcb.to_string_lossy(),
+                "component_name": "ABSENT",
+            }));
+            assert!(r.is_error);
+            let msg = get_result_text(&r);
+            assert!(msg.contains("and 2 more"), "{msg}");
+            assert!(msg.contains("FP_09"), "{msg}");
+            assert!(!msg.contains("FP_11"), "{msg}");
+
+            let sch = dir.path().join("Many.SchLib");
+            let mut lib = SchLib::new();
+            for i in 0..12 {
+                lib.add(Symbol::new(format!("SYM_{i:02}")));
+            }
+            lib.save(&sch).unwrap();
+
+            let r = server.call_get_component(&json!({
+                "filepath": sch.to_string_lossy(),
+                "component_name": "ABSENT",
+            }));
+            assert!(r.is_error);
+            let msg = get_result_text(&r);
+            assert!(msg.contains("and 2 more"), "{msg}");
+            assert!(msg.contains("SYM_09"), "{msg}");
+            assert!(!msg.contains("SYM_11"), "{msg}");
+        }
+
         #[test]
         fn update_schlib_parses_all_primitive_families() {
             use crate::altium::SchLib;

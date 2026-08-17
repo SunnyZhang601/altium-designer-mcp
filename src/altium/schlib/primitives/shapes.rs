@@ -863,4 +863,21 @@ mod tests {
             ALTIUM_LIGHT_YELLOW
         );
     }
+
+    #[test]
+    fn a_minimal_arc_defaults_to_a_full_circle_one_unit_wide() {
+        // Only centre and radius are required; an omitted end angle must sweep
+        // the full 360 degrees and an omitted width must be Altium's 1.
+        let a: Arc = serde_json::from_value(serde_json::json!({
+            "x": 0.0, "y": 0.0, "radius": 5.0
+        }))
+        .unwrap();
+        assert!(
+            (a.end_angle - 360.0).abs() < 1e-9,
+            "end_angle {}",
+            a.end_angle
+        );
+        assert!((a.start_angle - 0.0).abs() < 1e-9);
+        assert_eq!(a.line_width, 1);
+    }
 }

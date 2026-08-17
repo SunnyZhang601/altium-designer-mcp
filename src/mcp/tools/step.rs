@@ -1051,4 +1051,80 @@ mod tests {
                 .contains("Failed to write file"));
         }
     }
+
+    #[test]
+    fn extraction_refuses_paths_outside_the_allowed_directories() {
+        // The library is read and the model is written, so both ends need the
+        // sandbox check — an unchecked output_path would be an arbitrary write.
+        let dir = test_temp_dir();
+        let other = test_temp_dir();
+        let server = create_test_server(dir.path());
+
+        let outside = other.path().join("Outside.PcbLib");
+        create_test_pcblib(&outside);
+        let r = server.call_extract_step_model(&json!({
+            "filepath": outside.to_string_lossy(),
+        }));
+        assert!(r.is_error);
+        assert!(
+            get_result_text(&r).contains("Access denied"),
+            "{}",
+            get_result_text(&r)
+        );
+
+        let inside = dir.path().join("Inside.PcbLib");
+        create_test_pcblib(&inside);
+        let r = server.call_extract_step_model(&json!({
+            "filepath": inside.to_string_lossy(),
+            "output_path": other.path().join("escape.step").to_string_lossy(),
+        }));
+        assert!(r.is_error);
+        assert!(
+            get_result_text(&r).contains("Access denied"),
+            "{}",
+            get_result_text(&r)
+        );
+    }
+
+    #[test]
+    fn auto_mode_extracts_a_lone_model_and_lists_when_there_is_a_choice() {
+        // With no identifier, one embedded model is unambiguous and is
+        // returned outright; more than one is not, and listing them is the
+        // only answer that does not silently pick for the caller.
+        let dir = test_temp_dir();
+        let server = create_test_server(dir.path());
+
+        let lone = dir.path().join("Lone.PcbLib");
+        let mut lib = PcbLib::new();
+        let mut fp = Footprint::new("QFN16");
+        fp.add_pad(Pad::smd("1", -1.0, 0.0, 0.3, 0.8));
+        fp.add_component_body(ComponentBody::new(MODEL_A_ID, "modelA.step"));
+        lib.add(fp);
+        lib.add_model(EmbeddedModel::new(
+            MODEL_A_ID,
+            "modelA.step",
+            MODEL_A_DATA.to_vec(),
+        ));
+        lib.save(&lone).unwrap();
+
+        let r = server.call_extract_step_model(&json!({
+            "filepath": lone.to_string_lossy(),
+        }));
+        assert!(!r.is_error, "{}", get_result_text(&r));
+        let parsed = parse_result_json(&r);
+        assert_eq!(parsed["status"], "success");
+        assert_eq!(parsed["model_name"], "modelA.step");
+
+        // The two-model fixture has nothing to disambiguate on, so the same
+        // call has to come back as a listing instead.
+        let many = dir.path().join("Many.PcbLib");
+        create_model_pcblib(&many);
+        let r = server.call_extract_step_model(&json!({
+            "filepath": many.to_string_lossy(),
+        }));
+        assert!(!r.is_error, "{}", get_result_text(&r));
+        let parsed = parse_result_json(&r);
+        assert_eq!(parsed["status"], "list");
+        assert_eq!(parsed["total_count"], 2);
+    }
 }

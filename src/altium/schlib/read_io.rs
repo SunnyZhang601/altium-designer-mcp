@@ -403,6 +403,46 @@ mod tests {
     }
 
     #[test]
+    fn a_component_storage_with_no_data_stream_is_skipped() {
+        // The storage walk finds the component by its storage, but the Data
+        // stream is what carries the symbol. A storage without one — a
+        // half-written file — must cost that symbol alone, not the open.
+        let dir = temp_dir();
+        let path = dir.path().join("Ghost.SchLib");
+        {
+            let mut compound = cfb::create(&path).expect("create compound document");
+            {
+                let mut stream = compound
+                    .create_stream("/FileHeader")
+                    .expect("create FileHeader");
+                stream
+                    .write_all(&header_block(
+                        "|HEADER=Schematic Library|COMPCOUNT=2|LIBREF0=REAL|LIBREF1=GHOST",
+                    ))
+                    .expect("write FileHeader");
+            }
+            for name in ["REAL", "GHOST"] {
+                compound
+                    .create_storage(format!("/{name}"))
+                    .expect("create component storage");
+            }
+            // Only REAL gets a Data stream; GHOST is an empty storage.
+            let mut stream = compound
+                .create_stream("/REAL/Data")
+                .expect("create component Data");
+            stream
+                .write_all(&[5, 0, 0, 0, 4, b'R', b'E', b'A', b'L'])
+                .expect("write component Data");
+            compound.flush().expect("flush compound document");
+        }
+
+        let lib = SchLib::open(&path).expect("the library should still open");
+        assert_eq!(lib.len(), 1, "only the symbol with a Data stream loads");
+        assert!(lib.get("REAL").is_some());
+        assert!(lib.get("GHOST").is_none());
+    }
+
+    #[test]
     fn a_library_with_no_file_header_at_all_is_refused() {
         let dir = temp_dir();
         let path = dir.path().join("Headerless.SchLib");

@@ -236,3 +236,89 @@ pub fn parse_embedded_models(
 
     models
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{decompress_model_data, parse_model_data_stream, parse_model_header_stream};
+
+    #[test]
+    fn a_models_data_stream_stops_at_the_first_unusable_record_length() {
+        // A zero length would loop forever and an overlong one would slice out
+        // of bounds, so both end the walk with whatever parsed before them.
+        with_tracing(|| {
+            assert!(parse_model_data_stream(&[0, 0, 0, 0]).is_empty());
+
+            // Claims 64 bytes with two behind it.
+            assert!(parse_model_data_stream(&[64, 0, 0, 0, b'x', b'y']).is_empty());
+
+            // Shorter than a single length word.
+            assert!(parse_model_data_stream(&[1, 2, 3]).is_empty());
+        });
+    }
+
+    /// Runs `body` with a TRACE-level subscriber installed on this thread, so
+    /// the diagnostics these parsers emit on a damaged file are actually
+    /// formatted rather than skipped by the level check.
+    fn with_tracing<T>(body: impl FnOnce() -> T) -> T {
+        let subscriber = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::TRACE)
+            .with_test_writer()
+            .finish();
+        tracing::subscriber::with_default(subscriber, body)
+    }
+
+    #[test]
+    fn a_short_models_header_reports_no_models_rather_than_guessing() {
+        // The count is a 4-byte word; anything shorter is unreadable, and
+        // inventing a count would drive a scan for streams that do not exist.
+        with_tracing(|| {
+            for data in [&[][..], &[1][..], &[1, 0, 0][..]] {
+                assert_eq!(parse_model_header_stream(data), 0, "{data:?}");
+            }
+        });
+
+        assert_eq!(parse_model_header_stream(&[2, 0, 0, 0]), 2);
+    }
+
+    #[test]
+    fn an_oversized_model_is_rejected_rather_than_allocated() {
+        // The cap is what stops a decompression bomb: a small compressed
+        // payload that expands past the limit must come back empty rather
+        // than being inflated in full and then measured.
+        use flate2::{write::ZlibEncoder, Compression};
+        use std::io::Write as _;
+
+        let mut encoder = ZlibEncoder::new(Vec::new(), Compression::default());
+        encoder.write_all(&vec![b'x'; 4096]).unwrap();
+        let compressed = encoder.finish().unwrap();
+
+        with_tracing(|| {
+            assert!(super::decompress_capped(&compressed, 16).is_empty());
+            // The same payload under a sufficient cap still inflates.
+            assert_eq!(super::decompress_capped(&compressed, 8192).len(), 4096);
+        });
+    }
+
+    #[test]
+    fn a_model_whose_stream_will_not_inflate_is_skipped_not_faked() {
+        // The index names the model, so dropping it silently is the only way
+        // the rest of the library still loads — but it must not appear with
+        // empty data, which would write a corrupt model back out.
+        let mut index = super::ModelIndex::new();
+        index.insert("{AAAA}".to_string(), (0, "part.step".to_string()));
+        let data = vec![(0usize, vec![0xFF, 0xFE, 0xFD, 0xFC])];
+
+        let models = with_tracing(|| super::parse_embedded_models(&index, &data));
+        assert!(models.is_empty());
+    }
+
+    #[test]
+    fn model_data_that_is_not_zlib_decompresses_to_nothing() {
+        // The caller treats an empty result as "this model is missing" and
+        // keeps the rest of the library, so garbage must not panic here.
+        with_tracing(|| {
+            assert!(decompress_model_data(&[0xFF, 0xFE, 0xFD, 0xFC]).is_empty());
+            assert!(decompress_model_data(&[]).is_empty());
+        });
+    }
+}

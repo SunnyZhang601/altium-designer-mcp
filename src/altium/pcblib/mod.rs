@@ -812,6 +812,91 @@ mod tests {
     }
 
     #[test]
+    fn every_primitive_kind_round_trips_through_its_altium_ids() {
+        // The numeric id and the PRIMITIVEOBJECTID token are what a
+        // UniqueIDPrimitiveInformation record is keyed by. A kind whose token
+        // or id is wrong re-attaches a stable identity to the wrong primitive
+        // on the next read, so each arm is pinned to its own value.
+        for (kind, id, token) in [
+            (PrimitiveKind::Arc, 1, "Arc"),
+            (PrimitiveKind::Pad, 2, "Pad"),
+            (PrimitiveKind::Via, 3, "Via"),
+            (PrimitiveKind::Track, 4, "Track"),
+            (PrimitiveKind::Text, 5, "Text"),
+            (PrimitiveKind::Fill, 6, "Fill"),
+            (PrimitiveKind::Region, 89, "Region"),
+            (PrimitiveKind::ComponentBody, 90, "ComponentBody"),
+        ] {
+            assert_eq!(kind.altium_object_id(), id, "{token} id");
+            assert_eq!(kind.object_id(), token, "{token} token");
+            assert_eq!(
+                PrimitiveKind::from_altium_object_id(id),
+                Some(kind),
+                "{token} reverse"
+            );
+        }
+
+        // 85 is the footprint record itself, not a primitive; it and any other
+        // unmapped id must not resolve to a kind.
+        for id in [0, 7, 85, 91, u32::MAX] {
+            assert_eq!(PrimitiveKind::from_altium_object_id(id), None, "id {id}");
+        }
+    }
+
+    #[test]
+    fn orphan_removal_keeps_bodies_it_cannot_judge() {
+        // Only an embedded body naming a model the library does not carry is
+        // an orphan. An external reference, or one with no model id to check
+        // against, must survive — deleting those would drop live geometry.
+        let mut lib = PcbLib::new();
+        let mut fp = Footprint::new("MIXED");
+
+        let mut external = ComponentBody::new("{ABSENT}", "ext.step");
+        external.embedded = false;
+        fp.add_component_body(external);
+
+        let mut anonymous = ComponentBody::new("", "anon.step");
+        anonymous.embedded = true;
+        fp.add_component_body(anonymous);
+
+        let mut orphan = ComponentBody::new("{GONE}", "gone.step");
+        orphan.embedded = true;
+        fp.add_component_body(orphan);
+
+        lib.add(fp);
+
+        let results = lib.remove_orphaned_component_bodies();
+        assert_eq!(results, vec![("MIXED".to_string(), 1)]);
+        let kept = &lib.get("MIXED").expect("the footprint").component_bodies;
+        assert_eq!(kept.len(), 2);
+        assert!(kept.iter().any(|cb| !cb.embedded));
+        assert!(kept.iter().any(|cb| cb.model_id.is_empty()));
+    }
+
+    #[test]
+    fn a_library_reports_its_source_path_only_once_it_has_one() {
+        let mut lib = PcbLib::new();
+        assert_eq!(lib.filepath(), None);
+
+        lib.filepath = Some("Parts.PcbLib".to_string());
+        assert_eq!(lib.filepath(), Some("Parts.PcbLib"));
+    }
+
+    #[test]
+    fn updating_an_absent_footprint_reports_no_previous_value() {
+        // The return value is the caller's signal that it replaced something;
+        // a miss must not silently insert.
+        let mut lib = PcbLib::new();
+        lib.add(Footprint::new("PRESENT"));
+
+        assert!(lib.update("ABSENT", Footprint::new("ABSENT")).is_none());
+        assert_eq!(lib.len(), 1);
+
+        let old = lib.update("PRESENT", Footprint::new("REPLACED"));
+        assert_eq!(old.expect("the replaced footprint").name, "PRESENT");
+    }
+
+    #[test]
     fn footprint_creation() {
         let mut fp = Footprint::new("TEST");
         fp.add_pad(Pad::smd("1", -0.5, 0.0, 0.8, 0.9));

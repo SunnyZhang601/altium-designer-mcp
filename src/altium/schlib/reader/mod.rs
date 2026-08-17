@@ -389,6 +389,60 @@ mod tests {
     use super::*;
 
     #[test]
+    fn every_justification_id_maps_to_its_own_anchor() {
+        // The ids are Altium's, and a wrong arm silently re-anchors text on
+        // read. Anything outside the table is Altium's own 0 = BottomLeft.
+        for (id, expected) in [
+            (0, TextJustification::BottomLeft),
+            (1, TextJustification::BottomCenter),
+            (2, TextJustification::BottomRight),
+            (3, TextJustification::MiddleLeft),
+            (4, TextJustification::MiddleCenter),
+            (5, TextJustification::MiddleRight),
+            (6, TextJustification::TopLeft),
+            (7, TextJustification::TopCenter),
+            (8, TextJustification::TopRight),
+            (9, TextJustification::BottomLeft),
+            (255, TextJustification::BottomLeft),
+        ] {
+            assert_eq!(justification_from_id(id), expected, "id {id}");
+        }
+    }
+
+    #[test]
+    fn a_malformed_data_stream_stops_at_the_damage_and_keeps_what_parsed() {
+        // Every framing fault a truncated or foreign file can present has to
+        // end the walk rather than panic on the slice: too short to hold a
+        // header at all, a zero-length end marker, a record claiming more
+        // bytes than remain, and a record type this reader does not know.
+        let mut symbol = Symbol::new("SHORT");
+        parse_data_stream(&mut symbol, &[1, 2, 3]);
+        assert!(symbol.pins.is_empty());
+
+        // A zero length word is Altium's end marker; anything after it is not
+        // read, so the trailing bytes must not become a second record.
+        let mut symbol = Symbol::new("END_MARKER");
+        parse_data_stream(&mut symbol, &[0, 0, 0, 0, 0xFF, 0xFF, 0xFF, 0xFF]);
+        assert!(symbol.pins.is_empty());
+
+        // Claims a 255-byte record with only a handful of bytes behind it.
+        let mut symbol = Symbol::new("OVERRUN");
+        parse_data_stream(&mut symbol, &[255, 0, 0, 0, b'x', b'y']);
+        assert!(symbol.pins.is_empty());
+
+        // A record type neither text (0) nor binary pin (1) is skipped, and
+        // the walk carries on to the record behind it.
+        let mut symbol = Symbol::new("UNKNOWN_KIND");
+        let mut data = vec![1, 0, 0, 0x7F, b'?'];
+        let text = b"|RECORD=1|ComponentDescription=survived";
+        data.extend_from_slice(&u32::try_from(text.len()).unwrap().to_le_bytes()[..3]);
+        data.push(0);
+        data.extend_from_slice(text);
+        parse_data_stream(&mut symbol, &data);
+        assert_eq!(symbol.description, "survived");
+    }
+
+    #[test]
     fn partcount_one_decodes_to_zero_no_floor() {
         // Altium stores count+1, so a single-part symbol stores PartCount=1 => internal
         // 0. The old `.max(1)` floor mutated that to 1, which the writer re-emitted as
@@ -484,5 +538,20 @@ mod tests {
         let mut symbol = Symbol::new("P");
         parse_text_record(&mut symbol, &bytes);
         assert_eq!(symbol.parameters[0].value, "10\u{00B5}F");
+    }
+
+    #[test]
+    fn empty_or_unparsable_record_fields_leave_the_symbol_as_it_was() {
+        // An empty LibReference is not a name — taking it would blank out the
+        // symbol's OLE storage name and make it unaddressable.
+        let mut symbol = Symbol::new("KEEP_ME");
+        parse_text_record_from_string(&mut symbol, "|RECORD=1|LibReference=");
+        assert_eq!(symbol.name, "KEEP_ME");
+
+        // A polyline record carrying no usable geometry is dropped rather than
+        // added as a degenerate shape.
+        let mut symbol = Symbol::new("NO_POLYLINE");
+        parse_text_record_from_string(&mut symbol, "|RECORD=6|LocationCount=0");
+        assert!(symbol.polylines.is_empty());
     }
 }

@@ -2543,6 +2543,160 @@ mod tests {
         }
 
         #[test]
+        fn a_primitive_only_the_a_side_has_is_reported_from_its_own_side() {
+            // Every family diff is directional. Comparing the richer component
+            // as A exercises the only_in_a arms, which a B-side-only fixture
+            // leaves untouched — and an unreported deletion is the worst kind.
+            let dir = test_temp_dir();
+            let server = create_test_server(dir.path());
+            let path = dir.path().join("OnlyInA.PcbLib");
+
+            let base = one_of_each("BASE");
+            let mut rich = one_of_each("RICH");
+            rich.add_track(Track::new(-9.0, 9.0, 9.0, 9.0, 0.2, Layer::TopOverlay));
+            rich.add_arc(Arc::circle(9.0, 9.0, 1.0, 0.2, Layer::TopOverlay));
+
+            let mut lib = PcbLib::new();
+            lib.add(base);
+            lib.add(rich);
+            lib.save(&path).unwrap();
+
+            // RICH first, so its unmatched track and arc are on the A side.
+            let r = server.call_compare_components(&json!({
+                "filepath_a": path.to_string_lossy(), "component_a": "RICH",
+                "filepath_b": path.to_string_lossy(), "component_b": "BASE",
+            }));
+            assert!(!r.is_error, "{}", get_result_text(&r));
+            let parsed = parse_result_json(&r);
+
+            for family in ["tracks", "arcs"] {
+                let entry = parsed["differences"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|d| d["field"] == family)
+                    .expect("a diff for this family");
+                let only_in_a = entry["differences"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|d| d["status"] == "only_in_a");
+                assert!(only_in_a, "{family}: {entry}");
+            }
+        }
+
+        #[test]
+        fn include_geometry_false_suppresses_symbol_detail_too() {
+            // The SchLib side has its own pin, shape and parameter detail
+            // blocks behind the same flag; each has to fall back to the count
+            // alone rather than serialising the primitives.
+            use crate::altium::schlib::{Parameter, Rectangle};
+
+            let dir = test_temp_dir();
+            let server = create_test_server(dir.path());
+
+            let mut lib_a = SchLib::new();
+            let mut sym_a = Symbol::new("SYM");
+            sym_a.add_pin(Pin::new("1", "1", -20, 0, 10, PinOrientation::Left));
+            sym_a.add_parameter(Parameter::new("Value", "1k"));
+            lib_a.add(sym_a);
+            let path_a = dir.path().join("NoGeomA.SchLib");
+            lib_a.save(&path_a).unwrap();
+
+            let mut lib_b = SchLib::new();
+            let mut sym_b = Symbol::new("SYM");
+            sym_b.add_pin(Pin::new("1", "1", -20, 0, 10, PinOrientation::Left));
+            sym_b.add_pin(Pin::new("2", "2", 20, 0, 10, PinOrientation::Right));
+            sym_b.add_parameter(Parameter::new("Value", "2k"));
+            sym_b.add_rectangle(Rectangle::new(-10, -10, 10, 10));
+            lib_b.add(sym_b);
+            let path_b = dir.path().join("NoGeomB.SchLib");
+            lib_b.save(&path_b).unwrap();
+
+            let r = server.call_compare_components(&json!({
+                "filepath_a": path_a.to_string_lossy(), "component_a": "SYM",
+                "filepath_b": path_b.to_string_lossy(), "component_b": "SYM",
+                "include_geometry": false,
+            }));
+            assert!(!r.is_error, "{}", get_result_text(&r));
+            let parsed = parse_result_json(&r);
+            let fields: Vec<&str> = parsed["differences"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter_map(|d| d["field"].as_str())
+                .collect();
+
+            assert!(fields.contains(&"pin_count"), "{fields:?}");
+            for suppressed in ["pins", "parameters", "rectangles"] {
+                assert!(
+                    !fields.contains(&suppressed),
+                    "{suppressed:?} leaked with include_geometry=false: {fields:?}"
+                );
+            }
+        }
+
+        #[test]
+        fn include_geometry_false_keeps_the_counts_and_drops_the_detail() {
+            let dir = test_temp_dir();
+            let server = create_test_server(dir.path());
+            let path = dir.path().join("NoGeom.PcbLib");
+
+            let base = one_of_each("BASE");
+            let mut rich = one_of_each("RICH");
+            rich.add_pad(Pad::smd("2", 5.0, 5.0, 1.0, 1.0));
+            rich.add_via(Via::new(5.0, 5.0, 0.6, 0.3));
+            rich.add_track(Track::new(-9.0, 9.0, 9.0, 9.0, 0.2, Layer::TopOverlay));
+            rich.add_arc(Arc::circle(9.0, 9.0, 1.0, 0.2, Layer::TopOverlay));
+            rich.add_region(Region::rectangle(8.0, 8.0, 9.0, 9.0, Layer::TopCourtyard));
+            rich.add_text(make_text("EXTRA", 9.0, 9.0));
+            rich.add_fill(Fill::new(8.0, 8.0, 9.0, 9.0, Layer::TopOverlay));
+
+            let mut lib = PcbLib::new();
+            lib.add(base);
+            lib.add(rich);
+            lib.save(&path).unwrap();
+
+            let r = server.call_compare_components(&json!({
+                "filepath_a": path.to_string_lossy(), "component_a": "BASE",
+                "filepath_b": path.to_string_lossy(), "component_b": "RICH",
+                "include_geometry": false,
+            }));
+            assert!(!r.is_error, "{}", get_result_text(&r));
+            let parsed = parse_result_json(&r);
+
+            let fields: Vec<&str> = parsed["differences"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter_map(|d| d["field"].as_str())
+                .collect();
+
+            // The per-family counts still differ and must be reported...
+            for expected in [
+                "pad_count",
+                "via_count",
+                "track_count",
+                "arc_count",
+                "region_count",
+                "text_count",
+                "fill_count",
+            ] {
+                assert!(
+                    fields.contains(&expected),
+                    "missing {expected:?}: {fields:?}"
+                );
+            }
+            // ...but the primitive-by-primitive detail is suppressed.
+            for suppressed in ["pads", "vias", "tracks", "arcs", "regions", "text", "fills"] {
+                assert!(
+                    !fields.contains(&suppressed),
+                    "{suppressed:?} leaked with include_geometry=false: {fields:?}"
+                );
+            }
+        }
+
+        #[test]
         fn compare_footprints_reports_3d_model_presence_then_path() {
             let dir = test_temp_dir();
             let server = create_test_server(dir.path());

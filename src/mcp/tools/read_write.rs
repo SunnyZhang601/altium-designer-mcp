@@ -3957,4 +3957,27 @@ mod tests {
             assert_eq!(parse_result_json(&r)["status"], "error");
         }
     }
+
+    #[test]
+    fn reading_a_schlib_outside_the_allowed_directories_is_refused() {
+        use crate::mcp::tools::test_support::{
+            create_test_schlib, create_test_server, get_result_text, test_temp_dir,
+        };
+        use serde_json::json;
+
+        let dir = test_temp_dir();
+        let other = test_temp_dir();
+        let server = create_test_server(dir.path());
+
+        let outside = other.path().join("Outside.SchLib");
+        create_test_schlib(&outside);
+
+        let r = server.call_read_schlib(&json!({ "filepath": outside.to_string_lossy() }));
+        assert!(r.is_error);
+        assert!(
+            get_result_text(&r).contains("Access denied"),
+            "{}",
+            get_result_text(&r)
+        );
+    }
 }

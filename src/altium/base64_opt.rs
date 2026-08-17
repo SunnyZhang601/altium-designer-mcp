@@ -80,4 +80,35 @@ mod tests {
             "error mentions the decode failure: {err}"
         );
     }
+
+    /// A field carrying the optional-base64 pair without
+    /// `skip_serializing_if`, so the `None` arm is actually serialised.
+    #[derive(Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+    struct AlwaysEmitted {
+        #[serde(with = "crate::altium::base64_opt")]
+        payload: Option<Vec<u8>>,
+    }
+
+    #[test]
+    fn absent_payloads_survive_a_round_trip_as_null() {
+        // The None arm has to write JSON null and read it back as None; a
+        // silent coercion to empty bytes would turn "no model" into
+        // "a zero-byte model".
+        let json = serde_json::to_string(&AlwaysEmitted { payload: None }).unwrap();
+        assert_eq!(json, r#"{"payload":null}"#);
+        assert_eq!(
+            serde_json::from_str::<AlwaysEmitted>(&json).unwrap(),
+            AlwaysEmitted { payload: None }
+        );
+
+        let holder = AlwaysEmitted {
+            payload: Some(vec![0xDE, 0xAD, 0xBE, 0xEF]),
+        };
+        let json = serde_json::to_string(&holder).unwrap();
+        assert_eq!(json, r#"{"payload":"3q2+7w=="}"#);
+        assert_eq!(
+            serde_json::from_str::<AlwaysEmitted>(&json).unwrap(),
+            holder
+        );
+    }
 }

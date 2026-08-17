@@ -2290,6 +2290,29 @@ mod tests {
     use serde_json::json;
 
     #[test]
+    fn key_order_is_taken_from_the_region_that_read_it() {
+        // A read-modify-write hands the original key order straight back so the
+        // block keeps its byte layout. Absent or malformed, the writer's own
+        // canonical order applies instead — an empty list, not a guess.
+        assert_eq!(
+            McpServer::parse_key_order(&json!({
+                "param_key_order": ["VERSION", "UNITS", "DATE"]
+            })),
+            vec!["VERSION", "UNITS", "DATE"]
+        );
+
+        // Non-string entries are dropped rather than stringified.
+        assert_eq!(
+            McpServer::parse_key_order(&json!({ "param_key_order": ["A", 7, null, "B"] })),
+            vec!["A", "B"]
+        );
+
+        for absent in [json!({}), json!({ "param_key_order": null })] {
+            assert!(McpServer::parse_key_order(&absent).is_empty(), "{absent}");
+        }
+    }
+
+    #[test]
     fn json_i32_drops_fractional_coordinate() {
         // Demonstrates the original defect: the integer reader rejects an
         // off-grid value, so a fractional coordinate was silently dropped while

@@ -418,16 +418,18 @@ pub(super) fn parse_per_layer_data(
         return (None, None, None, None, None);
     }
 
-    // Parse 32 size entries (256 bytes)
-    let mut sizes = Vec::with_capacity(32);
-    for i in 0..32 {
-        let offset = i * 8;
-        if let (Some(width), Some(height)) = (read_i32(data, offset), read_i32(data, offset + 4)) {
-            sizes.push((to_mm(width), to_mm(height)));
-        } else {
-            sizes.push((0.0, 0.0));
-        }
-    }
+    // Parse 32 size entries (256 bytes). The 320-byte guard above already proves
+    // every pair is present, so these are read as fixed 8-byte chunks rather
+    // than through fallible offsets whose `(0.0, 0.0)` fallback could never run.
+    let sizes: Vec<(f64, f64)> = data[..256]
+        .chunks_exact(8)
+        .map(|e| {
+            (
+                to_mm(i32::from_le_bytes([e[0], e[1], e[2], e[3]])),
+                to_mm(i32::from_le_bytes([e[4], e[5], e[6], e[7]])),
+            )
+        })
+        .collect();
 
     // Parse 32 corner radius entries (32 bytes, starting at offset 288)
     // Parse corner radii first so we can use them to determine shapes
@@ -461,21 +463,20 @@ pub(super) fn parse_per_layer_data(
         None
     };
 
-    // Parse 32 offset entries (256 bytes, starting at offset 320) if available
-    let offsets = if data.len() >= 576 {
-        let mut offs = Vec::with_capacity(32);
-        for i in 0..32 {
-            let offset = 320 + i * 8;
-            if let (Some(x), Some(y)) = (read_i32(data, offset), read_i32(data, offset + 4)) {
-                offs.push((to_mm(x), to_mm(y)));
-            } else {
-                offs.push((0.0, 0.0));
-            }
-        }
-        Some(offs)
-    } else {
-        None
-    };
+    // Parse 32 offset entries (256 bytes, starting at offset 320) if available.
+    // `get` is both the length check and the read, so — as with the sizes above
+    // — there is no unreachable per-entry fallback beneath it.
+    let offsets = data.get(320..576).map(|entries| {
+        entries
+            .chunks_exact(8)
+            .map(|e| {
+                (
+                    to_mm(i32::from_le_bytes([e[0], e[1], e[2], e[3]])),
+                    to_mm(i32::from_le_bytes([e[4], e[5], e[6], e[7]])),
+                )
+            })
+            .collect()
+    });
 
     (
         corner_radius_percent,
@@ -1162,37 +1163,32 @@ fn read_region_contour(
     })? as usize;
     let data_offset = at + 4;
     let end = data_offset + count * 16;
-    if props_block.len() < end {
-        return Err(AltiumError::parse_error(
+    // The data-driven length check IS the read: taking the whole contour as one
+    // slice reports a truncated block exactly as before, and leaves the
+    // per-vertex reads below infallible instead of guarded by arms no input
+    // could reach.
+    let vertex_bytes = props_block.get(data_offset..end).ok_or_else(|| {
+        AltiumError::parse_error(
             offset + at,
             format!(
                 "Region block too short for {label} with {count} vertices: {} bytes, expected {end}",
                 props_block.len()
             ),
-        ));
-    }
+        )
+    })?;
 
-    let mut contour = Vec::with_capacity(count);
-    for i in 0..count {
-        let base = data_offset + i * 16;
-        let x_internal = read_f64(props_block, base).ok_or_else(|| {
-            AltiumError::parse_error(
-                offset + base,
-                format!("failed to read {label} vertex {i} x"),
-            )
-        })?;
-        let y_internal = read_f64(props_block, base + 8).ok_or_else(|| {
-            AltiumError::parse_error(
-                offset + base + 8,
-                format!("failed to read {label} vertex {i} y"),
-            )
-        })?;
-        // Coordinates are doubles in internal units; quantise to mm.
-        contour.push(Vertex {
-            x: to_mm(x_internal.round() as i32),
-            y: to_mm(y_internal.round() as i32),
-        });
-    }
+    // Coordinates are doubles in internal units; quantise to mm.
+    let contour = vertex_bytes
+        .chunks_exact(16)
+        .map(|v| {
+            let x = f64::from_le_bytes([v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7]]);
+            let y = f64::from_le_bytes([v[8], v[9], v[10], v[11], v[12], v[13], v[14], v[15]]);
+            Vertex {
+                x: to_mm(x.round() as i32),
+                y: to_mm(y.round() as i32),
+            }
+        })
+        .collect();
     Ok((contour, end))
 }
 
@@ -1572,13 +1568,15 @@ pub(super) fn parse_component_body(data: &[u8], offset: usize) -> ParseResult<Co
     // 3D-body layer on read. The header byte
     // covers the full Mechanical1-32 range through `layer_from_id`, so a body authored
     // on any layer now reads back on its true layer. The writer already emits the
-    // matching header byte and `V7_LAYER` token, so this is a read-only fix. When the
-    // header byte is absent (empty block) fall back to the `V7_LAYER` string.
+    // matching header byte and `V7_LAYER` token, so this is a read-only fix.
+    //
+    // There is deliberately no `V7_LAYER` fallback for a missing header byte:
+    // `params` is decoded from this same block, so the only block that lacks the
+    // byte — an empty one — has no parameter string to fall back to either. The
+    // fallback that used to sit here could not run for any input.
     let layer = block0
         .first()
-        .map(|&id| layer_from_id(id))
-        .or_else(|| params.get("V7_LAYER").and_then(|v| parse_v7_layer(v)))
-        .unwrap_or(Layer::Top3DBody);
+        .map_or(Layer::Top3DBody, |&id| layer_from_id(id));
 
     // Common-header connectivity indices @3-8 (net/polygon/component). The body's
     // block starts with the layer byte @0, the 0x0C/0x00 record-type marker @1-2,
@@ -1765,24 +1763,6 @@ pub(super) fn parse_mil_value(s: Option<&str>) -> f64 {
     // Remove "mil" suffix if present
     let numeric = s.trim_end_matches("mil").trim();
     numeric.parse::<f64>().map_or(0.0, |v| v * MM_PER_MIL) // Convert mils to mm
-}
-
-/// Parses a `V7_LAYER` token (e.g., "MECHANICAL13") to a `Layer`.
-///
-/// Handles the full `MECHANICAL1`-`MECHANICAL32` range, inverting the writer's
-/// [`region_v7_layer_token`](super::super::writer) mapping via [`layer_from_id`]:
-/// `MECHANICAL{1..=16}` map to layer ids `57..=72` and `MECHANICAL{17..=32}` to
-/// `186..=201`; every mechanical layer must map, not just a subset. This is
-/// the fallback for a body whose
-/// header layer byte is missing; the primary layer source is the header byte.
-pub(super) fn parse_v7_layer(s: &str) -> Option<Layer> {
-    let n: u8 = s.strip_prefix("MECHANICAL")?.parse().ok()?;
-    let id = match n {
-        1..=16 => 56 + n,
-        17..=32 => 169 + n,
-        _ => return None,
-    };
-    Some(layer_from_id(id))
 }
 
 // =============================================================================
@@ -1988,6 +1968,110 @@ mod tests {
                 "{len} bytes: expected {expected:?}, got: {err}"
             );
         }
+    }
+
+    /// Runs `body` with a TRACE-level subscriber installed on this thread, so
+    /// the diagnostics these parsers emit on a damaged block are actually
+    /// formatted rather than skipped by the level check.
+    fn with_tracing<T>(body: impl FnOnce() -> T) -> T {
+        let subscriber = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::TRACE)
+            .with_test_writer()
+            .finish();
+        tracing::subscriber::with_default(subscriber, body)
+    }
+
+    #[test]
+    fn a_pad_record_that_stops_between_blocks_names_the_block() {
+        // Before any geometry field is read, five blocks are framed
+        // `[u32 len][payload]`. A Data stream that ends inside that framing
+        // never reaches the named fields the test above covers, so each block
+        // reports itself — otherwise a record truncated at block 2 would be
+        // indistinguishable from one carrying a malformed layer byte.
+        let whole = pad_record(&pad_geometry(52), None);
+        for (len, expected) in [
+            (0, "failed to read Pad block 0 (designator)"),
+            (6, "failed to read Pad block 1"),
+            (10, "failed to read Pad block 2"),
+            (19, "failed to read Pad block 3"),
+            (23, "failed to read Pad block 4 (geometry)"),
+            // The length prefix is present, but the payload it promises is not.
+            (30, "failed to read Pad block 4 (geometry)"),
+        ] {
+            let err = parse_pad(&whole[..len], 0).unwrap_err();
+            assert!(
+                err.to_string().contains(expected),
+                "{len} bytes: expected {expected:?}, got: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn per_layer_data_shorter_than_the_table_is_declined_whole() {
+        // The 32-entry table is all-or-nothing: 320 bytes of sizes, shapes and
+        // corner radii. A block one byte short is refused entirely rather than
+        // half-decoded, because a partial table would hand back per-layer sizes
+        // for some layers and silent zeros for the rest — a pad that looks
+        // stacked but lands on nothing below the layer the data ran out at.
+        with_tracing(|| {
+            for len in [0, 1, 319] {
+                assert_eq!(
+                    parse_per_layer_data(Some(&vec![0_u8; len])),
+                    (None, None, None, None, None),
+                    "{len} bytes"
+                );
+            }
+        });
+
+        // Absent entirely (a pad with no Block 5) is the same answer.
+        assert_eq!(parse_per_layer_data(None), (None, None, None, None, None));
+    }
+
+    #[test]
+    fn per_layer_offsets_appear_only_with_the_full_576_byte_block() {
+        // Sizes/shapes/radii occupy 320 bytes; the 32 offset pairs that follow
+        // take it to 576. Between the two the offsets are absent, not zeroed,
+        // so a caller can tell "no offsets stored" from "offsets of zero".
+        let mut data = vec![0_u8; 576];
+        // Layer 0 size 40 x 30 mil, and a non-zero offset pair to prove the
+        // table is read from 320 rather than defaulted.
+        data[0..4].copy_from_slice(&400_000_i32.to_le_bytes());
+        data[4..8].copy_from_slice(&300_000_i32.to_le_bytes());
+        data[320..324].copy_from_slice(&10_000_i32.to_le_bytes());
+        data[324..328].copy_from_slice(&(-20_000_i32).to_le_bytes());
+
+        let (_, sizes, _, _, offsets) = parse_per_layer_data(Some(&data));
+        let sizes = sizes.expect("a 576-byte block carries sizes");
+        assert_eq!(sizes.len(), 32);
+        assert!((sizes[0].0 - 1.016).abs() < 1e-6, "{}", sizes[0].0);
+        assert!((sizes[0].1 - 0.762).abs() < 1e-6, "{}", sizes[0].1);
+        assert!((sizes[31].0).abs() < EPS, "trailing entries read as zero");
+
+        let offsets = offsets.expect("a 576-byte block carries offsets");
+        assert_eq!(offsets.len(), 32);
+        assert!((offsets[0].0 - 0.0254).abs() < 1e-6, "{}", offsets[0].0);
+        assert!((offsets[0].1 + 0.0508).abs() < 1e-6, "{}", offsets[0].1);
+
+        // One byte short of the offset table: sizes still parse, offsets do not.
+        let (_, sizes, _, _, offsets) = parse_per_layer_data(Some(&data[..575]));
+        assert!(sizes.is_some(), "the 320-byte table is still complete");
+        assert!(offsets.is_none(), "a partial offset table is not reported");
+    }
+
+    #[test]
+    fn a_component_body_with_no_header_or_parameters_takes_its_defaults() {
+        // An empty properties block carries neither the layer byte nor the
+        // parameter string, so every field falls back. The name matters most:
+        // the writer emits a single space for a nameless body, and defaulting
+        // to the empty string here would add a `NAME=` key on the next save
+        // and break byte-identity for a body Altium wrote without one.
+        let (body, next) =
+            parse_component_body(&block(&[]), 0).expect("an empty block still parses");
+
+        assert_eq!(next, 4, "the 4-byte length prefix is consumed");
+        assert_eq!(body.layer, Layer::Top3DBody);
+        assert_eq!(body.name, " ");
+        assert!(body.outline.is_empty());
     }
 
     #[test]
@@ -2899,25 +2983,32 @@ mod tests {
     }
 
     #[test]
-    fn v7_layer_token_covers_the_whole_mechanical_1_to_32_range() {
-        // This is the fallback layer source for a ComponentBody whose header
-        // byte is absent. It once handled only MECHANICAL2-7 and collapsed every
-        // other mechanical layer onto Top3DBody — a 3D body silently jumping
-        // layers, which breaks the enclosure clearance checks that layer feeds.
-        assert_eq!(parse_v7_layer("MECHANICAL1"), Some(Layer::Mechanical1));
-        assert_eq!(parse_v7_layer("MECHANICAL6"), Some(Layer::Top3DBody));
-        assert_eq!(parse_v7_layer("MECHANICAL13"), Some(Layer::Mechanical13));
-        assert_eq!(parse_v7_layer("MECHANICAL16"), Some(Layer::Mechanical16));
-        assert_eq!(parse_v7_layer("MECHANICAL17"), Some(Layer::Mechanical17));
-        assert_eq!(parse_v7_layer("MECHANICAL32"), Some(Layer::Mechanical32));
+    fn a_component_body_reads_its_layer_from_the_header_byte() {
+        // The header byte is the only layer source, so it must cover the whole
+        // mechanical range on its own — a 3D body silently jumping layers breaks
+        // the enclosure clearance checks that layer feeds. `V7_LAYER` in the
+        // parameter string is written but not read back: it always agrees, and
+        // the byte reaches layers the token's old MECHANICAL2-7 mapping did not.
+        for (id, expected, token) in [
+            (57_u8, Layer::Mechanical1, "MECHANICAL1"),
+            (62, Layer::Top3DBody, "MECHANICAL6"),
+            (69, Layer::Mechanical13, "MECHANICAL13"),
+            (201, Layer::Mechanical32, "MECHANICAL32"),
+        ] {
+            let mut props = vec![0_u8; 22];
+            write_common_header(&mut props, id);
+            let params = format!("V7_LAYER={token}|NAME=body\0");
+            props[18..22].copy_from_slice(
+                &u32::try_from(params.len())
+                    .expect("fixture fits")
+                    .to_le_bytes(),
+            );
+            props.extend_from_slice(params.as_bytes());
 
-        // Out-of-range or non-mechanical tokens yield None so the caller keeps
-        // its own default rather than landing on an arbitrary layer.
-        assert_eq!(parse_v7_layer("MECHANICAL0"), None);
-        assert_eq!(parse_v7_layer("MECHANICAL33"), None);
-        assert_eq!(parse_v7_layer("TOPOVERLAY"), None);
-        assert_eq!(parse_v7_layer("MECHANICALX"), None);
-        assert_eq!(parse_v7_layer("MECHANICAL999"), None, "999 exceeds a u8");
+            let (body, _) = parse_component_body(&block(&props), 0).expect("a whole body");
+            assert_eq!(body.layer, expected, "layer id {id}");
+            assert_eq!(body.name, "body");
+        }
     }
 
     #[test]

@@ -19,11 +19,17 @@ claim more.)*
 
 ## B. Coverage (issue #302 owns the detail)
 
-- [ ] Land #379 (tool layer to ~98%+ on the production metric).
-- [ ] **Guard-then-read rework** (offered to ande2407): drop the redundant upfront length
-      guards in the `PcbLib` parsers so each read's `ok_or_else` arm becomes live, reachable
-      error handling — same behaviour, simpler, and the arms become testable.
-- [ ] Close the remainder to the 99% gate (production metric, `main.rs` excluded — see #381).
+*(empty — §B completed 2026-08-17. #379 took the tool layer past 98%; the
+guard-then-read rework landed as #383, so a truncated block is now refused by the
+field that could not be read rather than by an upfront length constant; and #385
+plus #387 cleared the 99% gate. Clearing it left only five lines of margin, so the
+last three constant guards in `pcblib/reader/parsers.rs` were folded into their
+own reads, taking that file to 100% — 99.07% overall on the production metric,
+`main.rs` excluded, 390 uncovered lines of 41,892, about 28 clear of the gate.
+The cheapest headroom left is `mcp/server.rs` (83 uncovered) and
+`mcp/tools/library_ops.rs` (40). Note the total moves by a few lines run to run —
+`mcp/server.rs` alone varied by one across consecutive runs — so a gate this
+tight can flap without anyone changing a thing.)*
 
 ## C. On-site Altium tooling
 

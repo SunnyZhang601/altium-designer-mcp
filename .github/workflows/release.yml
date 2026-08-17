@@ -231,13 +231,18 @@ jobs:
             # No caching for release builds - they're one-off events triggered by
             # version tags, so caches would never be reused and just waste storage
 
+            # --locked: resolve dependencies exactly as the committed
+            # Cargo.lock pins them, so all three platform binaries embed the
+            # identical set and a rebuild of the tag reproduces it. A stale
+            # lockfile fails the build here rather than shipping a silently
+            # different dependency tree.
             - name: Build release binary
               shell: bash
-              run: cargo build --release --target ${{ matrix.target }} --verbose
+              run: cargo build --locked --release --target ${{ matrix.target }} --verbose
 
             - name: Run tests
               shell: bash
-              run: cargo test --release --target ${{ matrix.target }} --verbose
+              run: cargo test --locked --release --target ${{ matrix.target }} --verbose
 
             - name: Prepare artifact (Unix)
               if: runner.os != 'Windows'

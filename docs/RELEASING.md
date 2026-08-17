@@ -162,13 +162,16 @@ draft than after the release is public.
 - **After publishing** — do not delete or move the tag. Ship `v0.1.1`. A version
   someone already downloaded should keep meaning what it meant.
 
+## Reproducible dependencies
+
+`Cargo.lock` is committed, and every build in CI and the release workflow runs
+with `--locked`: the three platform binaries embed the identical dependency
+set, a rebuild of a tag reproduces it, and a `Cargo.toml` change with a stale
+lockfile fails on its PR rather than at tag time. Dependency updates are
+deliberate commits (`cargo update`, run the full suite, commit the lockfile).
+
 ## Known gaps
 
-- **`Cargo.lock` is gitignored**, so release builds resolve dependencies fresh
-  and the three platform binaries are not guaranteed to be built against
-  identical dependency versions. Committing the lockfile and building with
-  `--locked` is the usual practice for a distributed binary; worth deciding
-  before the first release rather than after.
 - **No code signing.** Windows SmartScreen and macOS Gatekeeper will warn on
   first run; macOS users need right-click → Open. The generated release notes say
   so, and point at the provenance attestation as the stronger check. Proper

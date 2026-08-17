@@ -170,6 +170,21 @@ impl McpServer {
             }
         }
 
+        // Footprint-level replay fields, mirroring the create path: the
+        // kind-85 identity and the interleaved stream order a
+        // get_component → update_component loop echoes back.
+        if let Some(g) = fp_json.get("guid").and_then(Value::as_str) {
+            footprint.guid = Some(g.to_string());
+        }
+        if let Some(order) = fp_json.get("primitive_order") {
+            match serde_json::from_value(order.clone()) {
+                Ok(kinds) => footprint.primitive_order = kinds,
+                Err(e) => {
+                    tracing::debug!(error = %e, "invalid primitive_order; using default order");
+                }
+            }
+        }
+
         // Reject out-of-range / non-finite geometry before it can saturate in
         // from_mm() on save. The create path validates here; this path skipped
         // it (parallels the #102 update_pad/update_primitive bug). Runs in
@@ -386,6 +401,27 @@ impl McpServer {
         }
         if let Some(v) = sym_json.get("target_file_name").and_then(Value::as_str) {
             symbol.target_file_name = v.to_string();
+        }
+        // Designator position/identity and the interleaved record order,
+        // mirroring the create path: a get_component → update_component loop
+        // echoes them back, and dropping any of them moved the designator or
+        // regrouped the records.
+        if let Some(x) = sym_json.get("designator_x").and_then(Value::as_f64) {
+            symbol.designator_x = x;
+        }
+        if let Some(y) = sym_json.get("designator_y").and_then(Value::as_f64) {
+            symbol.designator_y = y;
+        }
+        if let Some(uid) = sym_json.get("designator_unique_id").and_then(Value::as_str) {
+            symbol.designator_unique_id = Some(uid.to_string());
+        }
+        if let Some(order) = sym_json.get("primitive_order") {
+            match serde_json::from_value(order.clone()) {
+                Ok(kinds) => symbol.primitive_order = kinds,
+                Err(e) => {
+                    tracing::debug!(error = %e, "invalid primitive_order; using default order");
+                }
+            }
         }
 
         // Parse pins
@@ -1379,6 +1415,98 @@ mod tests {
         assert_eq!(fp.description, "reworked 0402");
         assert_eq!(fp.pads.len(), 3);
         assert_eq!(fp.tracks.len(), 1);
+    }
+
+    /// The natural edit loop — `get_component` → `update_component` with the
+    /// echoed JSON — keeps the footprint's kind-85 identity and interleaved
+    /// stream order, mirroring the create path's replay.
+    #[test]
+    fn update_component_replays_footprint_fidelity_fields() {
+        use crate::altium::pcblib::{Footprint, Layer, Pad, PcbLib, PrimitiveKind, Track};
+
+        let dir = test_temp_dir();
+        let server = create_test_server(dir.path());
+
+        // Track before pad: an interleaving the grouped default would lose.
+        let mut fp = Footprint::new("FID");
+        fp.guid = Some("{11111111-2222-3333-4444-555555555555}".to_string());
+        fp.add_track(Track::new(-1.0, -1.0, 1.0, -1.0, 0.2, Layer::TopOverlay));
+        fp.add_pad(Pad::smd("1", -0.5, 0.0, 0.6, 0.5));
+        let mut lib = PcbLib::new();
+        lib.add(fp);
+        let path = dir.path().join("FidUpdate.PcbLib");
+        lib.save(&path).unwrap();
+
+        let fetched = parse_result_json(&server.call_get_component(&json!({
+            "filepath": path.to_string_lossy(),
+            "component_name": "FID",
+        })));
+        assert_eq!(
+            fetched["component"]["primitive_order"],
+            json!(["track", "pad"]),
+            "get_component echoes the interleaved order"
+        );
+
+        let result = server.call_update_component(&json!({
+            "filepath": path.to_string_lossy(),
+            "component_name": "FID",
+            "footprint": fetched["component"],
+        }));
+        assert!(!result.is_error, "{}", get_result_text(&result));
+
+        let reopened = PcbLib::open(&path).unwrap();
+        let fp = reopened.get("FID").unwrap();
+        assert_eq!(
+            fp.guid.as_deref(),
+            Some("{11111111-2222-3333-4444-555555555555}")
+        );
+        assert_eq!(
+            fp.primitive_order,
+            vec![PrimitiveKind::Track, PrimitiveKind::Pad]
+        );
+    }
+
+    /// The `SchLib` flavour: designator position/identity and the interleaved
+    /// record order survive the get → update loop.
+    #[test]
+    fn update_component_replays_symbol_fidelity_fields() {
+        use crate::altium::schlib::{Line, Pin, PinOrientation, SchLib, SchPrimitiveKind, Symbol};
+
+        let dir = test_temp_dir();
+        let server = create_test_server(dir.path());
+
+        let mut symbol = Symbol::new("FID");
+        symbol.designator = "U?".to_string();
+        symbol.designator_x = 5.5;
+        symbol.designator_y = -3.5;
+        symbol.add_line(Line::new(0.0, 0.0, 10.0, 10.0));
+        symbol.add_pin(Pin::new("IN", "1", 0, 0, 10, PinOrientation::Left));
+        let mut lib = SchLib::new();
+        lib.add(symbol);
+        let path = dir.path().join("FidUpdate.SchLib");
+        lib.save(&path).unwrap();
+
+        let fetched = parse_result_json(&server.call_get_component(&json!({
+            "filepath": path.to_string_lossy(),
+            "component_name": "FID",
+        })));
+
+        let result = server.call_update_component(&json!({
+            "filepath": path.to_string_lossy(),
+            "component_name": "FID",
+            "symbol": fetched["component"],
+        }));
+        assert!(!result.is_error, "{}", get_result_text(&result));
+
+        let reopened = SchLib::open(&path).unwrap();
+        let symbol = reopened.get("FID").unwrap();
+        assert!((symbol.designator_x - 5.5).abs() < 1e-9);
+        assert!((symbol.designator_y - (-3.5)).abs() < 1e-9);
+        assert!(symbol.designator_unique_id.is_some());
+        assert_eq!(
+            symbol.primitive_order,
+            vec![SchPrimitiveKind::Line, SchPrimitiveKind::Pin]
+        );
     }
 
     #[test]

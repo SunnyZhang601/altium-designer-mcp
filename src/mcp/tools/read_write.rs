@@ -379,7 +379,7 @@ impl McpServer {
                                 .collect()
                         };
 
-                        json!({
+                        let mut fp_json = json!({
                             "name": fp.name,
                             "description": fp.description,
                             "pads": pads,
@@ -391,7 +391,20 @@ impl McpServer {
                             "text": fp.text,
                             "model_3d": fp.model_3d,
                             "component_bodies": fp.component_bodies,
-                        })
+                        });
+                        // Footprint-level fidelity fields, mirroring the
+                        // struct's own serde shape (get_component serialises
+                        // the whole struct): present only when carried, and
+                        // replayed by write_pcblib so a read-modify-write
+                        // keeps the kind-85 identity and the interleaved
+                        // stream order.
+                        if let Some(guid) = &fp.guid {
+                            fp_json["guid"] = json!(guid);
+                        }
+                        if !fp.primitive_order.is_empty() {
+                            fp_json["primitive_order"] = json!(fp.primitive_order);
+                        }
+                        fp_json
                     })
                     .collect();
 
@@ -1000,6 +1013,23 @@ impl McpServer {
             };
             bodies_echo.push(body_3d_summary(&footprint, assumed_height));
 
+            // Footprint-level replay fields `read_pcblib` emits. The guid is
+            // the kind-85 identity record; the interleaved Data-stream order
+            // replaces the grouped order the add_* calls accumulated, so a
+            // read-modify-write keeps the source's stream order
+            // (`write_sequence` is advisory-safe against a stale list).
+            if let Some(g) = fp_json.get("guid").and_then(Value::as_str) {
+                footprint.guid = Some(g.to_string());
+            }
+            if let Some(order) = fp_json.get("primitive_order") {
+                match serde_json::from_value(order.clone()) {
+                    Ok(kinds) => footprint.primitive_order = kinds,
+                    Err(e) => {
+                        tracing::debug!(error = %e, "invalid primitive_order; using default order");
+                    }
+                }
+            }
+
             // Validate coordinates before adding
             if let Err(e) = Self::validate_footprint_coordinates(&footprint) {
                 return ToolCallResult::error(e);
@@ -1092,7 +1122,7 @@ impl McpServer {
                     .skip(offset)
                     .take(limit.unwrap_or(usize::MAX))
                     .map(|symbol| {
-                        json!({
+                        let mut sym_json = json!({
                             "name": symbol.name,
                             "description": symbol.description,
                             "designator": symbol.designator,
@@ -1100,6 +1130,11 @@ impl McpServer {
                             "designator_y": symbol.designator_y,
                             "designator_unique_id": symbol.designator_unique_id,
                             "part_count": symbol.part_count,
+                            "display_mode_count": symbol.display_mode_count,
+                            "current_part_id": symbol.current_part_id,
+                            "part_id_locked": symbol.part_id_locked,
+                            "source_library_name": symbol.source_library_name,
+                            "target_file_name": symbol.target_file_name,
                             "pins": symbol.pins,
                             "rectangles": symbol.rectangles,
                             "round_rects": symbol.round_rects,
@@ -1117,7 +1152,15 @@ impl McpServer {
                             "text": symbol.text,
                             "parameters": symbol.parameters,
                             "footprints": symbol.footprints,
-                        })
+                        });
+                        // The interleaved record order, mirroring the struct's
+                        // serde shape (present only when carried) and replayed
+                        // by write_schlib so a read-modify-write keeps the
+                        // source's record order.
+                        if !symbol.primitive_order.is_empty() {
+                            sym_json["primitive_order"] = json!(symbol.primitive_order);
+                        }
+                        sym_json
                     })
                     .collect();
 
@@ -1890,6 +1933,18 @@ impl McpServer {
                 }
             }
 
+            // The interleaved record order `read_schlib` reported; replaying it
+            // replaces the grouped order the add_* calls accumulated, so a
+            // read-modify-write keeps the source's record order.
+            if let Some(order) = sym_json.get("primitive_order") {
+                match serde_json::from_value(order.clone()) {
+                    Ok(kinds) => symbol.primitive_order = kinds,
+                    Err(e) => {
+                        tracing::debug!(error = %e, "invalid primitive_order; using default order");
+                    }
+                }
+            }
+
             // Validate coordinates before adding
             if let Err(e) = Self::validate_symbol_coordinates(&symbol) {
                 return ToolCallResult::error(e);
@@ -2611,6 +2666,238 @@ mod tests {
     fn ieee_map_unknown_falls_back_to_u() {
         assert_eq!(ieee_designator_prefix("flux_capacitor"), "U");
         assert_eq!(ieee_designator_prefix(""), "U");
+    }
+
+    // ==================== fidelity replay ====================
+
+    mod fidelity_replay {
+        use crate::altium::pcblib::{
+            Fill, Footprint, Layer, Pad, PcbFlags, PcbLib, Text, TextJustification, TextKind,
+            Track, Via,
+        };
+        use crate::mcp::tools::test_support::{
+            create_test_server, get_result_text, parse_result_json, test_temp_dir,
+        };
+        use serde_json::json;
+
+        /// A footprint whose fidelity fields all carry values, in a
+        /// deliberately non-canonical primitive order (text before pads) so
+        /// order replay is observable rather than coincidental. The text is
+        /// the `.Designator` special string a real footprint carries — also
+        /// what keeps `write_pcblib`'s auto-injection of one from adding a
+        /// primitive the source never had.
+        fn replay_footprint() -> Footprint {
+            let mut fp = Footprint::new("REPLAY");
+            fp.guid = Some("{11111111-2222-3333-4444-555555555555}".to_string());
+            fp.add_text(Text {
+                barcode_full_width: None,
+                barcode_full_height: None,
+                barcode_x_margin: None,
+                barcode_y_margin: None,
+                barcode_kind: 0,
+                barcode_font_name: String::new(),
+                barcode_inverted: false,
+                barcode_show_text: false,
+                x: 0.0,
+                y: -2.0,
+                text: ".Designator".to_string(),
+                height: 1.0,
+                layer: Layer::TopOverlay,
+                kind: TextKind::Stroke,
+                rotation: 0.0,
+                stroke_font: None,
+                stroke_width: None,
+                italic: false,
+                bold: false,
+                mirror: false,
+                is_comment: false,
+                is_designator: false,
+                font_name: "Arial".to_string(),
+                justification: TextJustification::default(),
+                is_inverted: false,
+                inverted_border: None,
+                use_inverted_rectangle: false,
+                inverted_rect_width: None,
+                inverted_rect_height: None,
+                inverted_rect_text_offset: None,
+                flags: PcbFlags::default(),
+                net_index: 0xFFFF,
+                polygon_index: 0xFFFF,
+                component_index: -1,
+                unique_id: None,
+                guid: Some("{AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE}".to_string()),
+                raw_geometry: None,
+            });
+            let mut via = Via::new(1.5, 0.0, 0.6, 0.3);
+            via.guid = Some("{22222222-3333-4444-5555-666666666666}".to_string());
+            fp.add_via(via);
+            let mut track = Track::new(-1.0, -1.0, 1.0, -1.0, 0.2, Layer::TopOverlay);
+            track.guid = Some("{33333333-4444-5555-6666-777777777777}".to_string());
+            fp.add_track(track);
+            let mut pad = Pad::smd("1", -0.5, 0.0, 0.6, 0.5);
+            pad.guid = Some("{44444444-5555-6666-7777-888888888888}".to_string());
+            fp.add_pad(pad);
+            let mut fill = Fill::new(-0.5, 0.8, 0.5, 1.2, Layer::TopLayer);
+            fill.guid = Some("{55555555-6666-7777-8888-999999999999}".to_string());
+            fp.add_fill(fill);
+            fp
+        }
+
+        /// `read_pcblib` → `write_pcblib` replays every fidelity field the
+        /// reader emits — pad `raw_tail`, via `raw_block`, text
+        /// `raw_geometry`, per-primitive and footprint `guid`s, and the
+        /// interleaved `primitive_order` — so a read-modify-write through the
+        /// tool layer preserves them exactly as the library API does. The
+        /// assertion is total: the second read's footprint JSON must equal
+        /// the first, field for field (raw fields included, so the written
+        /// binary blocks were byte-identical to the source's).
+        #[test]
+        fn write_pcblib_replays_fidelity_fields_read_pcblib_emits() {
+            let dir = test_temp_dir();
+            let server = create_test_server(dir.path());
+
+            let mut lib = PcbLib::new();
+            lib.add(replay_footprint());
+            let src = dir.path().join("Src.PcbLib");
+            lib.save(&src).unwrap();
+
+            let first_read = server.call_read_pcblib(&json!({
+                "filepath": src.to_string_lossy(),
+            }));
+            assert!(!first_read.is_error, "{}", get_result_text(&first_read));
+            let footprints_before = parse_result_json(&first_read)["footprints"].clone();
+
+            // The first read must actually carry the replay fields, or the
+            // equality below passes vacuously.
+            let fp = &footprints_before[0];
+            assert_eq!(
+                fp["primitive_order"],
+                json!(["text", "via", "track", "pad", "fill"]),
+                "authored (non-canonical) order survives the first read"
+            );
+            assert!(fp["pads"][0]["raw_tail"].is_string(), "pad raw_tail read");
+            assert!(fp["vias"][0]["raw_block"].is_string(), "via raw_block read");
+            assert!(
+                fp["text"][0]["raw_geometry"].is_string(),
+                "text raw_geometry read"
+            );
+            for list in ["pads", "vias", "tracks", "fills", "text"] {
+                assert!(fp[list][0]["guid"].is_string(), "{list} guid read");
+            }
+            assert!(fp["guid"].is_string(), "footprint guid read");
+
+            let dst = dir.path().join("Dst.PcbLib");
+            let write = server.call_write_pcblib(&json!({
+                "filepath": dst.to_string_lossy(),
+                "footprints": footprints_before,
+            }));
+            assert!(!write.is_error, "{}", get_result_text(&write));
+
+            let second_read = server.call_read_pcblib(&json!({
+                "filepath": dst.to_string_lossy(),
+            }));
+            assert!(!second_read.is_error, "{}", get_result_text(&second_read));
+            let footprints_after = parse_result_json(&second_read)["footprints"].clone();
+
+            assert_eq!(
+                footprints_before, footprints_after,
+                "read → write → read is lossless"
+            );
+        }
+
+        /// `read_schlib` → `write_schlib` replays a symbol's interleaved
+        /// `primitive_order`, so a read-modify-write keeps the source's
+        /// record order instead of regrouping records by kind.
+        #[test]
+        fn write_schlib_replays_the_symbol_primitive_order() {
+            use crate::altium::schlib::{Line, Pin, PinOrientation, Rectangle, SchLib};
+
+            let dir = test_temp_dir();
+            let server = create_test_server(dir.path());
+
+            // Line between the pin and the rectangle: a non-canonical
+            // interleaving no grouped rewrite would reproduce. The part/mode
+            // scalars carry non-defaults so their emission is observable too.
+            let mut symbol = crate::altium::schlib::Symbol::new("REPLAY");
+            symbol.part_count = 2;
+            symbol.display_mode_count = 2;
+            symbol.current_part_id = 2;
+            symbol.part_id_locked = true;
+            symbol.add_pin(Pin::new("IN", "1", 0, 0, 10, PinOrientation::Left));
+            symbol.add_line(Line::new(0.0, 0.0, 10.0, 10.0));
+            symbol.add_rectangle(Rectangle::new(0.0, 0.0, 20.0, 20.0));
+
+            let mut lib = SchLib::new();
+            lib.add(symbol);
+            let src = dir.path().join("Src.SchLib");
+            lib.save(&src).unwrap();
+
+            let first_read = server.call_read_schlib(&json!({
+                "filepath": src.to_string_lossy(),
+            }));
+            assert!(!first_read.is_error, "{}", get_result_text(&first_read));
+            let symbols = parse_result_json(&first_read)["symbols"].clone();
+            assert_eq!(
+                symbols[0]["primitive_order"],
+                json!(["pin", "line", "rectangle"]),
+                "authored interleaving survives the first read"
+            );
+
+            let dst = dir.path().join("Dst.SchLib");
+            let write = server.call_write_schlib(&json!({
+                "filepath": dst.to_string_lossy(),
+                "symbols": symbols,
+            }));
+            assert!(!write.is_error, "{}", get_result_text(&write));
+
+            let second_read = server.call_read_schlib(&json!({
+                "filepath": dst.to_string_lossy(),
+            }));
+            assert!(!second_read.is_error, "{}", get_result_text(&second_read));
+            let symbol_after = parse_result_json(&second_read)["symbols"][0].clone();
+            assert_eq!(
+                symbol_after["primitive_order"],
+                json!(["pin", "line", "rectangle"]),
+                "record order survives the tool-layer round trip"
+            );
+            // The part/mode scalars ride the same read → write → read loop.
+            assert_eq!(symbol_after["part_count"], 2);
+            assert_eq!(symbol_after["display_mode_count"], 2);
+            assert_eq!(symbol_after["current_part_id"], 2);
+            assert_eq!(symbol_after["part_id_locked"], true);
+        }
+
+        /// A malformed `primitive_order` is ignored with the default grouped
+        /// order rather than failing the write — it is advisory, exactly as
+        /// on the struct.
+        #[test]
+        fn invalid_primitive_order_is_ignored_not_fatal() {
+            let dir = test_temp_dir();
+            let server = create_test_server(dir.path());
+
+            let pcb = dir.path().join("Bad.PcbLib");
+            let write = server.call_write_pcblib(&json!({
+                "filepath": pcb.to_string_lossy(),
+                "footprints": [{
+                    "name": "FP",
+                    "pads": [{ "designator": "1", "x": 0.0, "y": 0.0, "width": 0.6, "height": 0.5 }],
+                    "primitive_order": ["not_a_kind"],
+                }],
+            }));
+            assert!(!write.is_error, "{}", get_result_text(&write));
+
+            let sch = dir.path().join("Bad.SchLib");
+            let write = server.call_write_schlib(&json!({
+                "filepath": sch.to_string_lossy(),
+                "symbols": [{
+                    "name": "SYM",
+                    "pins": [{ "designator": "1", "name": "IN", "x": 0, "y": 0,
+                               "orientation": "left" }],
+                    "primitive_order": 42,
+                }],
+            }));
+            assert!(!write.is_error, "{}", get_result_text(&write));
+        }
     }
 
     // ==================== extract_style ====================

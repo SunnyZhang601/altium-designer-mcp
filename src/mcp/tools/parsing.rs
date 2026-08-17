@@ -129,6 +129,26 @@ fn json_guid(json: &Value) -> Option<String> {
     json.get("guid").and_then(Value::as_str).map(str::to_string)
 }
 
+/// Reads a base64-encoded byte field: the raw replay bases `read_pcblib`
+/// emits (a pad's `raw_tail`, a via's `raw_block`, a text's `raw_geometry`)
+/// and embedded image bytes. Passing one back through the tool layer keeps
+/// the write byte-identical to the source block. Invalid base64 is treated
+/// as absent (this parser is lenient Option-style throughout) with a debug
+/// log for diagnosis; the writer then falls back to its captured template,
+/// so the write still succeeds semantically.
+fn json_base64(json: &Value, key: &str) -> Option<Vec<u8>> {
+    json.get(key).and_then(Value::as_str).and_then(|s| {
+        use base64::Engine as _;
+        match base64::engine::general_purpose::STANDARD.decode(s.as_bytes()) {
+            Ok(bytes) => Some(bytes),
+            Err(e) => {
+                tracing::debug!(error = %e, key, "invalid base64; ignoring");
+                None
+            }
+        }
+    })
+}
+
 /// Reads an optional verbatim string field from a primitive's JSON.
 fn json_guidless_opt(json: &Value, key: &str) -> Option<String> {
     json.get(key).and_then(Value::as_str).map(str::to_string)
@@ -461,7 +481,7 @@ impl McpServer {
             flags: json_flags(json),
             unique_id: json_unique_id(json),
             guid: json_guid(json),
-            raw_tail: None,
+            raw_tail: json_base64(json, "raw_tail"),
             identity_guid,
             identity_guid_b,
         })
@@ -513,6 +533,7 @@ impl McpServer {
         track.solder_mask_expansion = json_f64(json, "solder_mask_expansion");
         track.keepout_restrictions = json_keepout(json);
         track.unique_id = json_unique_id(json);
+        track.guid = json_guid(json);
         Ok(track)
     }
 
@@ -844,7 +865,7 @@ impl McpServer {
             component_index: json_component_index(json),
             unique_id: json_unique_id(json),
             guid: json_guid(json),
-            raw_geometry: None,
+            raw_geometry: json_base64(json, "raw_geometry"),
             barcode_full_width: json_f64(json, "barcode_full_width"),
             barcode_full_height: json_f64(json, "barcode_full_height"),
             barcode_x_margin: json_f64(json, "barcode_x_margin"),
@@ -1014,7 +1035,7 @@ impl McpServer {
     #[allow(clippy::too_many_lines)] // Via has many optional fields requiring individual parsing
     pub(crate) fn parse_via(json: &Value) -> Result<crate::altium::pcblib::Via, String> {
         use crate::altium::pcblib::{
-            DrillLayerPairType, Layer, MaskExpansionMode, PowerPlaneConnectStyle, Via,
+            DrillLayerPairType, Layer, MaskExpansionMode, PowerPlaneConnectStyle, Via, ViaStackMode,
         };
 
         let x = json
@@ -1164,8 +1185,30 @@ impl McpServer {
             via.hole_negative_tolerance = Some(v);
         }
 
+        if let Some(v) = json
+            .get("solder_mask_expansion_back")
+            .and_then(Value::as_f64)
+        {
+            via.solder_mask_expansion_back = Some(v);
+        }
+        via.diameter_stack_mode = match json
+            .get("diameter_stack_mode")
+            .and_then(Value::as_str)
+            .map(str::to_lowercase)
+            .as_deref()
+        {
+            Some("top_middle_bottom") => ViaStackMode::TopMiddleBottom,
+            Some("full_stack") => ViaStackMode::FullStack,
+            _ => ViaStackMode::Simple,
+        };
+        if let Some(diameters) = json.get("per_layer_diameters").and_then(Value::as_array) {
+            via.per_layer_diameters = Some(diameters.iter().filter_map(Value::as_f64).collect());
+        }
+
         via.flags = json_flags(json);
         via.unique_id = json_unique_id(json);
+        via.guid = json_guid(json);
+        via.raw_block = json_base64(json, "raw_block");
 
         Ok(via)
     }
@@ -1219,6 +1262,7 @@ impl McpServer {
         fill.solder_mask_expansion = json.get("solder_mask_expansion").and_then(Value::as_f64);
         fill.keepout_restrictions = json_keepout(json);
         fill.unique_id = json_unique_id(json);
+        fill.guid = json_guid(json);
 
         Ok(fill)
     }
@@ -1920,21 +1964,8 @@ impl McpServer {
             .unwrap_or_default()
             .to_string();
         // Base64-encoded raw image bytes destined for the library /Storage
-        // stream. Invalid base64 is treated as absent (this parser is lenient
-        // Option-style throughout), with a debug log for diagnosis.
-        let image_data = json
-            .get("image_data")
-            .and_then(Value::as_str)
-            .and_then(|s| {
-                use base64::Engine as _;
-                match base64::engine::general_purpose::STANDARD.decode(s.as_bytes()) {
-                    Ok(bytes) => Some(bytes),
-                    Err(e) => {
-                        tracing::debug!(error = %e, "invalid base64 in image_data; ignoring");
-                        None
-                    }
-                }
-            });
+        // stream.
+        let image_data = json_base64(json, "image_data");
         let owner_part_id = json_i32(json, "owner_part_id").unwrap_or(1);
 
         Some(Image {
@@ -2894,6 +2925,98 @@ mod tests {
         }))
         .expect("via should parse");
         assert_eq!(via.unique_id, None);
+    }
+
+    #[test]
+    fn json_base64_decodes_and_ignores_invalid() {
+        // "AAEC" is [0, 1, 2]; invalid base64 and absent keys both read None,
+        // so the writer falls back to its template instead of erroring.
+        assert_eq!(
+            super::json_base64(&json!({ "raw": "AAEC" }), "raw"),
+            Some(vec![0u8, 1, 2])
+        );
+        assert_eq!(super::json_base64(&json!({ "raw": "!!!" }), "raw"), None);
+        assert_eq!(super::json_base64(&json!({}), "raw"), None);
+    }
+
+    #[test]
+    fn parse_pad_preserves_raw_tail() {
+        let pad = McpServer::parse_pad(&json!({
+            "designator": "1", "x": 0.0, "y": 0.0, "width": 0.6, "height": 0.5,
+            "raw_tail": "AAECAwQ=",
+        }))
+        .expect("pad should parse");
+        assert_eq!(pad.raw_tail.as_deref(), Some(&[0u8, 1, 2, 3, 4][..]));
+    }
+
+    #[test]
+    fn parse_via_reads_diameter_stack_and_back_mask() {
+        use crate::altium::pcblib::ViaStackMode;
+        let via = McpServer::parse_via(&json!({
+            "x": 0.0, "y": 0.0, "diameter": 0.6, "hole_size": 0.3,
+            "diameter_stack_mode": "full_stack",
+            "per_layer_diameters": [0.6, 0.7, 0.8],
+            "solder_mask_expansion_back": 0.05,
+        }))
+        .expect("via should parse");
+        assert_eq!(via.diameter_stack_mode, ViaStackMode::FullStack);
+        assert_eq!(
+            via.per_layer_diameters.as_deref(),
+            Some(&[0.6, 0.7, 0.8][..])
+        );
+        assert_eq!(via.solder_mask_expansion_back, Some(0.05));
+
+        // Absent -> struct defaults, so a from-scratch via is unchanged.
+        let plain = McpServer::parse_via(&json!({
+            "x": 0.0, "y": 0.0, "diameter": 0.6, "hole_size": 0.3,
+        }))
+        .expect("via should parse");
+        assert_eq!(plain.diameter_stack_mode, ViaStackMode::Simple);
+        assert_eq!(plain.per_layer_diameters, None);
+        assert_eq!(plain.solder_mask_expansion_back, None);
+    }
+
+    #[test]
+    fn parse_via_preserves_guid_and_raw_block() {
+        let via = McpServer::parse_via(&json!({
+            "x": 0.0, "y": 0.0, "diameter": 0.6, "hole_size": 0.3,
+            "guid": "{01234567-89AB-CDEF-0123-456789ABCDEF}",
+            "raw_block": "BQYH",
+        }))
+        .expect("via should parse");
+        assert_eq!(
+            via.guid.as_deref(),
+            Some("{01234567-89AB-CDEF-0123-456789ABCDEF}")
+        );
+        assert_eq!(via.raw_block.as_deref(), Some(&[5u8, 6, 7][..]));
+    }
+
+    #[test]
+    fn parse_text_preserves_raw_geometry() {
+        let text = McpServer::parse_text(&json!({
+            "text": "REF", "x": 0.0, "y": 0.0, "height": 1.0, "layer": "Top Overlay",
+            "raw_geometry": "CAkK",
+        }))
+        .expect("text should parse");
+        assert_eq!(text.raw_geometry.as_deref(), Some(&[8u8, 9, 10][..]));
+    }
+
+    #[test]
+    fn parse_track_and_fill_preserve_guid() {
+        let guid = "{FEDCBA98-7654-3210-FEDC-BA9876543210}";
+        let track = McpServer::parse_track(&json!({
+            "x1": 0.0, "y1": 0.0, "x2": 1.0, "y2": 0.0, "width": 0.2,
+            "layer": "Top Overlay", "guid": guid,
+        }))
+        .expect("track should parse");
+        assert_eq!(track.guid.as_deref(), Some(guid));
+
+        let fill = McpServer::parse_fill(&json!({
+            "x1": 0.0, "y1": 0.0, "x2": 1.0, "y2": 1.0,
+            "layer": "Top Layer", "guid": guid,
+        }))
+        .expect("fill should parse");
+        assert_eq!(fill.guid.as_deref(), Some(guid));
     }
 
     #[test]

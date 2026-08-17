@@ -54,7 +54,7 @@ read and write the actual `.PcbLib` / `.SchLib` files.
 
 | If you… | Then… |
 |---------|-------|
-| Use Claude Code, Claude Desktop, or VSCode + Copilot and design in Altium | ✅ This is for you |
+| Use Claude Code, Claude Desktop, Google Antigravity, or VSCode + Copilot and design in Altium | ✅ This is for you |
 | Want pre-baked generators for a fixed set of packages | ❌ Not this — the point is *any* component |
 | Don't use Altium | ❌ Not applicable |
 
@@ -278,7 +278,8 @@ Additional layers supported:
 
 See [CONTRIBUTING.md § Development Setup](CONTRIBUTING.md#development-setup) for build instructions.
 
-The release binary will be at `target/release/altium-designer-mcp`.
+To build an optimised binary from source, run `cargo build --release`; it lands at
+`target/release/altium-designer-mcp`.
 
 ### Verifying a downloaded release
 
@@ -480,7 +481,9 @@ Contributions welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 cargo test
 ```
 
-Tests are self-contained and generate their own data programmatically. Temporary files are created in `.tmp/` (git-ignored) and automatically cleaned up.
+Write-path tests generate their own data programmatically; reader tests parse the committed
+Altium-authored golden fixtures (see [Sample Files](#sample-files)). Temporary files are
+created in `.tmp/` (git-ignored) and automatically cleaned up.
 
 The full build, formatting, and lint commands are canonical in
 [CONTRIBUTING.md § Development Setup](CONTRIBUTING.md#development-setup).

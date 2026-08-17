@@ -1664,12 +1664,13 @@ pub(super) fn parse_component_body(data: &[u8], offset: usize) -> ParseResult<Co
     Ok((body, current))
 }
 
-/// `ComponentBody` parameter keys the typed [`ComponentBody`] model consumes (each
-/// backed by a struct field). Every OTHER key in the block — including the
-/// writer's hard-coded literals (`ARCRESOLUTION`, `CAVITYHEIGHT`, `IDENTIFIER`,
-/// `TEXTURE*`, `MODEL.2D.X/Y`, `MODEL.MODELTYPE`, `MODEL.MODELSOURCE`,
-/// `MODEL.EXTRUDED.*`) — is captured verbatim into
-/// [`ComponentBody::additional_parameters`] so a read-modify-write does not drop it.
+/// `ComponentBody` parameter keys excluded from `additional_parameters` capture:
+/// each is either backed by a typed [`ComponentBody`] field (`IDENTIFIER`,
+/// `TEXTURECENTERX/Y`, `TEXTURESIZEX/Y`, `MODEL.2D.X/Y`, `MODEL.MODELTYPE`,
+/// `MODEL.EXTRUDED.*`, …) or a literal the writer re-emits unconditionally
+/// (`ARCRESOLUTION`, `TEXTURE`). Every OTHER key in the block is captured
+/// verbatim into [`ComponentBody::additional_parameters`] so a
+/// read-modify-write does not drop it.
 // Every key `build_component_body_params` (writer) emits unconditionally belongs
 // here, or the reader captures it into `additional_parameters` and it round-trips
 // as a spurious extra entry — and for the deliberately-repeated ARCRESOLUTION,

@@ -11,6 +11,7 @@ oracle in [`tests/integration/`](../tests/integration/).)
 |------|------------|---------------|
 | [`Verify-Libraries.ps1`](Verify-Libraries.ps1) | Launch Altium to confirm a `.PcbLib`/`.SchLib` opens cleanly | **Yes** |
 | [`Generate-Samples.ps1`](Generate-Samples.ps1) | Launch Altium to author the sample libraries | **Yes** |
+| [`Watch-AltiumDialog.ps1`](Watch-AltiumDialog.ps1) | Run alongside `Generate-Samples.ps1`: catches the modal dialog a compile error or crash opens headlessly, prints the offending identifier and kills Altium | **Yes** |
 | [`Verify-RoundTrip.ps1`](Verify-RoundTrip.ps1) | Write libraries through the MCP server, then check Altium resolves every component name | **Yes** |
 | [`Verify-MaskCacheState.ps1`](Verify-MaskCacheState.ps1) | Write pads carrying each mask-expansion cache state, then show what Altium makes of them | **Yes** |
 | [`Resolve-AltiumExe.ps1`](Resolve-AltiumExe.ps1) | Shared helper: read `ALTIUM_EXE` from the repo-root `.env.local` | — |

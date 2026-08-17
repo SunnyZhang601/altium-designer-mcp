@@ -86,7 +86,7 @@ fn write_string_block(
 /// - Top 3D Body: 62 (Mech 6)
 /// - Bottom 3D Body: 63 (Mech 7)
 #[allow(clippy::too_many_lines)] // Layer-to-ID lookup for all layer types
-const fn layer_to_id(layer: Layer) -> u8 {
+pub(super) const fn layer_to_id(layer: Layer) -> u8 {
     match layer {
         Layer::TopLayer => 1,
         // Mid layers (IDs 2-31)
@@ -1659,8 +1659,15 @@ fn encode_component_body(data: &mut Vec<u8>, body: &ComponentBody, outline: &[(f
 fn encode_component_body_block(body: &ComponentBody, outline: &[(f64, f64)]) -> Vec<u8> {
     let mut block = Vec::with_capacity(128);
 
-    // Layer ID (1 byte)
-    block.push(layer_to_id(body.layer));
+    // Layer ID (1 byte). An unmapped byte the reader could not decode is
+    // replayed verbatim while the body still sits on the `MultiLayer`
+    // catch-all its decode produced (#391); a retargeted body gets the
+    // canonical id for its new layer.
+    let layer_id = match body.raw_layer_id {
+        Some(id) if body.layer == Layer::MultiLayer => id,
+        _ => layer_to_id(body.layer),
+    };
+    block.push(layer_id);
 
     // Record type marker (2 bytes): 0x0C 0x00
     block.push(0x0C);
@@ -1767,7 +1774,14 @@ fn build_component_body_params(body: &ComponentBody) -> String {
     // MECHANICAL{n} token for any mechanical layer (Top3DBody=MECHANICAL6,
     // Mechanical1=MECHANICAL1, etc.) instead of hardcoding one — a mismatch
     // between the param string and the layer byte makes Altium drop the body.
-    params.push(format!("V7_LAYER={}", v7_layer_token(body.layer)));
+    // A captured token replays under the same condition as the raw layer
+    // byte it pairs with (#391), so byte and token can never re-emit
+    // mismatched against each other.
+    let v7_token = match &body.v7_layer {
+        Some(token) if body.layer == Layer::MultiLayer => token.clone(),
+        _ => v7_layer_token(body.layer),
+    };
+    params.push(format!("V7_LAYER={v7_token}"));
 
     // Standard parameters. Each field's default reproduces the prior hard-coded
     // literal exactly, so a template-default body stays byte-identical (the oracle
@@ -3630,6 +3644,61 @@ mod tests {
         assert!((b.model_2d_rotation - 90.0).abs() < 1e-9);
         assert_eq!(b.name, "BODY_A");
         assert_eq!(b.layer, Layer::Mechanical13, "body layer round-trips");
+    }
+
+    /// #391: a header layer byte `layer_from_id` does not map decodes to the
+    /// `MultiLayer` catch-all but must round-trip verbatim, together with its
+    /// `V7_LAYER` token — the pair is the body's one-byte replay base.
+    #[test]
+    fn component_body_unmapped_layer_byte_roundtrips_verbatim() {
+        use super::super::reader;
+
+        let mut original = Footprint::new("RT_BODY_RAWLAYER");
+        let mut body = ComponentBody::new("{G-1234}", "p.step");
+        body.layer = Layer::MultiLayer;
+        body.raw_layer_id = Some(150); // unmapped: 86-185 has no Layer variant
+        body.v7_layer = Some("MECHANICAL22".to_string());
+        original.add_component_body(body);
+
+        let data = encode_data_stream(&original).expect("encode");
+        let mut decoded = Footprint::new("RT_BODY_RAWLAYER");
+        reader::parse_data_stream(&mut decoded, &data, None);
+
+        let b = &decoded.component_bodies[0];
+        assert_eq!(b.layer, Layer::MultiLayer, "catch-all decode is unchanged");
+        assert_eq!(b.raw_layer_id, Some(150), "the authored byte survives");
+        assert_eq!(
+            b.v7_layer.as_deref(),
+            Some("MECHANICAL22"),
+            "the authored token survives"
+        );
+
+        // And the second write re-emits the identical pair.
+        let data2 = encode_data_stream(&decoded).expect("re-encode");
+        assert_eq!(data, data2, "unmapped-layer body is byte-stable");
+    }
+
+    /// Retargeting such a body to a real layer discards the stale pair and
+    /// emits the canonical byte + token for the new layer.
+    #[test]
+    fn component_body_retarget_discards_stale_raw_layer_pair() {
+        use super::super::reader;
+
+        let mut original = Footprint::new("RT_BODY_RETARGET");
+        let mut body = ComponentBody::new("{G-1234}", "p.step");
+        body.layer = Layer::Mechanical13; // retargeted away from the catch-all
+        body.raw_layer_id = Some(150); // stale echo from a previous read
+        body.v7_layer = Some("MECHANICAL22".to_string());
+        original.add_component_body(body);
+
+        let data = encode_data_stream(&original).expect("encode");
+        let mut decoded = Footprint::new("RT_BODY_RETARGET");
+        reader::parse_data_stream(&mut decoded, &data, None);
+
+        let b = &decoded.component_bodies[0];
+        assert_eq!(b.layer, Layer::Mechanical13, "typed layer wins");
+        assert_eq!(b.raw_layer_id, None, "stale byte was not written");
+        assert_eq!(b.v7_layer, None, "canonical token was written");
     }
 
     #[test]

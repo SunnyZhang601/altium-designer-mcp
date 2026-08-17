@@ -1578,6 +1578,20 @@ pub(super) fn parse_component_body(data: &[u8], offset: usize) -> ParseResult<Co
         .first()
         .map_or(Layer::Top3DBody, |&id| layer_from_id(id));
 
+    // #391's one-byte replay base: when the byte is an id `layer_from_id`
+    // does not map, the decode above collapses it to the `MultiLayer`
+    // catch-all and re-deriving the byte from `layer` would rewrite it. Keep
+    // the byte (and, below, its `V7_LAYER` token) verbatim so the pair
+    // round-trips; a genuine `MultiLayer` body (the canonical id itself)
+    // keeps `None`.
+    let raw_layer_id = block0.first().copied().filter(|&id| {
+        layer == Layer::MultiLayer && id != crate::altium::pcblib::writer::layer_to_id(layer)
+    });
+    let v7_layer = params
+        .get("V7_LAYER")
+        .filter(|token| **token != crate::altium::pcblib::writer::v7_layer_token(layer))
+        .cloned();
+
     // Common-header connectivity indices @3-8 (net/polygon/component). The body's
     // block starts with the layer byte @0, the 0x0C/0x00 record-type marker @1-2,
     // then the net/polygon/component words @3-8 (0xFF padding for a free body).
@@ -1655,6 +1669,8 @@ pub(super) fn parse_component_body(data: &[u8], offset: usize) -> ParseResult<Co
         model_2d_rotation,
         model_2d_x,
         model_2d_y,
+        raw_layer_id,
+        v7_layer,
         net_index,
         polygon_index,
         component_index,

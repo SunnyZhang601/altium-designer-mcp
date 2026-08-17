@@ -2332,6 +2332,8 @@ mod tests {
         /// A placeholder extruded body, so the component-body count can differ.
         fn body() -> ComponentBody {
             ComponentBody {
+                raw_layer_id: None,
+                v7_layer: None,
                 model_id: String::new(),
                 identifier: String::new(),
                 texture_center_x: None,

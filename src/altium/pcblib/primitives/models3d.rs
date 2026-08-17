@@ -221,6 +221,26 @@ pub struct ComponentBody {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub texture_size_y: Option<String>,
 
+    /// The header layer byte exactly as read, kept only when `layer_from_id`
+    /// hit its `MultiLayer` catch-all on an id it does not map — the byte
+    /// cannot be re-derived from [`Self::layer`] then, and without this the
+    /// writer rewrote it to the canonical `MultiLayer` id (#391). Replayed
+    /// (together with [`Self::v7_layer`]) only while the body still sits on
+    /// that catch-all layer; retargeting the body to a real layer discards
+    /// both and emits the canonical pair.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub raw_layer_id: Option<u8>,
+
+    /// The `V7_LAYER` token verbatim, kept only when it disagrees with the
+    /// canonical token for [`Self::layer`] — the text half of the same
+    /// unmapped-byte pair as [`Self::raw_layer_id`]. Unlike `Region::v7_layer`
+    /// (where a mapped layer can legitimately carry a disagreeing token, so
+    /// replay is unconditional), a body's disagreement only arises from an
+    /// unmapped byte, so byte and token replay under the same condition and
+    /// can never re-emit as a mismatched pair.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub v7_layer: Option<String>,
+
     /// Net index into the board's net list — common-header u16 @3. `0xFFFF`
     /// (65535) means "no net", the from-scratch default (round-trip fidelity).
     #[serde(default = "default_net_index")]
@@ -318,6 +338,8 @@ impl ComponentBody {
             texture_center_y: None,
             texture_size_x: None,
             texture_size_y: None,
+            raw_layer_id: None,
+            v7_layer: None,
             net_index: default_net_index(),
             polygon_index: default_polygon_index(),
             component_index: default_component_index(),

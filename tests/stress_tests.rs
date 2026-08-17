@@ -863,6 +863,8 @@ fn test_component_body_roundtrip() {
 
     // Add a ComponentBody with typical 3D model properties
     let body = ComponentBody {
+        raw_layer_id: None,
+        v7_layer: None,
         model_id: "TEST-MODEL-GUID".to_string(),
         identifier: String::new(),
         texture_center_x: None,
@@ -931,6 +933,8 @@ fn test_component_body_with_rotation() {
 
     // 3D model with rotation
     let body = ComponentBody {
+        raw_layer_id: None,
+        v7_layer: None,
         model_id: "ROTATED-GUID".to_string(),
         identifier: String::new(),
         texture_center_x: None,
@@ -2769,6 +2773,8 @@ fn test_component_body_external_model_reference() {
 
     // Add ComponentBody with external reference
     let body = ComponentBody {
+        raw_layer_id: None,
+        v7_layer: None,
         model_id: "{EXTERNAL-GUID-1234}".to_string(),
         identifier: String::new(),
         texture_center_x: None,

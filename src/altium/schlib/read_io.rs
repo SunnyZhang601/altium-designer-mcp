@@ -280,3 +280,137 @@ fn read_file_header<R: Read + Seek>(cfb: &mut CompoundFile<R>) -> AltiumResult<F
         component_descriptions,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::SchLib;
+    use std::io::Write as _;
+
+    /// Builds a compound document with the given `/FileHeader` bytes and,
+    /// optionally, one component storage. Enough to drive every header path
+    /// and the component walk without an Altium-authored file.
+    fn library_with(path: &std::path::Path, header: &[u8], components: &[&str]) {
+        let mut compound = cfb::create(path).expect("create compound document");
+        {
+            let mut stream = compound
+                .create_stream("/FileHeader")
+                .expect("create FileHeader");
+            stream.write_all(header).expect("write FileHeader");
+        }
+        for name in components {
+            compound
+                .create_storage(format!("/{name}"))
+                .expect("create component storage");
+            let mut stream = compound
+                .create_stream(format!("/{name}/Data"))
+                .expect("create component Data");
+            // A name block naming the symbol, then no records.
+            let mut data = u32::try_from(name.len() + 1)
+                .unwrap()
+                .to_le_bytes()
+                .to_vec();
+            data.push(u8::try_from(name.len()).unwrap());
+            data.extend_from_slice(name.as_bytes());
+            stream.write_all(&data).expect("write component Data");
+        }
+        compound.flush().expect("flush compound document");
+    }
+
+    /// The length-prefixed, null-terminated parameter block a `SchLib` header
+    /// is.
+    fn header_block(params: &str) -> Vec<u8> {
+        let mut body = params.as_bytes().to_vec();
+        body.push(0);
+        let mut out = u32::try_from(body.len()).unwrap().to_le_bytes().to_vec();
+        out.extend_from_slice(&body);
+        out
+    }
+
+    fn temp_dir() -> tempfile::TempDir {
+        std::fs::create_dir_all(".tmp").expect("create .tmp");
+        let root = std::path::Path::new(".tmp")
+            .canonicalize()
+            .expect("canonicalise .tmp");
+        tempfile::tempdir_in(root).expect("create temp dir")
+    }
+
+    #[test]
+    fn a_header_that_does_not_identify_a_symbol_library_is_refused() {
+        // Reading a footprint library — or anything unrecognised — as a symbol
+        // library must fail rather than look empty. An append-style caller
+        // that saw "zero symbols" would write an empty library over the file.
+        let dir = temp_dir();
+
+        for (name, header, needle) in [
+            ("Short.SchLib", vec![1, 2, 3], "too short"),
+            (
+                "NoHeaderKey.SchLib",
+                header_block("|COMPCOUNT=0"),
+                "unrecognised file",
+            ),
+            (
+                "Pcb.SchLib",
+                header_block("|HEADER=Protel for Windows - PCB Library"),
+                "PcbLib",
+            ),
+            (
+                "Foreign.SchLib",
+                header_block("|HEADER=Some Other Tool"),
+                "Some Other Tool",
+            ),
+        ] {
+            let path = dir.path().join(name);
+            library_with(&path, &header, &[]);
+            let err = SchLib::open(&path).expect_err("a bad header must be refused");
+            assert!(
+                err.to_string().contains(needle),
+                "{name}: expected {needle:?}, got: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_truncated_header_block_is_refused() {
+        // The block is length-prefixed; a length past the end of the stream
+        // would otherwise slice out of bounds.
+        let dir = temp_dir();
+        let path = dir.path().join("Truncated.SchLib");
+        let mut header = header_block("|HEADER=Schematic Library");
+        header[0] = 0xFF; // claim far more than follows
+        library_with(&path, &header, &[]);
+
+        let err = SchLib::open(&path).expect_err("a truncated header must be refused");
+        assert!(err.to_string().contains("truncated"), "{err}");
+    }
+
+    #[test]
+    fn a_component_the_header_names_but_the_file_lacks_is_skipped() {
+        // The header's LIBREF list and the actual storages can disagree in a
+        // hand-edited or partially-written file. A missing storage costs that
+        // one symbol; the rest of the library still opens.
+        let dir = temp_dir();
+        let path = dir.path().join("Partial.SchLib");
+        library_with(
+            &path,
+            &header_block("|HEADER=Schematic Library|COMPCOUNT=2|LIBREF0=PRESENT|LIBREF1=MISSING"),
+            &["PRESENT"],
+        );
+
+        let lib = SchLib::open(&path).expect("the library should still open");
+        assert_eq!(lib.len(), 1, "only the present symbol should load");
+        assert!(lib.get("PRESENT").is_some());
+        assert!(lib.get("MISSING").is_none());
+    }
+
+    #[test]
+    fn a_library_with_no_file_header_at_all_is_refused() {
+        let dir = temp_dir();
+        let path = dir.path().join("Headerless.SchLib");
+        {
+            let mut compound = cfb::create(&path).expect("create compound document");
+            compound.flush().expect("flush");
+        }
+        let err = SchLib::open(&path).expect_err("a headerless library must be refused");
+        assert!(err.to_string().contains("FileHeader"), "{err}");
+    }
+}

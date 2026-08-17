@@ -266,6 +266,110 @@ mod tests {
         Pin::new("A", "1", 0, 0, 10, PinOrientation::Right)
     }
 
+    // ==================== aux-stream skip paths ==============================
+    //
+    // Every aux stream is keyed by pin ordinal, so a malformed entry must be
+    // skipped on its own rather than shifting the entries after it onto the
+    // wrong pins — or, worse, panicking on a library that Altium opens fine.
+
+    /// Builds a real aux stream — compressed-storage entries keyed by the pin
+    /// ordinal — so a test can hand one malformed payload to a real applier
+    /// through the same path a library takes.
+    fn aux_stream(entries: &[(usize, Vec<u8>)]) -> Vec<u8> {
+        let mut out = storage::start_stream("Test", entries.len());
+        for (idx, payload) in entries {
+            storage::write_entry(&mut out, &idx.to_string(), payload)
+                .expect("test entry should write");
+        }
+        out
+    }
+
+    #[test]
+    fn a_frac_entry_too_short_to_hold_three_coordinates_is_skipped() {
+        // A partial entry would otherwise read whichever bytes followed it as
+        // a coordinate, nudging the pin off-grid by an arbitrary amount.
+        let mut pins = vec![pin()];
+        apply_pin_frac(&mut pins, &aux_stream(&[(0, vec![0_u8; 11])]));
+        assert!(pins[0].frac.is_none(), "a short entry must not apply");
+
+        // An entry naming a pin the symbol does not have.
+        let mut pins = vec![pin()];
+        let mut payload = 5_i32.to_le_bytes().to_vec();
+        payload.extend_from_slice(&5_i32.to_le_bytes());
+        payload.extend_from_slice(&5_i32.to_le_bytes());
+        apply_pin_frac(&mut pins, &aux_stream(&[(9, payload.clone())]));
+        assert!(
+            pins[0].frac.is_none(),
+            "an out-of-range ordinal must not apply"
+        );
+
+        // A well-formed entry does apply, and an all-zero one reads as "no
+        // fractional part" rather than as a zero offset.
+        let mut pins = vec![pin()];
+        apply_pin_frac(&mut pins, &aux_stream(&[(0, payload)]));
+        assert!(pins[0].frac.is_some());
+
+        let mut pins = vec![pin()];
+        apply_pin_frac(&mut pins, &aux_stream(&[(0, vec![0_u8; 12])]));
+        assert!(pins[0].frac.is_none(), "an all-zero frac is no frac");
+    }
+
+    #[test]
+    fn a_malformed_unicode_block_is_skipped_by_both_readers() {
+        // Both the wide-text and line-width streams carry a
+        // `[u32 len][utf16le]` block; a length that overruns, or an odd byte
+        // count that cannot be UTF-16, must drop the entry rather than panic.
+        let bad_blocks: [Vec<u8>; 3] = [
+            999_u32.to_le_bytes().to_vec(), // length past the payload
+            {
+                let mut v = 3_u32.to_le_bytes().to_vec(); // odd inner length
+                v.extend_from_slice(&[0, 0, 0]);
+                v
+            },
+            vec![1, 2], // too short for the prefix
+        ];
+
+        for block in bad_blocks {
+            let mut pins = vec![pin()];
+            apply_pin_wide_text(&mut pins, &aux_stream(&[(0, block.clone())]));
+            assert_eq!(pins[0].name, "A", "wide text applied a malformed block");
+
+            let mut pins = vec![pin()];
+            let before = pins[0].symbol_line_width;
+            apply_pin_symbol_line_widths(&mut pins, &aux_stream(&[(0, block)]));
+            assert_eq!(pins[0].symbol_line_width, before);
+        }
+    }
+
+    #[test]
+    fn a_well_formed_block_missing_its_key_is_skipped() {
+        // The block decodes, but carries no `name` / `symbol_linewidth` key —
+        // there is nothing to apply, and the pin keeps what the record gave it.
+        let named = |text: &str| encode_unicode_param_block(text);
+
+        let mut pins = vec![pin()];
+        apply_pin_wide_text(&mut pins, &aux_stream(&[(0, named("|nothing=useful"))]));
+        assert_eq!(pins[0].name, "A");
+
+        let mut pins = vec![pin()];
+        let before = pins[0].symbol_line_width;
+        apply_pin_symbol_line_widths(&mut pins, &aux_stream(&[(0, named("|nothing=useful"))]));
+        assert_eq!(pins[0].symbol_line_width, before);
+
+        // A non-numeric width is not a width.
+        let mut pins = vec![pin()];
+        apply_pin_symbol_line_widths(
+            &mut pins,
+            &aux_stream(&[(0, named("|SYMBOL_LINEWIDTH=wide"))]),
+        );
+        assert_eq!(pins[0].symbol_line_width, before);
+
+        // And an ordinal past the end of the pin list.
+        let mut pins = vec![pin()];
+        apply_pin_symbol_line_widths(&mut pins, &aux_stream(&[(9, named("|SYMBOL_LINEWIDTH=2"))]));
+        assert_eq!(pins[0].symbol_line_width, before);
+    }
+
     #[test]
     fn ascii_pin_names_emit_no_wide_text() {
         let pins = vec![pin(), pin()];

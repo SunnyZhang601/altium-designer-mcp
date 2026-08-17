@@ -637,6 +637,115 @@ mod tests {
         assert!(err.to_string().contains("Some Other Tool"), "{err}");
     }
 
+    /// Builds a library carrying one footprint storage: a `Parameters` block
+    /// (the canonical name and description live there, not in the storage
+    /// name), a `Data` stream, and a library-level `/Storage` stream.
+    fn library_with_footprint(path: &std::path::Path, ole_name: &str, parameters: &[u8]) {
+        let mut compound = cfb::create(path).expect("create compound document");
+        {
+            let mut stream = compound
+                .create_stream("/FileHeader")
+                .expect("create FileHeader");
+            stream
+                .write_all(
+                    format!(
+                        "|HEADER=Protel for Windows - PCB Library|COMPCOUNT=1|LIBREF0={ole_name}"
+                    )
+                    .as_bytes(),
+                )
+                .expect("write FileHeader");
+        }
+        compound
+            .create_storage(format!("/{ole_name}"))
+            .expect("create footprint storage");
+        {
+            let mut stream = compound
+                .create_stream(format!("/{ole_name}/Parameters"))
+                .expect("create Parameters");
+            stream.write_all(parameters).expect("write Parameters");
+        }
+        {
+            let mut stream = compound
+                .create_stream(format!("/{ole_name}/Data"))
+                .expect("create Data");
+            let mut data = u32::try_from(ole_name.len() + 1)
+                .unwrap()
+                .to_le_bytes()
+                .to_vec();
+            data.push(u8::try_from(ole_name.len()).unwrap());
+            data.extend_from_slice(ole_name.as_bytes());
+            stream.write_all(&data).expect("write Data");
+        }
+        {
+            let mut stream = compound.create_stream("/Storage").expect("create Storage");
+            stream
+                .write_all(b"|UNIQUEIDPRIMITIVEINFORMATION=1|")
+                .expect("write Storage");
+        }
+        compound.flush().expect("flush compound document");
+    }
+
+    #[test]
+    fn the_canonical_name_comes_from_parameters_not_the_storage_name() {
+        // OLE storage names are capped at 31 characters, so a longer footprint
+        // name only survives in PATTERN. Taking the storage name instead would
+        // silently truncate every long name in the library.
+        let dir = temp_dir();
+        let path = dir.path().join("Named.PcbLib");
+        library_with_footprint(
+            &path,
+            "TRUNCATED_OLE_NAME",
+            b"|PATTERN=A_MUCH_LONGER_FOOTPRINT_NAME_THAN_OLE_ALLOWS|DESCRIPTION=a described part",
+        );
+
+        let library = PcbLib::open(&path).expect("the library should open");
+        assert_eq!(library.len(), 1);
+        let fp = library.iter().next().expect("one footprint");
+        assert_eq!(fp.name, "A_MUCH_LONGER_FOOTPRINT_NAME_THAN_OLE_ALLOWS");
+        assert_eq!(fp.description, "a described part");
+    }
+
+    #[test]
+    fn a_parameters_block_is_read_with_or_without_its_length_prefix() {
+        // Altium writes the block length-prefixed; hand-built and older files
+        // start straight at the pipe. Both have to yield the same name, or the
+        // footprint loads under its truncated storage name instead.
+        let dir = temp_dir();
+        let bare = b"|PATTERN=BARE_FORM|DESCRIPTION=no prefix".to_vec();
+
+        let mut prefixed = u32::try_from(bare.len()).unwrap().to_le_bytes().to_vec();
+        prefixed.extend_from_slice(&bare);
+
+        for (name, parameters, expected) in [
+            ("Bare.PcbLib", bare, "BARE_FORM"),
+            ("Prefixed.PcbLib", prefixed, "BARE_FORM"),
+        ] {
+            let path = dir.path().join(name);
+            library_with_footprint(&path, "FP", &parameters);
+            let library = PcbLib::open(&path).expect("the library should open");
+            assert_eq!(
+                library.iter().next().expect("one footprint").name,
+                expected,
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_footprint_with_no_pattern_keeps_its_storage_name() {
+        // An empty or absent PATTERN is not a name; falling back to the
+        // storage name is what keeps such a footprint addressable at all.
+        let dir = temp_dir();
+        let path = dir.path().join("NoPattern.PcbLib");
+        library_with_footprint(&path, "FALLBACK", b"|PATTERN=|DESCRIPTION=empty pattern");
+
+        let library = PcbLib::open(&path).expect("the library should open");
+        assert_eq!(
+            library.iter().next().expect("one footprint").name,
+            "FALLBACK"
+        );
+    }
+
     #[test]
     fn a_header_stream_too_short_to_hold_a_version_string_is_not_fatal() {
         // The binary form is length-prefixed; a truncated one must fall

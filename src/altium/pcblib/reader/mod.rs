@@ -786,6 +786,141 @@ pub fn parse_data_stream(
 mod tests {
     use super::*;
 
+    // ==================== record dispatch ====================================
+
+    /// Builds a Data stream: the component-name block, then one record of
+    /// `record_type` followed by `tail` verbatim.
+    fn stream_with_record(record_type: u8, tail: &[u8]) -> Vec<u8> {
+        let name = b"FP";
+        let mut out = Vec::new();
+        out.extend_from_slice(&u32::try_from(name.len() + 1).unwrap().to_le_bytes());
+        out.push(u8::try_from(name.len()).unwrap());
+        out.extend_from_slice(name);
+        out.push(record_type);
+        out.extend_from_slice(tail);
+        out
+    }
+
+    /// A block header claiming far more bytes than the stream holds. Every
+    /// parser starts by framing its first block, so this is the one truncation
+    /// all of them reject regardless of how many blocks or fields they read.
+    fn overrunning_block() -> [u8; 4] {
+        999_u32.to_le_bytes()
+    }
+
+    /// Total primitives of every family on a footprint.
+    fn primitive_count(fp: &Footprint) -> usize {
+        fp.arcs.len()
+            + fp.pads.len()
+            + fp.vias.len()
+            + fp.tracks.len()
+            + fp.text.len()
+            + fp.regions.len()
+            + fp.fills.len()
+            + fp.component_bodies.len()
+    }
+
+    #[test]
+    fn a_record_that_fails_to_parse_stops_the_scan_for_every_type() {
+        // Records are variable-length and read back to back, so a parser that
+        // fails has also lost its place in the stream. Continuing would decode
+        // the remaining bytes at the wrong offset and invent primitives that
+        // were never in the file, which is worse than stopping short. Each
+        // record type owns its own arm, so each needs a case.
+        for record_type in [0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x0B, 0x0C] {
+            let data = stream_with_record(record_type, &overrunning_block());
+            let mut fp = Footprint::new("FP");
+            parse_data_stream(&mut fp, &data, None);
+            assert_eq!(
+                primitive_count(&fp),
+                0,
+                "record type {record_type:#x} kept a primitive it could not parse"
+            );
+        }
+    }
+
+    #[test]
+    fn the_model_index_stops_at_a_corrupt_record_length() {
+        // Model records are length-prefixed and read back to back, so a wrong
+        // length has lost the reader's place. It stops rather than decoding the
+        // rest at the wrong offset.
+        let record = |body: &str| {
+            let mut out = u32::try_from(body.len()).unwrap().to_le_bytes().to_vec();
+            out.extend_from_slice(body.as_bytes());
+            out.push(0); // null terminator
+            out
+        };
+
+        let good = record("|ID=GUID-1|NAME=part.step");
+        assert_eq!(parse_model_data_stream(&good).len(), 1);
+
+        // A length running past the end of the stream.
+        let mut overrun = good.clone();
+        overrun[0] = 0xFF;
+        assert!(parse_model_data_stream(&overrun).is_empty());
+
+        // A zero length: no way to know how far to step.
+        assert!(parse_model_data_stream(&0_u32.to_le_bytes()).is_empty());
+
+        // A record with no ID key cannot be matched to a model stream, so it
+        // is skipped — but the scan keeps its place and later records survive.
+        let mut mixed = record("|NAME=orphan.step");
+        mixed.extend_from_slice(&good);
+        assert_eq!(parse_model_data_stream(&mixed).len(), 1);
+    }
+
+    #[test]
+    fn a_model_stream_without_a_guid_or_a_readable_payload_is_dropped() {
+        // Both skips lose a 3D body, which is why each logs: the library still
+        // opens, and the footprint simply has no model, so a silent drop would
+        // look like the model was never there.
+        let mut index = ModelIndex::new();
+        index.insert("GUID-1".to_string(), (0, "part.step".to_string()));
+
+        // Stream index 7 has no entry in the index.
+        let unmapped = parse_embedded_models(&index, &[(7, vec![1, 2, 3])]);
+        assert!(unmapped.is_empty(), "{unmapped:?}");
+
+        // Mapped, but the payload is not zlib.
+        let corrupt = parse_embedded_models(&index, &[(0, b"not zlib at all".to_vec())]);
+        assert!(corrupt.is_empty(), "{corrupt:?}");
+
+        // Mapped and readable: kept, with its id and name from the index.
+        let mut encoder = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::fast());
+        std::io::Write::write_all(&mut encoder, b"ISO-10303-21;").unwrap();
+        let compressed = encoder.finish().unwrap();
+        let models = parse_embedded_models(&index, &[(0, compressed)]);
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0].id, "GUID-1");
+        assert_eq!(models[0].name, "part.step");
+        assert_eq!(models[0].data, b"ISO-10303-21;");
+    }
+
+    #[test]
+    fn an_unknown_record_type_stops_the_scan_rather_than_guessing_its_length() {
+        // An unrecognised type has no known block layout, so there is no way to
+        // step past it to the next record.
+        let data = stream_with_record(0x7F, &[0_u8; 44]);
+        let mut fp = Footprint::new("FP");
+        parse_data_stream(&mut fp, &data, None);
+        assert_eq!(primitive_count(&fp), 0);
+    }
+
+    #[test]
+    fn the_explicit_end_marker_and_a_runt_stream_both_stop_cleanly() {
+        // A 0x00 where a record type would be is the end of the list.
+        let mut ended = stream_with_record(0x00, &[]);
+        ended.truncate(8);
+        let mut fp = Footprint::new("FP");
+        parse_data_stream(&mut fp, &ended, None);
+        assert_eq!(primitive_count(&fp), 0);
+
+        // Too short to hold even the name block: returns without reading.
+        let mut fp = Footprint::new("FP");
+        parse_data_stream(&mut fp, &[0_u8; 4], None);
+        assert_eq!(primitive_count(&fp), 0);
+    }
+
     #[test]
     fn test_to_mm() {
         // 1 mil = 10000 internal units = 0.0254 mm

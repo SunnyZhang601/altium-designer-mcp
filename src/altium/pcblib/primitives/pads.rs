@@ -957,7 +957,7 @@ impl Via {
 
 #[cfg(test)]
 mod tests {
-    use super::{MaskExpansionMode, PowerPlaneConnectStyle};
+    use super::{HoleShape, MaskExpansionMode, Pad, PowerPlaneConnectStyle, Via};
 
     #[test]
     fn mask_expansion_mode_round_trips_and_defaults() {
@@ -988,5 +988,45 @@ mod tests {
             PowerPlaneConnectStyle::from_id(99),
             PowerPlaneConnectStyle::Relief
         );
+    }
+
+    // ==================== serde defaults =====================================
+    //
+    // These fire when a caller's JSON omits the field — the read-modify-write
+    // path, where `read_pcblib` skips anything at its default and the value has
+    // to come back on the way in. A wrong default here is silent: the primitive
+    // deserialises fine and writes different bytes than it was read with.
+
+    #[test]
+    fn an_omitted_pad_field_deserialises_to_altiums_own_default() {
+        let pad: Pad =
+            serde_json::from_str(r#"{"designator":"1","x":0.0,"y":0.0,"width":1.0,"height":1.0}"#)
+                .expect("a minimal pad should deserialise");
+
+        // Altium marks every pad plated, SMD included, so omitting the key must
+        // not read as "unplated" — that would turn a plated hole into an NPTH.
+        assert!(pad.is_plated);
+        assert_eq!(pad.hole_shape, HoleShape::default());
+    }
+
+    #[test]
+    fn an_omitted_via_field_deserialises_to_the_altium_template_value() {
+        let via: Via = serde_json::from_str(r#"{"x":0.0,"y":0.0,"diameter":0.6,"hole_size":0.3}"#)
+            .expect("a minimal via should deserialise");
+
+        // Thermal relief: a zero gap or zero conductor width would flood-connect
+        // the via straight into a plane, making the board an infinite heat sink
+        // and effectively unsolderable.
+        assert!((via.thermal_relief_gap - 0.254).abs() < 1e-9);
+        assert_eq!(via.thermal_relief_conductors, 4);
+        assert!((via.thermal_relief_width - 0.254).abs() < 1e-9);
+
+        // Power-plane clearances: zero here shorts the via to every plane it
+        // passes through.
+        assert!((via.power_plane_relief_expansion - 0.508).abs() < 1e-9);
+        assert!((via.power_plane_clearance - 0.508).abs() < 1e-9);
+
+        // 0xFFFF is the "no net" sentinel; 0 would claim net index zero.
+        assert_eq!(via.net_index, 0xFFFF);
     }
 }

@@ -193,6 +193,55 @@ mod tests {
     use crate::mcp::server::McpServer;
     use serde_json::Value;
 
+    /// The rendering helpers, which only ever run against the committed tool
+    /// definitions and so never meet the shapes a future schema could bring.
+    mod rendering {
+        use super::super::{render_params, schema_type, wrap_prose, MAX_PROSE_WIDTH};
+        use serde_json::json;
+
+        #[test]
+        fn prose_wraps_long_lines_and_keeps_the_authors_own_breaks() {
+            // The generated doc has a line-length cap, but an author's
+            // deliberate paragraph break carries meaning and must survive.
+            let authored = "short line\nanother short line";
+            assert_eq!(wrap_prose(authored), authored);
+
+            let long = "word ".repeat(80);
+            let wrapped = wrap_prose(long.trim());
+            assert!(wrapped.contains('\n'), "a long line should have wrapped");
+            for line in wrapped.lines() {
+                assert!(
+                    line.chars().count() <= MAX_PROSE_WIDTH,
+                    "line over the cap: {line:?}"
+                );
+            }
+
+            // A single word longer than the cap cannot be broken, so it stands
+            // alone rather than being truncated.
+            let unbreakable = "x".repeat(MAX_PROSE_WIDTH + 20);
+            assert_eq!(wrap_prose(&unbreakable), unbreakable);
+        }
+
+        #[test]
+        fn a_schema_with_no_properties_says_so_rather_than_rendering_an_empty_table() {
+            assert!(render_params(&json!({})).contains("_No parameters._"));
+            assert!(render_params(&json!({ "type": "object" })).contains("_No parameters._"));
+        }
+
+        #[test]
+        fn an_untyped_property_renders_as_any() {
+            // A property with no `type` is legal JSON Schema; the table has to
+            // say something rather than omit the cell.
+            assert_eq!(schema_type(&json!({})), "any");
+            assert_eq!(schema_type(&json!({ "type": "string" })), "string");
+            assert_eq!(schema_type(&json!({ "type": "array" })), "array<any>");
+            assert_eq!(
+                schema_type(&json!({ "type": "array", "items": { "type": "number" } })),
+                "array<number>"
+            );
+        }
+    }
+
     /// Every per-tool `example` must be a valid call for that tool: it must name
     /// the right tool, use only documented top-level arguments (the same
     /// contract the strict-deserialization allow-lists enforce at runtime), and

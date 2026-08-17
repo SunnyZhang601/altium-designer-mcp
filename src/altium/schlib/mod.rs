@@ -1987,4 +1987,24 @@ mod tests {
             assert_eq!(s.description, format!("{name} description"));
         }
     }
+
+    #[test]
+    fn a_library_reports_where_it_came_from_and_whether_it_holds_anything() {
+        // `filepath` is how a caller re-saves in place; `is_empty` is what the
+        // validator checks before reporting a library with no symbols.
+        let mut lib = SchLib::new();
+        assert!(
+            lib.filepath().is_none(),
+            "a from-scratch library has no path"
+        );
+        assert!(lib.is_empty());
+        assert_eq!(lib.len(), 0);
+
+        lib.add(Symbol::new("R1"));
+        assert!(!lib.is_empty());
+        assert_eq!(lib.len(), 1);
+        assert!(lib.get_mut("R1").is_some());
+        assert_eq!(lib.iter().count(), 1);
+        assert_eq!(lib.iter_mut().count(), 1);
+    }
 }

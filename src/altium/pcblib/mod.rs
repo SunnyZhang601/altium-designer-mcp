@@ -2207,6 +2207,8 @@ mod tests {
 
         // Add a ComponentBody with typical values and an explicit outline.
         let body = ComponentBody {
+            raw_layer_id: None,
+            v7_layer: None,
             model_id: "{TEST-GUID-1234-5678-ABCDEFGH}".to_string(),
             identifier: String::new(),
             texture_center_x: None,
@@ -2285,6 +2287,8 @@ mod tests {
         fp.add_pad(Pad::smd("2", 1.0, 0.0, 0.6, 0.5));
         for i in 0..2 {
             fp.add_component_body(ComponentBody {
+                raw_layer_id: None,
+                v7_layer: None,
                 model_id: format!("{{GUID-{i}}}"),
                 identifier: String::new(),
                 texture_center_x: None,

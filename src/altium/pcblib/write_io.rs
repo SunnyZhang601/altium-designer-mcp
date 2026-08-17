@@ -166,6 +166,8 @@ impl PcbLib {
                 texture_center_y: None,
                 texture_size_x: None,
                 texture_size_y: None,
+                raw_layer_id: None,
+                v7_layer: None,
                 model_name: filename,
                 embedded: true,
                 rotation_x: 0.0,

@@ -940,6 +940,11 @@ impl McpServer {
             texture_center_y: json_guidless_opt(body_json, "texture_center_y"),
             texture_size_x: json_guidless_opt(body_json, "texture_size_x"),
             texture_size_y: json_guidless_opt(body_json, "texture_size_y"),
+            raw_layer_id: body_json
+                .get("raw_layer_id")
+                .and_then(Value::as_u64)
+                .and_then(|v| u8::try_from(v).ok()),
+            v7_layer: json_guidless_opt(body_json, "v7_layer"),
             model_id: str_or("model_id", ""),
             model_name: str_or("model_name", ""),
             embedded: body_json
@@ -2925,6 +2930,28 @@ mod tests {
         }))
         .expect("via should parse");
         assert_eq!(via.unique_id, None);
+    }
+
+    #[test]
+    fn parse_component_body_reads_raw_layer_pair() {
+        // #391: the unmapped-byte pair read_pcblib echoes must survive the
+        // tool-layer JSON boundary like every other replay field.
+        let body = McpServer::parse_component_body_json(&json!({
+            "model_id": "{G-1}",
+            "layer": "Multi-Layer",
+            "raw_layer_id": 150,
+            "v7_layer": "MECHANICAL22",
+        }));
+        assert_eq!(body.raw_layer_id, Some(150));
+        assert_eq!(body.v7_layer.as_deref(), Some("MECHANICAL22"));
+
+        // Absent -> None, out-of-range -> None (lenient Option-style).
+        let plain = McpServer::parse_component_body_json(&json!({
+            "model_id": "{G-1}",
+            "raw_layer_id": 300,
+        }));
+        assert_eq!(plain.raw_layer_id, None);
+        assert_eq!(plain.v7_layer, None);
     }
 
     #[test]

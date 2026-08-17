@@ -796,6 +796,8 @@ impl McpServer {
                             texture_center_y: None,
                             texture_size_x: None,
                             texture_size_y: None,
+                            raw_layer_id: None,
+                            v7_layer: None,
                             model_name: model_path.to_string(), // Preserve full path
                             embedded: false,
                             rotation_x: 0.0,
@@ -976,6 +978,8 @@ impl McpServer {
                     texture_center_y: None,
                     texture_size_x: None,
                     texture_size_y: None,
+                    raw_layer_id: None,
+                    v7_layer: None,
                     model_name: String::new(),
                     embedded: false,
                     rotation_x: 0.0,
@@ -2549,6 +2553,8 @@ mod tests {
     fn body_3d_summary_reports_source_and_height() {
         use crate::altium::pcblib::{ComponentBody, Footprint, Layer};
         let body = |h: f64, name: &str| ComponentBody {
+            raw_layer_id: None,
+            v7_layer: None,
             model_id: String::new(),
             identifier: String::new(),
             texture_center_x: None,

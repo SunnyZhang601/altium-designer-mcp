@@ -111,9 +111,12 @@ Altium libraries use OLE Compound File Binary (CFB) format:
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
-The `Data` stream contains binary records for each primitive. The exact binary
-format is being reverse-engineered from existing libraries and prior art
-(AltiumSharp, python-altium).
+The `Data` stream contains binary records for each primitive. The diagram above
+is a simplification; the full stream inventory and every record's byte layout are
+documented in [PCBLIB_FORMAT.md](PCBLIB_FORMAT.md) and
+[SCHLIB_FORMAT.md](SCHLIB_FORMAT.md), reverse-engineered from Altium-authored
+golden fixtures and prior art (AltiumSharp, python-altium) and enforced by
+`tests/golden_fidelity.rs`, which requires byte-identical round trips.
 
 ---
 

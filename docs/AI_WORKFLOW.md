@@ -141,10 +141,18 @@ IPC Name: RESC1608X55N
 
 ```json
 {
-    "success": true,
-    "footprints_written": 1
+    "status": "success",
+    "filepath": "./MyLib.PcbLib",
+    "footprint_count": 1,
+    "footprint_names": ["RES_0603"],
+    "warnings": [],
+    "bodies": []
 }
 ```
+
+(`warnings` carries non-blocking silkscreen-over-pad findings; `bodies` echoes
+each footprint's 3D-body height and source so an assumed height can be
+corrected.)
 
 ### 4. AI Verifies the Result
 

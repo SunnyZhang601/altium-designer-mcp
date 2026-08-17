@@ -101,7 +101,7 @@ When submitting:
 - [ ] Markdown lints cleanly (`markdownlint-cli2 "**/*.md"`)
 - [ ] File paths are validated and path-traversal tests cover any new file-touching tool (see [Security Considerations](#security-considerations))
 - [ ] Documentation is updated if needed
-- [ ] CHANGELOG.md is updated for user-facing changes (once the changelog is initialised at the first release)
+- [ ] CHANGELOG.md is updated for user-facing changes (add to the `## [Unreleased]` section)
 - [ ] Commit messages follow [conventional commits](#commit-messages)
 
 #### PR Process
@@ -285,7 +285,7 @@ cargo test module_name::
 ### Updating Documentation
 
 - Update `README.md` for user-facing changes
-- Update `CHANGELOG.md` for all notable changes (once the changelog is initialised at the first release)
+- Update `CHANGELOG.md` for all notable changes (add to the `## [Unreleased]` section)
 - Update rustdoc comments when changing public APIs
 - Keep examples up to date and working
 

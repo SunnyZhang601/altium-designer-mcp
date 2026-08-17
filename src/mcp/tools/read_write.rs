@@ -1130,6 +1130,11 @@ impl McpServer {
                             "designator_y": symbol.designator_y,
                             "designator_unique_id": symbol.designator_unique_id,
                             "part_count": symbol.part_count,
+                            "display_mode_count": symbol.display_mode_count,
+                            "current_part_id": symbol.current_part_id,
+                            "part_id_locked": symbol.part_id_locked,
+                            "source_library_name": symbol.source_library_name,
+                            "target_file_name": symbol.target_file_name,
                             "pins": symbol.pins,
                             "rectangles": symbol.rectangles,
                             "round_rects": symbol.round_rects,
@@ -2811,8 +2816,13 @@ mod tests {
             let server = create_test_server(dir.path());
 
             // Line between the pin and the rectangle: a non-canonical
-            // interleaving no grouped rewrite would reproduce.
+            // interleaving no grouped rewrite would reproduce. The part/mode
+            // scalars carry non-defaults so their emission is observable too.
             let mut symbol = crate::altium::schlib::Symbol::new("REPLAY");
+            symbol.part_count = 2;
+            symbol.display_mode_count = 2;
+            symbol.current_part_id = 2;
+            symbol.part_id_locked = true;
             symbol.add_pin(Pin::new("IN", "1", 0, 0, 10, PinOrientation::Left));
             symbol.add_line(Line::new(0.0, 0.0, 10.0, 10.0));
             symbol.add_rectangle(Rectangle::new(0.0, 0.0, 20.0, 20.0));
@@ -2844,11 +2854,17 @@ mod tests {
                 "filepath": dst.to_string_lossy(),
             }));
             assert!(!second_read.is_error, "{}", get_result_text(&second_read));
+            let symbol_after = parse_result_json(&second_read)["symbols"][0].clone();
             assert_eq!(
-                parse_result_json(&second_read)["symbols"][0]["primitive_order"],
+                symbol_after["primitive_order"],
                 json!(["pin", "line", "rectangle"]),
                 "record order survives the tool-layer round trip"
             );
+            // The part/mode scalars ride the same read → write → read loop.
+            assert_eq!(symbol_after["part_count"], 2);
+            assert_eq!(symbol_after["display_mode_count"], 2);
+            assert_eq!(symbol_after["current_part_id"], 2);
+            assert_eq!(symbol_after["part_id_locked"], true);
         }
 
         /// A malformed `primitive_order` is ignored with the default grouped

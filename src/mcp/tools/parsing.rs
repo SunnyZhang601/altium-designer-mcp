@@ -1035,7 +1035,7 @@ impl McpServer {
     #[allow(clippy::too_many_lines)] // Via has many optional fields requiring individual parsing
     pub(crate) fn parse_via(json: &Value) -> Result<crate::altium::pcblib::Via, String> {
         use crate::altium::pcblib::{
-            DrillLayerPairType, Layer, MaskExpansionMode, PowerPlaneConnectStyle, Via,
+            DrillLayerPairType, Layer, MaskExpansionMode, PowerPlaneConnectStyle, Via, ViaStackMode,
         };
 
         let x = json
@@ -1183,6 +1183,26 @@ impl McpServer {
         }
         if let Some(v) = json.get("hole_negative_tolerance").and_then(Value::as_f64) {
             via.hole_negative_tolerance = Some(v);
+        }
+
+        if let Some(v) = json
+            .get("solder_mask_expansion_back")
+            .and_then(Value::as_f64)
+        {
+            via.solder_mask_expansion_back = Some(v);
+        }
+        via.diameter_stack_mode = match json
+            .get("diameter_stack_mode")
+            .and_then(Value::as_str)
+            .map(str::to_lowercase)
+            .as_deref()
+        {
+            Some("top_middle_bottom") => ViaStackMode::TopMiddleBottom,
+            Some("full_stack") => ViaStackMode::FullStack,
+            _ => ViaStackMode::Simple,
+        };
+        if let Some(diameters) = json.get("per_layer_diameters").and_then(Value::as_array) {
+            via.per_layer_diameters = Some(diameters.iter().filter_map(Value::as_f64).collect());
         }
 
         via.flags = json_flags(json);
@@ -2927,6 +2947,33 @@ mod tests {
         }))
         .expect("pad should parse");
         assert_eq!(pad.raw_tail.as_deref(), Some(&[0u8, 1, 2, 3, 4][..]));
+    }
+
+    #[test]
+    fn parse_via_reads_diameter_stack_and_back_mask() {
+        use crate::altium::pcblib::ViaStackMode;
+        let via = McpServer::parse_via(&json!({
+            "x": 0.0, "y": 0.0, "diameter": 0.6, "hole_size": 0.3,
+            "diameter_stack_mode": "full_stack",
+            "per_layer_diameters": [0.6, 0.7, 0.8],
+            "solder_mask_expansion_back": 0.05,
+        }))
+        .expect("via should parse");
+        assert_eq!(via.diameter_stack_mode, ViaStackMode::FullStack);
+        assert_eq!(
+            via.per_layer_diameters.as_deref(),
+            Some(&[0.6, 0.7, 0.8][..])
+        );
+        assert_eq!(via.solder_mask_expansion_back, Some(0.05));
+
+        // Absent -> struct defaults, so a from-scratch via is unchanged.
+        let plain = McpServer::parse_via(&json!({
+            "x": 0.0, "y": 0.0, "diameter": 0.6, "hole_size": 0.3,
+        }))
+        .expect("via should parse");
+        assert_eq!(plain.diameter_stack_mode, ViaStackMode::Simple);
+        assert_eq!(plain.per_layer_diameters, None);
+        assert_eq!(plain.solder_mask_expansion_back, None);
     }
 
     #[test]

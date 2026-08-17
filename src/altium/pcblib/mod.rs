@@ -49,6 +49,7 @@ pub use primitives::{
     Arc, ComponentBody, DrillLayerPairType, EmbeddedModel, Fill, HoleShape, Layer,
     MaskExpansionMode, Model3D, Pad, PadShape, PadStackMode, PcbFlags, PowerPlaneConnectStyle,
     Region, RegionKind, StrokeFont, Text, TextJustification, TextKind, Track, Vertex, Via,
+    ViaStackMode,
 };
 
 use crate::altium::error::{AltiumError, AltiumResult};

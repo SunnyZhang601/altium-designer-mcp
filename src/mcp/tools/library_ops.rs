@@ -889,7 +889,7 @@ impl McpServer {
                             .collect()
                     };
 
-                    json!({
+                    let mut fp_json = json!({
                         "name": fp.name,
                         "description": fp.description,
                         "pads": pads,
@@ -901,7 +901,18 @@ impl McpServer {
                         "text": fp.text,
                         "model_3d": fp.model_3d,
                         "component_bodies": fp.component_bodies,
-                    })
+                    });
+                    // Footprint-level fidelity fields, mirroring the struct's
+                    // serde shape (present only when carried) — export→import
+                    // is the backup/restore loop, so the kind-85 identity and
+                    // the interleaved stream order must survive it.
+                    if let Some(guid) = &fp.guid {
+                        fp_json["guid"] = json!(guid);
+                    }
+                    if !fp.primitive_order.is_empty() {
+                        fp_json["primitive_order"] = json!(fp.primitive_order);
+                    }
+                    fp_json
                 })
                 .collect();
 
@@ -975,10 +986,13 @@ impl McpServer {
             let symbols: Vec<Value> = library
                 .iter()
                 .map(|symbol| {
-                    json!({
+                    let mut sym_json = json!({
                         "name": symbol.name,
                         "description": symbol.description,
                         "designator": symbol.designator,
+                        "designator_x": symbol.designator_x,
+                        "designator_y": symbol.designator_y,
+                        "designator_unique_id": symbol.designator_unique_id,
                         "part_count": symbol.part_count,
                         "display_mode_count": symbol.display_mode_count,
                         "current_part_id": symbol.current_part_id,
@@ -1002,7 +1016,13 @@ impl McpServer {
                         "text": symbol.text,
                         "parameters": symbol.parameters,
                         "footprints": symbol.footprints,
-                    })
+                    });
+                    // The interleaved record order, mirroring the struct's
+                    // serde shape — export→import must not regroup records.
+                    if !symbol.primitive_order.is_empty() {
+                        sym_json["primitive_order"] = json!(symbol.primitive_order);
+                    }
+                    sym_json
                 })
                 .collect();
 
@@ -1692,6 +1712,115 @@ mod tests {
     }
 
     // ==================== import_library ====================
+
+    /// Export → import is the backup/restore loop, so the footprint's kind-85
+    /// identity and interleaved stream order must survive it — pinned here
+    /// end-to-end against the reopened imported file.
+    #[test]
+    fn export_import_round_trips_pcblib_fidelity_fields() {
+        use crate::altium::pcblib::{Layer, Pad, PrimitiveKind, Track};
+
+        let dir = test_temp_dir();
+        let server = create_test_server(dir.path());
+
+        // Track before pad: a non-canonical order no grouped rewrite keeps.
+        let mut fp = Footprint::new("FID");
+        fp.guid = Some("{11111111-2222-3333-4444-555555555555}".to_string());
+        fp.add_track(Track::new(-1.0, -1.0, 1.0, -1.0, 0.2, Layer::TopOverlay));
+        fp.add_pad(Pad::smd("1", -0.5, 0.0, 0.6, 0.5));
+        let mut lib = PcbLib::new();
+        lib.add(fp);
+        let src = dir.path().join("FidSrc.PcbLib");
+        lib.save(&src).unwrap();
+
+        let exported = parse_result_json(&server.call_export_library(&json!({
+            "filepath": src.to_string_lossy(),
+            "format": "json",
+        })));
+        assert_eq!(
+            exported["footprints"][0]["primitive_order"],
+            json!(["track", "pad"]),
+            "export carries the interleaved order"
+        );
+        assert!(
+            exported["footprints"][0]["guid"].is_string(),
+            "export carries the footprint guid"
+        );
+
+        let out = dir.path().join("FidDst.PcbLib");
+        let result = server.call_import_library(&json!({
+            "output_path": out.to_string_lossy(),
+            "json_data": {
+                "file_type": "PcbLib",
+                "footprints": exported["footprints"],
+            },
+        }));
+        assert!(!result.is_error, "{}", get_result_text(&result));
+
+        let reopened = PcbLib::open(&out).unwrap();
+        let fp = reopened.iter().next().unwrap();
+        assert_eq!(
+            fp.guid.as_deref(),
+            Some("{11111111-2222-3333-4444-555555555555}")
+        );
+        assert_eq!(
+            fp.primitive_order,
+            vec![PrimitiveKind::Track, PrimitiveKind::Pad]
+        );
+    }
+
+    /// The `SchLib` flavour: designator position/identity and the interleaved
+    /// record order survive export → import.
+    #[test]
+    fn export_import_round_trips_schlib_designator_and_order() {
+        use crate::altium::schlib::{Line, SchPrimitiveKind};
+
+        let dir = test_temp_dir();
+        let server = create_test_server(dir.path());
+
+        // The designator position rides inside the designator record, which
+        // is only written when the designator text is non-empty — as in any
+        // real symbol.
+        let mut symbol = Symbol::new("FID");
+        symbol.designator = "U?".to_string();
+        symbol.designator_x = 5.5;
+        symbol.designator_y = -3.5;
+        symbol.add_line(Line::new(0.0, 0.0, 10.0, 10.0));
+        symbol.add_pin(Pin::new("IN", "1", 0, 0, 10, PinOrientation::Left));
+        let mut lib = SchLib::new();
+        lib.add(symbol);
+        let src = dir.path().join("FidSrc.SchLib");
+        lib.save(&src).unwrap();
+
+        let exported = parse_result_json(&server.call_export_library(&json!({
+            "filepath": src.to_string_lossy(),
+            "format": "json",
+        })));
+        assert_eq!(
+            exported["symbols"][0]["primitive_order"],
+            json!(["line", "pin"]),
+            "export carries the interleaved order"
+        );
+
+        let out = dir.path().join("FidDst.SchLib");
+        let result = server.call_import_library(&json!({
+            "output_path": out.to_string_lossy(),
+            "json_data": {
+                "file_type": "SchLib",
+                "symbols": exported["symbols"],
+            },
+        }));
+        assert!(!result.is_error, "{}", get_result_text(&result));
+
+        let reopened = SchLib::open(&out).unwrap();
+        let symbol = reopened.iter().next().unwrap();
+        assert!((symbol.designator_x - 5.5).abs() < 1e-9);
+        assert!((symbol.designator_y - (-3.5)).abs() < 1e-9);
+        assert_eq!(
+            symbol.primitive_order,
+            vec![SchPrimitiveKind::Line, SchPrimitiveKind::Pin]
+        );
+    }
 
     #[test]
     fn import_library_pcblib_round_trips_an_export() {

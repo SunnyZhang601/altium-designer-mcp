@@ -7,39 +7,21 @@ record). The specialised worklists stay the single source of truth for their are
 |------|----------|
 | Golden-fixture enrichment | `docs/FIXTURE_COVERAGE.md` |
 | Format parity + verified negatives | `docs/COVERAGE_AUDIT.md` § Outstanding |
-| Test-coverage climb + 99% gate | issue #302 (status comments, kept current in place) |
 
-## A. Format / fidelity residue
-
-*(empty — §A completed 2026-08-16: every footprint Data stream in the golden is
-byte-identical through a read-modify-write, enforced by `golden_fidelity`. The two
-old RE findings dissolved: no 651 mis-routing exists, and the multi-entry
-full-stack tail is unexercised rather than broken — a fixture would be needed to
-claim more.)*
-
-## B. Coverage (issue #302 owns the detail)
-
-*(empty — §B completed 2026-08-17: the 99% gate is met on the production metric
-(#381) via #379/#383/#385/#387, with #388's guard folding taking
-`pcblib/reader/parsers.rs` to 100% and leaving ~28 lines of margin. Two facts
-worth keeping: the measured total flaps by a few lines between identical runs, so
-read near-gate figures accordingly; and the cheapest remaining headroom sits in
-`mcp/server.rs` and `mcp/tools/library_ops.rs`. Holding the line is CI's job now.)*
-
-## C. On-site Altium tooling
+## A. On-site Altium tooling
 
 - [ ] *(Optional)* extend `Verify-Libraries.ps1` to assert primitive counts / specific
       properties, not just "opened".
 
-## D. Release & distribution (v0.1.0 pre-release shipped 2026-08-18)
+## B. Release & distribution
 
 - [ ] **v1.0.0 is the real release**, gated on ALL features built (the 99% coverage
-      gate — production metric, #381 — is already met at 99.07%). The climb happens
-      calmly; [`docs/RELEASING.md`](docs/RELEASING.md) is the proven runbook.
+      gate — production metric, #381 — is already met). The climb happens calmly;
+      [`docs/RELEASING.md`](docs/RELEASING.md) is the proven runbook.
 - [ ] Consider a `.dxt` Claude Desktop extension for one-click install (pattern from
       coffeenmusic/altium-mcp).
 
-## E. Docs / AI workflow
+## C. Docs / AI workflow
 
 - [ ] Enrich `docs/AI_WORKFLOW.md` with symbol pin-placement guidance (idea from
       coffeenmusic's `symbol_placement_rules.txt`).

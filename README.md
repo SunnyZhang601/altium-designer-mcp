@@ -276,10 +276,14 @@ Additional layers supported:
 
 ## Installation
 
-See [CONTRIBUTING.md § Development Setup](CONTRIBUTING.md#development-setup) for build instructions.
+**Prebuilt binaries** for Linux (x86_64), macOS (aarch64) and Windows (x86_64) are on the
+[Releases page](https://github.com/embedded-society/altium-designer-mcp/releases) — each
+archive bundles a setup README covering Claude Code, Claude Desktop, Antigravity, Cursor
+and VS Code.
 
-To build an optimised binary from source, run `cargo build --release`; it lands at
-`target/release/altium-designer-mcp`.
+To build from source instead, see
+[CONTRIBUTING.md § Development Setup](CONTRIBUTING.md#development-setup); an optimised
+binary comes from `cargo build --release` and lands at `target/release/altium-designer-mcp`.
 
 ### Verifying a downloaded release
 

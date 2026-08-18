@@ -31,20 +31,11 @@ read near-gate figures accordingly; and the cheapest remaining headroom sits in
 - [ ] *(Optional)* extend `Verify-Libraries.ps1` to assert primitive counts / specific
       properties, not just "opened".
 
-## D. Release & distribution (no release exists yet)
+## D. Release & distribution (v0.1.0 pre-release shipped 2026-08-18)
 
-- [ ] Cut **v0.1.0 as a pre-release** — all gates met 2026-08-17 (§A and §B above are
-      empty); **maintainer triggers it personally**, following
-      [`docs/RELEASING.md`](docs/RELEASING.md) step by step. Abbreviated: dry-run the
-      pipeline first (`gh workflow run release.yml --ref main` — it has never had a green
-      run), stamp the changelog heading/date, tag **signed** (`git tag -s v0.1.0 -m "v0.1.0"`
-      — the tag ruleset rejects unsigned tags), push, watch the workflow, then review the
-      **draft** release it creates and publish with
-      `gh release edit v0.1.0 --draft=false --prerelease` (the `--prerelease` flag is
-      manual here: the workflow only sets it for suffixed tags like `v0.1.0-rc1`).
-- [ ] **v1.0.0 is the real release**, gated on ALL features built and **99% test
-      coverage** (production metric, #381). The climb between the two happens calmly —
-      neither gate blocks the other's work.
+- [ ] **v1.0.0 is the real release**, gated on ALL features built (the 99% coverage
+      gate — production metric, #381 — is already met at 99.07%). The climb happens
+      calmly; [`docs/RELEASING.md`](docs/RELEASING.md) is the proven runbook.
 - [ ] Consider a `.dxt` Claude Desktop extension for one-click install (pattern from
       coffeenmusic/altium-mcp).
 

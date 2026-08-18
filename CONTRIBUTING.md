@@ -252,6 +252,15 @@ cargo test module_name::
 - Use descriptive test names that explain what's being tested
 - Test both success and failure cases
 
+### Coverage
+
+The project holds **99% line coverage on production code** (`main.rs` excluded — it is
+exercised end-to-end across a process boundary instrumentation cannot see; measured with
+`cargo llvm-cov --all-features --workspace --ignore-filename-regex '(^|[/\\])main\.rs$'`).
+Two facts worth knowing when reading figures near the gate: the measured total flaps by a
+few lines between identical runs, so treat small movements as noise; and the cheapest
+remaining headroom sits in `mcp/server.rs` and `mcp/tools/library_ops.rs`.
+
 ---
 
 ## Documentation

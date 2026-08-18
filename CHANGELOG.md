@@ -9,10 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Everything below ships in the first tagged release (the version heading and date are
-stamped when the tag is cut). An MCP server that gives AI assistants file I/O and
-primitive-placement tools for Altium Designer `.PcbLib` (footprint) and `.SchLib`
-(symbol) libraries.
+## [0.1.0] - 2026-08-18
+
+An MCP server that gives AI assistants file I/O and primitive-placement tools
+for Altium Designer `.PcbLib` (footprint) and `.SchLib` (symbol) libraries.
 
 ### Added
 

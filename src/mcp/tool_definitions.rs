@@ -1173,7 +1173,9 @@ impl McpServer {
                 description: Some(
                     "Validate an Altium library file for common issues. Checks for: empty components \
                      (no pads/pins), duplicate designators, invalid coordinates, zero-size primitives, \
-                     and other integrity problems. Returns a list of warnings and errors."
+                     overlapping pads, 3D bodies whose embedded model the library does not contain, \
+                     embedded models no footprint references, and other integrity problems. Returns a \
+                     list of warnings and errors."
                         .to_string(),
                 ),
                 input_schema: json!({

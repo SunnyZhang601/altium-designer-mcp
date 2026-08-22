@@ -25,8 +25,3 @@ record). The specialised worklists stay the single source of truth for their are
       `.dxt`** — the same bundle format under its new and old names, so older Claude Desktop
       builds install it too. Claude Desktop now steers users to extensions over hand-edited
       JSON (pattern from coffeenmusic/altium-mcp).
-
-## C. Docs / AI workflow
-
-- [ ] Enrich `docs/AI_WORKFLOW.md` with symbol pin-placement guidance (idea from
-      coffeenmusic's `symbol_placement_rules.txt`).

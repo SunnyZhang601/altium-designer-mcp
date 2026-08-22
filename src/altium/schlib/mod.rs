@@ -353,6 +353,25 @@ pub struct Symbol {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub footprints: Vec<FootprintModel>,
 
+    /// The header record (`RECORD=1`) exactly as read: every segment as a
+    /// `(key, value)` pair in stored order, an empty segment as `("", "")`.
+    /// The writer replays each verbatim unless the field behind it was
+    /// edited, so a header comes back byte for byte whichever way Altium
+    /// wrote it — a UI-authored one omits `LibraryPath` and
+    /// `SheetPartFileName`, carries `COMPONENTKINDVERSION2`, and stores a
+    /// Latin-1 description as `%UTF8%Key=<UTF-8>|||Key=<Windows-1252>`; a
+    /// scripted one puts UTF-8 bytes in both keys. Empty for a symbol built
+    /// from scratch, which emits the canonical header.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub header_params: Vec<(String, String)>,
+
+    /// `AllPinCount` as stored. Altium keeps a stale value here — a 32-pin
+    /// UI-drawn MCU stores 1, a one-pin header 2 — so it is carried rather
+    /// than recomputed; `None` (a symbol built from scratch) writes the pin
+    /// count.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub all_pin_count: Option<u32>,
+
     /// The order the content records are stored in, one entry per record.
     ///
     /// Altium interleaves the record kinds in authoring order — the golden's
@@ -667,6 +686,36 @@ impl Symbol {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A name that exactly fills the 31-unit storage cap is listed in
+    /// `SectionKeys` although nothing was truncated — a UI-authored
+    /// `Generic Non-polarised Capacitor` is — while a shorter one is not.
+    #[test]
+    fn a_name_that_fills_the_storage_cap_is_listed_in_section_keys() {
+        std::fs::create_dir_all(".tmp").unwrap();
+        let dir =
+            tempfile::tempdir_in(std::path::Path::new(".tmp").canonicalize().unwrap()).unwrap();
+        for (name, listed) in [
+            ("Generic Non-polarised Capacitor", true),
+            ("Generic Resistor", false),
+        ] {
+            assert!(name.len() <= 31);
+            let mut lib = SchLib::new();
+            lib.add(Symbol::new(name));
+            let path = dir.path().join(format!("{}.SchLib", name.len()));
+            lib.save(&path).unwrap();
+            let mut cfb = cfb::open(&path).unwrap();
+            assert_eq!(cfb.is_stream("/SectionKeys"), listed, "{name}");
+            if listed {
+                let keys = crate::altium::read_stream_opt(&mut cfb, "/SectionKeys").unwrap();
+                let text = String::from_utf8_lossy(&keys);
+                assert!(
+                    text.contains("|KeyCount=1|LibRef0=Generic Non-polarised Capacitor|SectionKey0=Generic Non-polarised Capacitor"),
+                    "{text}"
+                );
+            }
+        }
+    }
 
     /// `reset_identities` clears the designator record's id and every
     /// record's unique id across all sixteen lists.

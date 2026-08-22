@@ -1449,13 +1449,14 @@ mod tests {
 
         let parsed: Value = serde_json::from_str(get_result_text(&result)).expect("valid JSON");
         let symbol = &parsed["symbols"][0];
+        // The export is the struct's own serde shape: every populated family
+        // is present (an empty one is omitted, and import defaults it).
         for key in [
             "part_count",
             "pies",
             "images",
             "beziers",
             "elliptical_arcs",
-            "text",
             "footprints",
         ] {
             assert!(
@@ -1466,6 +1467,7 @@ mod tests {
         assert_eq!(symbol["part_count"], 2);
         assert_eq!(symbol["pies"].as_array().map(Vec::len), Some(1));
         assert_eq!(symbol["images"].as_array().map(Vec::len), Some(1));
+        assert!(symbol.get("text").is_none(), "an empty family is omitted");
     }
 
     #[test]

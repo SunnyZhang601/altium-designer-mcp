@@ -1068,48 +1068,13 @@ impl McpServer {
         };
 
         if format == "json" {
-            // Full JSON export
+            // Full JSON export: the struct's own serde shape, which is the
+            // shape write_schlib/import_library accept in full — every fidelity
+            // carrier included (record order, header key order, identities) —
+            // so an export is importable byte-for-byte.
             let symbols: Vec<Value> = library
                 .iter()
-                .map(|symbol| {
-                    let mut sym_json = json!({
-                        "name": symbol.name,
-                        "description": symbol.description,
-                        "designator": symbol.designator,
-                        "designator_x": symbol.designator_x,
-                        "designator_y": symbol.designator_y,
-                        "designator_unique_id": symbol.designator_unique_id,
-                        "part_count": symbol.part_count,
-                        "display_mode_count": symbol.display_mode_count,
-                        "current_part_id": symbol.current_part_id,
-                        "part_id_locked": symbol.part_id_locked,
-                        "source_library_name": symbol.source_library_name,
-                        "target_file_name": symbol.target_file_name,
-                        "pins": symbol.pins,
-                        "rectangles": symbol.rectangles,
-                        "round_rects": symbol.round_rects,
-                        "lines": symbol.lines,
-                        "polylines": symbol.polylines,
-                        "polygons": symbol.polygons,
-                        "arcs": symbol.arcs,
-                        "pies": symbol.pies,
-                        "images": symbol.images,
-                        "text_frames": symbol.text_frames,
-                        "beziers": symbol.beziers,
-                        "ellipses": symbol.ellipses,
-                        "elliptical_arcs": symbol.elliptical_arcs,
-                        "labels": symbol.labels,
-                        "text": symbol.text,
-                        "parameters": symbol.parameters,
-                        "footprints": symbol.footprints,
-                    });
-                    // The interleaved record order, mirroring the struct's
-                    // serde shape — export→import must not regroup records.
-                    if !symbol.primitive_order.is_empty() {
-                        sym_json["primitive_order"] = json!(symbol.primitive_order);
-                    }
-                    sym_json
-                })
+                .map(|symbol| serde_json::to_value(symbol).unwrap_or(Value::Null))
                 .collect();
 
             let result = json!({

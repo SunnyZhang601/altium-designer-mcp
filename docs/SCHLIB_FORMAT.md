@@ -481,17 +481,30 @@ The first record of each component's Data stream. Keys as written (in order):
 | `IndexInSheet` | int | -1 for the component root |
 | `OwnerPartId` | int | -1 for the component root |
 | `CurrentPartId` | int | Currently displayed part (default 1) |
-| `LibraryPath` | string | `*` sentinel |
+| `LibraryPath` | string | `*` sentinel — scripted headers carry it, UI-authored ones omit it |
 | `SourceLibraryName` | string | `*` sentinel |
-| `SheetPartFileName` | string | `*` sentinel |
+| `SheetPartFileName` | string | `*` sentinel — scripted headers carry it, UI-authored ones omit it |
 | `TargetFileName` | string | `*` sentinel |
-| `AllPinCount` | int | Total number of pins (calculated from the symbol) |
+| `AllPinCount` | int | A **stale** count Altium does not maintain (a UI-drawn 32-pin MCU stores `1`, a one-pin header `2`); carried verbatim on a read-modify-write, the pin count for a symbol built from scratch |
 | `AreaColor` | int | Fill colour (BGR, 11599871 = light yellow) |
 | `Color` | int | Border colour (BGR, 128 = dark red) |
 | `PartIDLocked` | bool | `T`/`F` |
 
 > **Note:** Altium-authored headers also carry a component `UniqueID` and may carry
-> `DesignItemId` / `ComponentKind`; these are currently unmodelled (dropped on read).
+> `DesignItemId` / `ComponentKind`; the `UniqueID` is currently unmodelled (dropped on
+> read). Every other key the model does not name — a UI-authored
+> `COMPONENTKINDVERSION2=5` — rides along verbatim: the whole header is carried as read
+> (`Symbol::header_params`, every segment in order) and replayed byte for byte unless the
+> field behind a segment was edited, so the two `%UTF8%` layouts Altium uses both survive.
+> A UI-typed Latin-1 description is stored as `%UTF8%ComponentDescription=<UTF-8 bytes>|||`
+> `ComponentDescription=<Windows-1252 bytes>` (twin first, two empty segments, code-page
+> plain key); a scripted one puts UTF-8 bytes in both keys.
+
+The **system parameter** is Altium's own `Comment` record alone (with the Designator
+record): stored after the designator with `IndexInSheet=-1` and no counter slot. A user
+parameter is a content record with a counter slot in authoring order — the UI stores it
+with `OwnerPartId=-1` too (a script sets `1`), and before the graphics, so `OwnerPartId`
+does not mark a parameter as system.
 
 ## Primitive Records
 
@@ -765,7 +778,7 @@ A parameter-record variant selected by `Name=Designator`. As written by this cra
   | `ModelDatafile0` | string | Optional `.PcbLib` path — what lets Altium resolve the footprint directly |
   | `ModelDatafileEntity0` | string | Footprint entity (resolution key) |
   | `ModelDatafileKind0` | string | `PCBLib` |
-  | `IsCurrent` | bool | `T` on the default footprint |
+  | `IsCurrent` | bool | `T` on the default footprint; omitted on every other (never `F`) |
 
 - **RECORD=46 (MapDefinerList)** and **RECORD=48 (ImplementationParameters)** — written as empty
   children of each RECORD=45 (`|RECORD=46|OwnerIndex={45's index}` / `|RECORD=48|OwnerIndex=...`).

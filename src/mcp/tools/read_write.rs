@@ -763,6 +763,12 @@ impl McpServer {
                         if !symbol.primitive_order.is_empty() {
                             sym_json["primitive_order"] = json!(symbol.primitive_order);
                         }
+                        if !symbol.header_params.is_empty() {
+                            sym_json["header_params"] = json!(symbol.header_params);
+                        }
+                        if let Some(count) = symbol.all_pin_count {
+                            sym_json["all_pin_count"] = json!(count);
+                        }
                         sym_json
                     })
                     .collect();

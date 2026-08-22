@@ -988,7 +988,8 @@ List available backup files for an Altium library. Shows timestamped .bak files 
 
 ## `restore_backup`
 
-Restore an Altium library file from a backup. If no specific backup is specified, restores from the most recent backup.
+Restore an Altium library file from a backup. If no specific backup is specified, restores from the most recent backup. The current file is snapshotted as a new backup
+first (reported as pre_restore_backup), so a wrong pick is itself reversible, and the restore is written atomically.
 
 **Example**
 

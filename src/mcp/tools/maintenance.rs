@@ -507,11 +507,32 @@ impl McpServer {
         }
 
         // Get file sizes for reporting
-        let backup_size = std::fs::metadata(&backup_path).map_or(0, |m| m.len());
         let original_size = std::fs::metadata(filepath).map(|m| m.len()).ok();
 
-        // Copy backup over the original
-        if let Err(e) = std::fs::copy(&backup_path, filepath) {
+        // Read the backup first: snapshotting the current file below rotates
+        // the backup set, and the oldest entry it evicts could be the very
+        // file being restored.
+        let bytes = match std::fs::read(&backup_path) {
+            Ok(bytes) => bytes,
+            Err(e) => return ToolCallResult::error(format!("Failed to read backup: {e}")),
+        };
+        let backup_size = bytes.len();
+
+        // A restore overwrites the current file, which is as destructive as
+        // any edit — the wrong backup picked, or unsaved-elsewhere work in the
+        // current state, must stay recoverable. Snapshot it like every other
+        // mutating tool does, then write atomically so a failure mid-way
+        // cannot leave a half-restored library.
+        let pre_restore_backup = match Self::create_backup(filepath) {
+            Ok(path) => path,
+            Err(e) => return ToolCallResult::error(e),
+        };
+        let written = crate::altium::save_atomic(Path::new(filepath), "restore.tmp", |mut file| {
+            use std::io::Write as _;
+            file.write_all(&bytes)
+                .map_err(|e| crate::altium::AltiumError::file_write(Path::new(filepath), e))
+        });
+        if let Err(e) = written {
             return ToolCallResult::error(format!("Failed to restore backup: {e}"));
         }
 
@@ -520,14 +541,13 @@ impl McpServer {
             "filepath": filepath,
             "restored_from": backup_path,
             "backup_size_bytes": backup_size,
-            "original_size_bytes": original_size
+            "original_size_bytes": original_size,
+            "pre_restore_backup": pre_restore_backup,
         });
 
         ToolCallResult::text(serde_json::to_string_pretty(&result).unwrap())
     }
 
-    /// Updates specific properties of a pad in a `PcbLib` footprint.
-    #[allow(clippy::too_many_lines)]
     /// Carries a primary width / height / shape edit into a stacked pad's
     /// per-layer tables: every layer whose value matched the old primary takes
     /// the new one, a layer with its own value keeps it. Returns how many
@@ -639,6 +659,7 @@ impl McpServer {
         Ok(changes)
     }
 
+    /// Updates specific properties of a pad in a `PcbLib` footprint.
     pub(crate) fn call_update_pad(&self, arguments: &Value) -> ToolCallResult {
         use crate::altium::PcbLib;
 
@@ -1443,6 +1464,26 @@ mod tests {
         let lib = PcbLib::open(&path).unwrap();
         assert_eq!(lib.len(), 2);
         assert!(lib.get("CHIP_0402").is_some());
+
+        // And the state that was overwritten — the one-footprint library — is
+        // itself recoverable: the restore snapshotted it as a fresh backup
+        // before writing, so a wrong pick costs nothing.
+        let pre = parsed["pre_restore_backup"]
+            .as_str()
+            .expect("restore reports the snapshot it took");
+        assert!(
+            std::path::Path::new(pre)
+                .extension()
+                .is_some_and(|e| e == "bak"),
+            "{pre}"
+        );
+        let snapshot = PcbLib::open(pre).unwrap();
+        assert_eq!(snapshot.len(), 1, "the overwritten state was preserved");
+        assert!(snapshot.get("CHIP_0402").is_none());
+        assert!(
+            !path.with_extension("restore.tmp").exists(),
+            "the atomic-write temp file is gone"
+        );
     }
 
     #[test]
@@ -1467,6 +1508,20 @@ mod tests {
         }));
         assert!(result.is_error);
         assert!(get_result_text(&result).contains("does not exist"));
+
+        // Explicit backup path that exists but cannot be read as a file (a
+        // directory): reported, and nothing touched — the restore reads the
+        // backup before it snapshots or writes anything.
+        let dir_bak = dir.path().join("NotAFile.bak");
+        std::fs::create_dir(&dir_bak).unwrap();
+        let before = std::fs::read(&path).unwrap();
+        let result = server.call_restore_backup(&json!({
+            "filepath": path.to_string_lossy(),
+            "backup_path": dir_bak.to_string_lossy(),
+        }));
+        assert!(result.is_error);
+        assert!(get_result_text(&result).contains("Failed to read backup"));
+        assert_eq!(std::fs::read(&path).unwrap(), before, "target untouched");
 
         // Explicit backup path that does exist.
         let bak = dir.path().join("RestoreX.PcbLib.20260101_000000.bak");

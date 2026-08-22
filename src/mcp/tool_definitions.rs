@@ -1959,7 +1959,9 @@ impl McpServer {
                 example: Some(serde_json::json!({"name": "restore_backup", "arguments": {"filepath": "./MyLibrary.PcbLib", "backup_path": "MyLibrary.PcbLib.20260125_091500.bak"}})),
                 description: Some(
                     "Restore an Altium library file from a backup. If no specific backup is specified, \
-                     restores from the most recent backup."
+                     restores from the most recent backup. The current file is snapshotted as a new \
+                     backup first (reported as pre_restore_backup), so a wrong pick is itself \
+                     reversible, and the restore is written atomically."
                         .to_string(),
                 ),
                 input_schema: json!({

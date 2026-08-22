@@ -460,6 +460,7 @@ automatically removed to prevent unbounded disk usage.
 - `manage_schlib_footprints`
 - `write_pcblib` / `write_schlib` (when overwriting)
 - `import_library` (when overwriting)
+- `restore_backup` (the current file, before the chosen backup replaces it)
 
 **Managing backups:** Use `list_backups` to view available backups and `restore_backup` to
 recover from a previous version.

@@ -64,6 +64,16 @@ jobs:
             - name: Lint markdown
               run: markdownlint-cli2 "**/*.md"
 
+            # Offline: every relative link and #anchor across the Markdown must
+            # resolve. No network, so it is deterministic and safe to gate on;
+            # external URLs are checked by the scheduled links.yml instead,
+            # because third-party sites go down independently of this repo.
+            - name: Check internal links and anchors
+              uses: lycheeverse/lychee-action@e7477775783ea5526144ba13e8db5eec57747ce8 # v2.9.0
+              with:
+                args: --offline --include-fragments --no-progress --root-dir "$(pwd)" --exclude-path node_modules --exclude-path target --exclude-path .venv --exclude-path tests/integration/.venv "./**/*.md"
+                fail: true
+
             - name: Save npm cache
               if: steps.npm-cache-restore.outputs.cache-hit != 'true'
               uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0

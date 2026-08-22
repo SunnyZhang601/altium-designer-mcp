@@ -1,7 +1,7 @@
 # altium-designer-mcp
 
 [![CI](https://github.com/embedded-society/altium-designer-mcp/actions/workflows/ci_main.yml/badge.svg)](https://github.com/embedded-society/altium-designer-mcp/actions/workflows/ci_main.yml)
-[![codecov](https://codecov.io/gh/embedded-society/altium-designer-mcp/branch/main/graph/badge.svg)](https://codecov.io/gh/embedded-society/altium-designer-mcp)
+[![codecov](https://codecov.io/gh/embedded-society/altium-designer-mcp/branch/main/graph/badge.svg)](https://app.codecov.io/gh/embedded-society/altium-designer-mcp)
 
 **Let an AI build your Altium libraries — it does the engineering, this tool writes the files.**
 

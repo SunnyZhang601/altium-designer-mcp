@@ -63,7 +63,7 @@ it rather than pasting a second object.
 |--------|------------------------|-------|
 | [Claude Code](#claude-code) | `claude mcp add`, or `.mcp.json` in the project | standard block |
 | [Claude Desktop](#claude-desktop) | `claude_desktop_config.json` (Settings → Developer → Edit Config) | standard block |
-| [Google Antigravity](#google-antigravity) | `~/.gemini/config/mcp_config.json` | standard block |
+| [Google Antigravity](#google-antigravity) | `~/.gemini/config/mcp_config.json` or `.agents/mcp_config.json` | standard block |
 | [Cursor](#cursor) | `~/.cursor/mcp.json` or `.cursor/mcp.json` | standard block |
 | [VS Code (Copilot)](#vs-code-github-copilot) | `.vscode/mcp.json` or user `mcp.json` | `servers` key |
 | [GitHub Copilot CLI](#github-copilot-cli) | `~/.copilot/mcp-config.json` or `/mcp add` | standard block + `type: local` |
@@ -122,13 +122,14 @@ stderr, and `mcp.log` beside them the connection attempts.
 
 ## Google Antigravity
 
-Settings → **Customizations** → **Add MCP**, or edit the file directly:
+Settings (bottom left) → **Customizations** → **Add MCP**, or edit the file directly:
 
 - Linux / macOS: `~/.gemini/config/mcp_config.json`
 - Windows: `%USERPROFILE%\.gemini\config\mcp_config.json`
+- One project only: `.agents/mcp_config.json` in the workspace root
 
-Paste the standard block. The file is strict JSON (no comments). Full walkthrough in
-[`ANTIGRAVITY_GUIDE.md`](ANTIGRAVITY_GUIDE.md).
+Paste the standard block (`"disabled": true` parks an entry without deleting it). The file
+is strict JSON (no comments). Full walkthrough in [`ANTIGRAVITY_GUIDE.md`](ANTIGRAVITY_GUIDE.md).
 
 ## Cursor
 

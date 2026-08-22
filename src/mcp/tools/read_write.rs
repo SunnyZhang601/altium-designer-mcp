@@ -1631,6 +1631,9 @@ mod tests {
             Track, Via,
         };
         use crate::mcp::tools::test_support::{
+            assert_same_stream, component_streams, mask_generated_ids, unique_ids,
+        };
+        use crate::mcp::tools::test_support::{
             create_test_server, get_result_text, parse_result_json, test_temp_dir,
         };
         use serde_json::json;
@@ -1808,68 +1811,6 @@ mod tests {
             );
         }
 
-        /// Asserts two optional streams are byte-identical, naming the first
-        /// divergent offset when they are not.
-        fn assert_same_stream(what: &str, expected: Option<&Vec<u8>>, actual: Option<&Vec<u8>>) {
-            let a = expected.map_or(&[][..], Vec::as_slice);
-            let b = actual.map_or(&[][..], Vec::as_slice);
-            let first = a
-                .iter()
-                .zip(b)
-                .position(|(x, y)| x != y)
-                .unwrap_or_else(|| a.len().min(b.len()));
-            assert!(
-                expected == actual,
-                "{what}: expected {} bytes (present: {}), got {} bytes (present: {}), \
-                 first divergence at {first:#x}",
-                a.len(),
-                expected.is_some(),
-                b.len(),
-                actual.is_some()
-            );
-        }
-
-        /// Every top-level component storage of an OLE file, keyed by name,
-        /// with the bytes of the streams that carry the component.
-        fn component_streams(
-            path: &std::path::Path,
-        ) -> std::collections::BTreeMap<String, std::collections::BTreeMap<String, Vec<u8>>>
-        {
-            let file = std::fs::File::open(path).unwrap();
-            let mut cfb = cfb::CompoundFile::open(file).unwrap();
-            let streams: Vec<std::path::PathBuf> = cfb
-                .walk()
-                .filter(cfb::Entry::is_stream)
-                .map(|e| e.path().to_path_buf())
-                .collect();
-            let mut out: std::collections::BTreeMap<_, std::collections::BTreeMap<_, _>> =
-                std::collections::BTreeMap::new();
-            for stream in streams {
-                let mut parts = stream
-                    .iter()
-                    .skip(1)
-                    .map(|p| p.to_string_lossy().into_owned());
-                let component = parts.next().unwrap();
-                let rest = parts.collect::<Vec<_>>().join("/");
-                let library_level = matches!(
-                    component.as_str(),
-                    "Library" | "FileVersionInfo" | "FileHeader"
-                );
-                // A top-level stream (`SchLib`'s image `Storage`, `SectionKeys`)
-                // is kept under its own name so it is compared too.
-                let rest = if rest.is_empty() {
-                    ".".to_string()
-                } else {
-                    rest
-                };
-                let bytes = crate::altium::read_stream_opt(&mut cfb, &stream).unwrap();
-                if !library_level {
-                    out.entry(component).or_default().insert(rest, bytes);
-                }
-            }
-            out
-        }
-
         /// The tool-layer twin of the library-level byte-fidelity suite: every
         /// golden footprint read as JSON through `read_pcblib` and written back
         /// through `write_pcblib` comes out byte-identical — the `Data` stream,
@@ -1945,36 +1886,6 @@ mod tests {
                     "{g_name}/PrimitiveGuids"
                 );
             }
-        }
-
-        /// Every `UniqueID=XXXXXXXX` value in a `SchLib` Data stream.
-        fn unique_ids(bytes: &[u8]) -> Vec<Vec<u8>> {
-            const KEY: &[u8] = b"|UniqueID=";
-            bytes
-                .windows(KEY.len())
-                .enumerate()
-                .filter(|(_, w)| *w == KEY)
-                .filter_map(|(i, _)| bytes.get(i + KEY.len()..i + KEY.len() + 8))
-                .map(<[u8]>::to_vec)
-                .collect()
-        }
-
-        /// Replaces every `UniqueID` value not in `keep` with `********`.
-        fn mask_generated_ids(bytes: &[u8], keep: &std::collections::HashSet<Vec<u8>>) -> Vec<u8> {
-            const KEY: &[u8] = b"|UniqueID=";
-            let mut out = bytes.to_vec();
-            let mut i = 0;
-            while i + KEY.len() + 8 <= out.len() {
-                if &out[i..i + KEY.len()] == KEY
-                    && !keep.contains(&out[i + KEY.len()..i + KEY.len() + 8])
-                {
-                    out[i + KEY.len()..i + KEY.len() + 8].copy_from_slice(b"********");
-                    i += KEY.len() + 8;
-                } else {
-                    i += 1;
-                }
-            }
-            out
         }
 
         /// The `SchLib` twin: every golden symbol read as JSON through
@@ -2292,7 +2203,19 @@ mod tests {
             let read = server.call_read_pcblib(&json!({ "filepath": src.to_string_lossy() }));
             assert!(!read.is_error, "{}", get_result_text(&read));
             let footprints = parse_result_json(&read)["footprints"].clone();
-            for fp in footprints.as_array().unwrap() {
+            for (i, fp) in footprints.as_array().unwrap().iter().enumerate() {
+                // Alternate between the two read shapes: read_pcblib builds
+                // its JSON by hand, get_component serialises the struct.
+                let fp = if i % 2 == 0 {
+                    fp.clone()
+                } else {
+                    let got = server.call_get_component(&json!({
+                        "filepath": src.to_string_lossy(),
+                        "component_name": fp["name"],
+                    }));
+                    assert!(!got.is_error, "{}", get_result_text(&got));
+                    parse_result_json(&got)["component"].clone()
+                };
                 let updated = server.call_update_component(&json!({
                     "filepath": work.to_string_lossy(),
                     "component_name": fp["name"],
@@ -2466,7 +2389,17 @@ mod tests {
             let symbols = parse_result_json(&read)["symbols"].clone();
             // Every third symbol is enough saves to surface per-save drift
             // on all of them while keeping the test under a quarter minute.
-            for symbol in symbols.as_array().unwrap().iter().step_by(3) {
+            for (i, symbol) in symbols.as_array().unwrap().iter().step_by(3).enumerate() {
+                let symbol = if i % 2 == 0 {
+                    symbol.clone()
+                } else {
+                    let got = server.call_get_component(&json!({
+                        "filepath": src.to_string_lossy(),
+                        "component_name": symbol["name"],
+                    }));
+                    assert!(!got.is_error, "{}", get_result_text(&got));
+                    parse_result_json(&got)["component"].clone()
+                };
                 let updated = server.call_update_component(&json!({
                     "filepath": work.to_string_lossy(),
                     "component_name": symbol["name"],

@@ -138,6 +138,32 @@ impl Bench {
         }
     }
 
+    /// Asserts the work file lists its components in the golden's order
+    /// with `renames` applied in place — a renamed component keeps its
+    /// place rather than dropping to the end of the library.
+    fn assert_order_kept(&self, renames: &[(&str, &str)]) {
+        let names = |path: &Path| -> Vec<String> {
+            if path
+                .extension()
+                .is_some_and(|e| e.eq_ignore_ascii_case("pcblib"))
+            {
+                PcbLib::open(path).unwrap().names()
+            } else {
+                SchLib::open(path).unwrap().names()
+            }
+        };
+        let expected: Vec<String> = names(&self.src)
+            .into_iter()
+            .map(|name| {
+                renames
+                    .iter()
+                    .find(|(old, _)| *old == name)
+                    .map_or(name, |(_, new)| (*new).to_string())
+            })
+            .collect();
+        assert_eq!(names(&self.work), expected, "the library order changed");
+    }
+
     /// Runs `tool` and asserts it succeeded.
     fn run(&self, tool: &str, arguments: &Value) -> Value {
         let result = match tool {
@@ -186,6 +212,7 @@ fn pcblib_rename_moves_the_bytes_and_leaves_the_rest_intact() {
         &json!({ "filepath": b.work(), "old_name": "TRACKS", "new_name": "TRACKS_RENAMED" }),
     );
     b.assert_untouched_except(&["TRACKS", "TRACKS_RENAMED"], None);
+    b.assert_order_kept(&[("TRACKS", "TRACKS_RENAMED")]);
     let after = component_streams(&b.work);
     assert!(!after.contains_key("TRACKS"));
     // A rename changes the name block that opens the Data stream and nothing
@@ -259,6 +286,11 @@ fn pcblib_bulk_rename_touches_only_the_matches() {
         .flat_map(|(o, n)| [o.as_str(), n.as_str()])
         .collect();
     b.assert_untouched_except(&touched, None);
+    let pairs: Vec<(&str, &str)> = renamed
+        .iter()
+        .map(|(o, n)| (o.as_str(), n.as_str()))
+        .collect();
+    b.assert_order_kept(&pairs);
     let after = component_streams(&b.work);
     for (old, new) in &renamed {
         assert_eq!(
@@ -380,6 +412,7 @@ fn schlib_rename_moves_the_bytes_and_leaves_the_rest_intact() {
         &json!({ "filepath": b.work(), "old_name": "POLYGONS", "new_name": "POLYGONS_RENAMED" }),
     );
     b.assert_untouched_except(&["POLYGONS", "POLYGONS_RENAMED"], None);
+    b.assert_order_kept(&[("POLYGONS", "POLYGONS_RENAMED")]);
 }
 
 #[test]

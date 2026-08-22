@@ -94,7 +94,10 @@ proptest = "1.6"
 opt-level = 3
 lto = true
 strip = true
-panic = "abort"
+# Unwinding (the default) is deliberate: the tool dispatcher catches a panic
+# and answers the call with an error result, so one failing tool cannot take
+# the server — and the assistant's whole session — down. `panic = "abort"`
+# would make that safety net impossible.
 codegen-units = 1
 
 [lints.rust]

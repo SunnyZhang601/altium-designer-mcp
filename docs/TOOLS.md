@@ -359,8 +359,9 @@ other integrity problems. Returns a list of warnings and errors.
 
 ## `export_library`
 
-Export an Altium library to JSON or CSV format for version control, backup, or external processing. JSON includes full component data; CSV provides a summary table of
-component names and basic info.
+Export an Altium library to JSON or CSV format for version control, backup, or external processing. JSON includes full component data and, for a PcbLib, the embedded 3D
+models the bodies reference (`embedded_models`, base64 STEP data keyed by model GUID) so an import restores them; CSV provides a summary table of component names and
+basic info.
 
 **Example**
 
@@ -385,8 +386,9 @@ component names and basic info.
 
 ## `import_library`
 
-Import components from JSON data into an Altium library file. Accepts JSON in the format produced by export_library, enabling round-trip workflows. Auto-detects library
-type (PcbLib/SchLib) from the JSON data.
+Import components from JSON data into an Altium library file. Accepts JSON in the format produced by export_library, enabling round-trip workflows: a PcbLib export's
+`embedded_models` are restored alongside the footprints, and a body whose model the data does not contain is reported in warnings. Auto-detects library type
+(PcbLib/SchLib) from the JSON data.
 
 **Example**
 

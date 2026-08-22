@@ -916,6 +916,23 @@ impl McpServer {
                 })
                 .collect();
 
+            // The embedded 3D models live at library level (`/Library/Models`),
+            // not inside any footprint record, so an export that carried only
+            // the footprints left every embedded body a dangling reference on
+            // import. Ship the model bytes alongside (base64), keyed by the
+            // same GUID the bodies reference.
+            let embedded_models: Vec<Value> = library
+                .models()
+                .map(|model| {
+                    use base64::Engine as _;
+                    json!({
+                        "id": model.id,
+                        "name": model.name,
+                        "data": base64::engine::general_purpose::STANDARD.encode(&model.data),
+                    })
+                })
+                .collect();
+
             let result = json!({
                 "status": "success",
                 "filepath": filepath,
@@ -924,6 +941,7 @@ impl McpServer {
                 "units": "mm",
                 "component_count": library.len(),
                 "footprints": footprints,
+                "embedded_models": embedded_models,
             });
 
             ToolCallResult::text(serde_json::to_string_pretty(&result).unwrap())
@@ -1126,6 +1144,66 @@ impl McpServer {
     }
 
     /// Imports footprints from JSON into a `PcbLib` file.
+    /// Restores the embedded 3D models `export_library` ships alongside a
+    /// `PcbLib`'s footprints (`embedded_models`: base64 STEP data keyed by
+    /// model GUID). A model already in the library (append mode) is the same
+    /// model — ids are GUIDs — and is left alone. Corrupt data is an error
+    /// rather than a skip: an import is a restore, and a body whose model
+    /// quietly failed to arrive is exactly the damage being repaired.
+    /// Returns how many models were added.
+    fn import_embedded_models(
+        library: &mut crate::altium::pcblib::PcbLib,
+        json_data: &Value,
+    ) -> Result<usize, String> {
+        use crate::altium::pcblib::EmbeddedModel;
+        use base64::Engine as _;
+
+        let Some(models) = json_data.get("embedded_models").and_then(Value::as_array) else {
+            return Ok(0);
+        };
+        let mut imported = 0;
+        for (idx, model_json) in models.iter().enumerate() {
+            let Some(id) = model_json.get("id").and_then(Value::as_str) else {
+                return Err(format!("Embedded model {idx} has no 'id'"));
+            };
+            let name = model_json
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let Some(data_b64) = model_json.get("data").and_then(Value::as_str) else {
+                return Err(format!("Embedded model {idx} ('{id}') has no 'data'"));
+            };
+            let data = base64::engine::general_purpose::STANDARD
+                .decode(data_b64)
+                .map_err(|e| {
+                    format!("Embedded model {idx} ('{id}') has invalid base64 data: {e}")
+                })?;
+            if library.get_model(id).is_none() {
+                library.add_model(EmbeddedModel::new(id, name, data));
+                imported += 1;
+            }
+        }
+        Ok(imported)
+    }
+
+    /// One warning per embedded body whose model the library does not hold —
+    /// a dangling reference Altium cannot render, reported rather than saved
+    /// silently.
+    fn dangling_body_warnings(library: &crate::altium::pcblib::PcbLib) -> Vec<String> {
+        let mut warnings = Vec::new();
+        for footprint in library.iter() {
+            for body in footprint.component_bodies.iter().filter(|b| b.embedded) {
+                if library.get_model(&body.model_id).is_none() {
+                    warnings.push(format!(
+                        "'{}' references embedded model {} which the import data does not contain",
+                        footprint.name, body.model_id
+                    ));
+                }
+            }
+        }
+        warnings
+    }
+
     pub(crate) fn import_pcblib(
         output_path: &str,
         json_data: &Value,
@@ -1187,6 +1265,12 @@ impl McpServer {
             }
         }
 
+        let models_imported = match Self::import_embedded_models(&mut library, json_data) {
+            Ok(count) => count,
+            Err(e) => return ToolCallResult::error(e),
+        };
+        let warnings = Self::dangling_body_warnings(&library);
+
         if let Err(resp) = Self::backup_then_save(output_path, || library.save(output_path)) {
             return resp;
         }
@@ -1197,6 +1281,7 @@ impl McpServer {
             "output_path": output_path,
             "file_type": "PcbLib",
             "imported_count": imported_count,
+            "embedded_models_imported": models_imported,
             "total_count": total_count,
             "append": append,
             "message": if append {
@@ -1205,6 +1290,9 @@ impl McpServer {
                 format!("Created library with {imported_count} footprints")
             },
         });
+        if !warnings.is_empty() {
+            result["warnings"] = json!(warnings);
+        }
 
         // Run post-write validation
         if let Some(validation) = Self::post_write_validation_pcblib(output_path) {
@@ -1418,7 +1506,7 @@ impl McpServer {
 #[cfg(test)]
 mod tests {
 
-    use crate::altium::pcblib::{Footprint, PcbLib};
+    use crate::altium::pcblib::{ComponentBody, EmbeddedModel, Footprint, Pad, PcbLib};
     use crate::altium::schlib::{Pin, PinOrientation, SchLib, Symbol};
     use crate::mcp::server::McpServer;
     use crate::mcp::tools::test_support::{
@@ -1712,6 +1800,102 @@ mod tests {
     }
 
     // ==================== import_library ====================
+
+    /// Export → import is the backup/restore loop, and embedded 3D models live
+    /// at library level rather than in any footprint record — so the export
+    /// must carry the model bytes and the import must restore them, or every
+    /// embedded body comes back as a dangling reference.
+    #[test]
+    fn export_import_round_trips_embedded_models() {
+        let dir = test_temp_dir();
+        let server = create_test_server(dir.path());
+
+        let model_id = "{11111111-2222-3333-4444-555555555555}";
+        let step = b"ISO-10303-21; test model".to_vec();
+        let mut lib = PcbLib::new();
+        let mut fp = Footprint::new("QFN16");
+        fp.add_pad(Pad::smd("1", -1.0, 0.0, 0.3, 0.8));
+        fp.add_component_body(ComponentBody::new(model_id, "QFN16.step"));
+        lib.add(fp);
+        lib.add_model(EmbeddedModel::new(model_id, "QFN16.step", step.clone()));
+        let src = dir.path().join("ModelsSrc.PcbLib");
+        lib.save(&src).unwrap();
+
+        let exported = parse_result_json(&server.call_export_library(&json!({
+            "filepath": src.to_string_lossy(),
+            "format": "json",
+        })));
+        let models = exported["embedded_models"]
+            .as_array()
+            .expect("models exported");
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0]["id"], model_id);
+        assert_eq!(models[0]["name"], "QFN16.step");
+
+        let out = dir.path().join("ModelsDst.PcbLib");
+        let result = server.call_import_library(&json!({
+            "output_path": out.to_string_lossy(),
+            "json_data": {
+                "file_type": "PcbLib",
+                "footprints": exported["footprints"],
+                "embedded_models": exported["embedded_models"],
+            },
+        }));
+        assert!(!result.is_error, "{}", get_result_text(&result));
+        let parsed = parse_result_json(&result);
+        assert_eq!(parsed["embedded_models_imported"], 1);
+        assert!(parsed.get("warnings").is_none(), "nothing dangling");
+
+        let reopened = PcbLib::open(&out).unwrap();
+        let model = reopened.get_model(model_id).expect("model restored");
+        assert_eq!(model.data, step, "model bytes survive the loop");
+        let body = &reopened.get("QFN16").unwrap().component_bodies[0];
+        assert!(body.embedded);
+        assert_eq!(body.model_id, model_id);
+    }
+
+    /// Import data that names a model it does not carry gets a warning per
+    /// dangling body; corrupt model data is an error, not a silent skip.
+    #[test]
+    fn import_library_reports_dangling_bodies_and_rejects_corrupt_models() {
+        let dir = test_temp_dir();
+        let server = create_test_server(dir.path());
+        let out = dir.path().join("Dangling.PcbLib");
+
+        let result = server.call_import_library(&json!({
+            "output_path": out.to_string_lossy(),
+            "json_data": {
+                "file_type": "PcbLib",
+                "footprints": [{
+                    "name": "ORPHAN",
+                    "pads": [{ "designator": "1", "x": 0.0, "y": 0.0, "width": 0.6, "height": 0.5 }],
+                    "component_bodies": [{
+                        "model_id": "{99999999-8888-7777-6666-555555555555}",
+                        "embedded": true,
+                        "overall_height": 1.0
+                    }]
+                }],
+            },
+        }));
+        assert!(!result.is_error, "{}", get_result_text(&result));
+        let parsed = parse_result_json(&result);
+        assert_eq!(parsed["embedded_models_imported"], 0);
+        let warnings = parsed["warnings"]
+            .as_array()
+            .expect("dangling body reported");
+        assert!(warnings[0].as_str().unwrap().contains("ORPHAN"));
+
+        let result = server.call_import_library(&json!({
+            "output_path": dir.path().join("Corrupt.PcbLib").to_string_lossy(),
+            "json_data": {
+                "file_type": "PcbLib",
+                "footprints": [],
+                "embedded_models": [{ "id": "{1}", "name": "x.step", "data": "!!! not base64 !!!" }],
+            },
+        }));
+        assert!(result.is_error);
+        assert!(get_result_text(&result).contains("invalid base64"));
+    }
 
     /// Export → import is the backup/restore loop, so the footprint's kind-85
     /// identity and interleaved stream order must survive it — pinned here

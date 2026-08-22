@@ -12,6 +12,8 @@ mod components;
 mod diff;
 mod library_ops;
 mod maintenance;
+#[cfg(test)]
+mod mutation_fidelity;
 mod parsing;
 mod query_update;
 mod read_write;

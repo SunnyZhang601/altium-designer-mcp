@@ -87,3 +87,94 @@ pub fn parse_result_json(result: &ToolCallResult) -> Value {
     serde_json::from_str(text)
         .unwrap_or_else(|e| panic!("tool result is not valid JSON ({e}): {text}"))
 }
+
+// ---- Byte-level comparison of written libraries ----
+
+/// Asserts two optional streams are byte-identical, naming the first
+/// divergent offset when they are not.
+pub fn assert_same_stream(what: &str, expected: Option<&Vec<u8>>, actual: Option<&Vec<u8>>) {
+    let a = expected.map_or(&[][..], Vec::as_slice);
+    let b = actual.map_or(&[][..], Vec::as_slice);
+    let first = a
+        .iter()
+        .zip(b)
+        .position(|(x, y)| x != y)
+        .unwrap_or_else(|| a.len().min(b.len()));
+    assert!(
+        expected == actual,
+        "{what}: expected {} bytes (present: {}), got {} bytes (present: {}), \
+             first divergence at {first:#x}",
+        a.len(),
+        expected.is_some(),
+        b.len(),
+        actual.is_some()
+    );
+}
+
+/// Every top-level component storage of an OLE file, keyed by name,
+/// with the bytes of the streams that carry the component.
+pub fn component_streams(
+    path: &std::path::Path,
+) -> std::collections::BTreeMap<String, std::collections::BTreeMap<String, Vec<u8>>> {
+    let file = std::fs::File::open(path).unwrap();
+    let mut cfb = cfb::CompoundFile::open(file).unwrap();
+    let streams: Vec<std::path::PathBuf> = cfb
+        .walk()
+        .filter(cfb::Entry::is_stream)
+        .map(|e| e.path().to_path_buf())
+        .collect();
+    let mut out: std::collections::BTreeMap<_, std::collections::BTreeMap<_, _>> =
+        std::collections::BTreeMap::new();
+    for stream in streams {
+        let mut parts = stream
+            .iter()
+            .skip(1)
+            .map(|p| p.to_string_lossy().into_owned());
+        let component = parts.next().unwrap();
+        let rest = parts.collect::<Vec<_>>().join("/");
+        let library_level = matches!(
+            component.as_str(),
+            "Library" | "FileVersionInfo" | "FileHeader"
+        );
+        // A top-level stream (`SchLib`'s image `Storage`, `SectionKeys`)
+        // is kept under its own name so it is compared too.
+        let rest = if rest.is_empty() {
+            ".".to_string()
+        } else {
+            rest
+        };
+        let bytes = crate::altium::read_stream_opt(&mut cfb, &stream).unwrap();
+        if !library_level {
+            out.entry(component).or_default().insert(rest, bytes);
+        }
+    }
+    out
+}
+
+/// Every `UniqueID=XXXXXXXX` value in a `SchLib` Data stream.
+pub fn unique_ids(bytes: &[u8]) -> Vec<Vec<u8>> {
+    const KEY: &[u8] = b"|UniqueID=";
+    bytes
+        .windows(KEY.len())
+        .enumerate()
+        .filter(|(_, w)| *w == KEY)
+        .filter_map(|(i, _)| bytes.get(i + KEY.len()..i + KEY.len() + 8))
+        .map(<[u8]>::to_vec)
+        .collect()
+}
+
+/// Replaces every `UniqueID` value not in `keep` with `********`.
+pub fn mask_generated_ids(bytes: &[u8], keep: &std::collections::HashSet<Vec<u8>>) -> Vec<u8> {
+    const KEY: &[u8] = b"|UniqueID=";
+    let mut out = bytes.to_vec();
+    let mut i = 0;
+    while i + KEY.len() + 8 <= out.len() {
+        if &out[i..i + KEY.len()] == KEY && !keep.contains(&out[i + KEY.len()..i + KEY.len() + 8]) {
+            out[i + KEY.len()..i + KEY.len() + 8].copy_from_slice(b"********");
+            i += KEY.len() + 8;
+        } else {
+            i += 1;
+        }
+    }
+    out
+}

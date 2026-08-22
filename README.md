@@ -286,8 +286,8 @@ Additional layers supported:
 
 **Prebuilt binaries** for Linux (x86_64), macOS (aarch64) and Windows (x86_64) are on the
 [Releases page](https://github.com/embedded-society/altium-designer-mcp/releases) — each
-archive bundles a setup README covering Claude Code, Claude Desktop, Antigravity, Cursor
-and VS Code.
+archive bundles a setup README plus [`docs/CLIENT_SETUP.md`](docs/CLIENT_SETUP.md), which
+wires the server into every MCP client we know of.
 
 To build from source instead, see
 [CONTRIBUTING.md § Development Setup](CONTRIBUTING.md#development-setup); an optimised
@@ -322,20 +322,26 @@ altium-designer-mcp [OPTIONS] [CONFIG_FILE]
 | `-h`, `--help` | Print help information |
 | `-V`, `--version` | Print version information |
 
-### Usage with Claude Desktop
+### Connecting an AI client
 
-Add to your Claude Desktop MCP configuration:
+Every MCP client needs the same two absolute paths — the binary and your config file — and
+differs only in where they are written. The standard block most clients read:
 
 ```json
 {
     "mcpServers": {
         "altium": {
-            "command": "altium-designer-mcp",
-            "args": ["/path/to/config.json"]
+            "command": "/usr/local/bin/altium-designer-mcp",
+            "args": ["/home/you/.altium-designer-mcp/config.json"]
         }
     }
 }
 ```
+
+Where that goes for Claude Desktop, Cursor, VS Code, Windsurf, Cline, Zed, JetBrains,
+Gemini CLI, Codex CLI and the rest — and what to do when a client cannot see the server —
+is in [docs/CLIENT_SETUP.md](docs/CLIENT_SETUP.md). Use absolute paths: clients do not
+search `PATH` or expand `~` for you.
 
 ---
 
@@ -479,6 +485,20 @@ Component names longer than 31 characters are supported. The OLE Compound File f
 storage names to 31 characters, so longer names are automatically truncated internally while
 the full name is preserved in component parameters. This is handled transparently — you can
 use any length component name and it will be preserved on read/write roundtrips.
+
+---
+
+## Documentation
+
+| For… | Read |
+|------|------|
+| Wiring the server into your AI client | [docs/CLIENT_SETUP.md](docs/CLIENT_SETUP.md), [Claude Code guide](docs/CLAUDE_CODE_GUIDE.md), [Antigravity guide](docs/ANTIGRAVITY_GUIDE.md) |
+| Telling the AI how to use it well | [docs/AGENT_GUIDE.md](docs/AGENT_GUIDE.md) (paste into a project brief), [docs/AI_WORKFLOW.md](docs/AI_WORKFLOW.md) |
+| Every tool, parameter and example | [docs/TOOLS.md](docs/TOOLS.md); error messages in [docs/errors.md](docs/errors.md) |
+| Why it is built this way | [docs/VISION.md](docs/VISION.md), [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) |
+| The file formats, byte by byte | [docs/PCBLIB_FORMAT.md](docs/PCBLIB_FORMAT.md), [docs/SCHLIB_FORMAT.md](docs/SCHLIB_FORMAT.md) |
+| Security model and threat analysis | [docs/SECURITY.md](docs/SECURITY.md) (reporting: [SECURITY.md](SECURITY.md)) |
+| How releases are built and verified | [docs/RELEASING.md](docs/RELEASING.md) |
 
 ---
 

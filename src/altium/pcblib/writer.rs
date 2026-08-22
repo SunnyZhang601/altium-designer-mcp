@@ -2253,11 +2253,14 @@ pub fn encode_component_wide_strings(footprint: &Footprint) -> Vec<u8> {
     // pipe per entry and NO trailing pipe (matching AltiumSharp). With no entries the
     // string is empty, so the stream is just `[01 00 00 00][00]` — AltiumSharp's empty
     // form — rather than the spurious `[02 00 00 00][7C 00]` (leading-pipe) we emitted.
+    // Each value is the text's UTF-16 code units in decimal — `10µF` is
+    // `49,48,181,70`, `Ω` is `937` — which is what lets the stream carry text
+    // the Windows-1252 `Data` block cannot.
     let mut content = String::new();
     for (index, text) in texts.iter().enumerate() {
         let encoded: String = text
-            .bytes()
-            .map(|b| b.to_string())
+            .encode_utf16()
+            .map(|unit| unit.to_string())
             .collect::<Vec<_>>()
             .join(",");
         let _ = write!(content, "|ENCODEDTEXT{index}={encoded}");

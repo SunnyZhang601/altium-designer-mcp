@@ -21,8 +21,9 @@ record). The specialised worklists stay the single source of truth for their are
 - [ ] **Streamable HTTP transport** alongside stdio, so web-only assistants (claude.ai in
       the browser, ChatGPT) can connect as a remote server — today they cannot
       (`docs/CLIENT_SETUP.md` § Web-only assistants).
-- [ ] **`.mcpb` Claude Desktop extension** for one-click install — the format that
-      superseded `.dxt`; Claude Desktop now steers users to extensions over hand-edited
+- [ ] **Claude Desktop extension** for one-click install, published as **both `.mcpb` and
+      `.dxt`** — the same bundle format under its new and old names, so older Claude Desktop
+      builds install it too. Claude Desktop now steers users to extensions over hand-edited
       JSON (pattern from coffeenmusic/altium-mcp).
 
 ## C. Docs / AI workflow

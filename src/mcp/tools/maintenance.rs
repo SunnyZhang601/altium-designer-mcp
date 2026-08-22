@@ -198,8 +198,11 @@ impl McpServer {
         }
 
         // Check for conflicts (new name already exists or duplicates in renames)
-        let existing_names: std::collections::HashSet<&str> =
-            names.iter().map(String::as_str).collect();
+        // Names clash the way the library resolves them: regardless of case.
+        let existing_names: std::collections::HashSet<String> = names
+            .iter()
+            .map(|n| crate::altium::folded_name(n))
+            .collect();
         let mut new_names: std::collections::HashSet<String> = std::collections::HashSet::new();
 
         for (old_name, new_name) in &renames {
@@ -210,8 +213,10 @@ impl McpServer {
                 continue;
             }
             // Check if new name conflicts with an existing name that's not being renamed
-            if existing_names.contains(new_name.as_str()) {
-                let is_being_renamed = renames.iter().any(|(o, _)| o == new_name);
+            if existing_names.contains(&crate::altium::folded_name(new_name)) {
+                let is_being_renamed = renames
+                    .iter()
+                    .any(|(o, _)| crate::altium::same_name(o, new_name));
                 if !is_being_renamed {
                     errors.push(format!(
                         "Cannot rename '{old_name}' to '{new_name}': target name already exists"
@@ -219,7 +224,7 @@ impl McpServer {
                 }
             }
             // Check for duplicate new names
-            if !new_names.insert(new_name.clone()) {
+            if !new_names.insert(crate::altium::folded_name(new_name)) {
                 errors.push(format!(
                     "Multiple components would be renamed to '{new_name}' (conflict)"
                 ));
@@ -240,20 +245,10 @@ impl McpServer {
                 return ToolCallResult::error(e);
             }
 
-            // Two-phase remove-then-add (see the SchLib path): `add` overwrites on
-            // key collision, so a one-pass loop loses a footprint on a chained
-            // rename like A->B, B->C.
-            let mut pending: Vec<crate::altium::pcblib::Footprint> =
-                Vec::with_capacity(renames.len());
-            for (old_name, new_name) in &renames {
-                if let Some(mut footprint) = library.remove(old_name) {
-                    footprint.name.clone_from(new_name);
-                    pending.push(footprint);
-                }
-            }
-            for footprint in pending {
-                library.add(footprint);
-            }
+            // Every rename resolves against the names before the call and is
+            // applied in place, so a chained rename like A->B, B->C renames
+            // both and every footprint keeps its position in the library.
+            library.rename_all(&renames);
 
             if let Err(e) = library.save(filepath) {
                 return ToolCallResult::error(format!("Failed to save library: {e}"));
@@ -305,8 +300,11 @@ impl McpServer {
         }
 
         // Check for conflicts
-        let existing_names: std::collections::HashSet<&str> =
-            names.iter().map(String::as_str).collect();
+        // Names clash the way the library resolves them: regardless of case.
+        let existing_names: std::collections::HashSet<String> = names
+            .iter()
+            .map(|n| crate::altium::folded_name(n))
+            .collect();
         let mut new_names: std::collections::HashSet<String> = std::collections::HashSet::new();
 
         for (old_name, new_name) in &renames {
@@ -316,15 +314,17 @@ impl McpServer {
                 errors.push(format!("Cannot rename '{old_name}': {e}"));
                 continue;
             }
-            if existing_names.contains(new_name.as_str()) {
-                let is_being_renamed = renames.iter().any(|(o, _)| o == new_name);
+            if existing_names.contains(&crate::altium::folded_name(new_name)) {
+                let is_being_renamed = renames
+                    .iter()
+                    .any(|(o, _)| crate::altium::same_name(o, new_name));
                 if !is_being_renamed {
                     errors.push(format!(
                         "Cannot rename '{old_name}' to '{new_name}': target name already exists"
                     ));
                 }
             }
-            if !new_names.insert(new_name.clone()) {
+            if !new_names.insert(crate::altium::folded_name(new_name)) {
                 errors.push(format!(
                     "Multiple components would be renamed to '{new_name}' (conflict)"
                 ));
@@ -347,20 +347,11 @@ impl McpServer {
 
             // Two-phase: remove EVERY source before adding ANY target. `add` is
             // IndexMap::insert (overwrites on key collision), so a one-pass
-            // remove-then-add loses a symbol on a chained rename like A->B, B->C —
-            // adding B (still present) clobbers the original B before B->C removes
-            // it. The conflict check permits such chains (target is itself being
-            // renamed), so the application must be collision-safe.
-            let mut pending: Vec<crate::altium::schlib::Symbol> = Vec::with_capacity(renames.len());
-            for (old_name, new_name) in &renames {
-                if let Some(mut symbol) = library.remove(old_name) {
-                    symbol.name.clone_from(new_name);
-                    pending.push(symbol);
-                }
-            }
-            for symbol in pending {
-                library.add(symbol);
-            }
+            // Every rename resolves against the names before the call and is
+            // applied in place, so a chained rename like A->B, B->C (which the
+            // conflict check permits, the target being itself renamed) renames
+            // both and every symbol keeps its position in the library.
+            library.rename_all(&renames);
 
             if let Err(e) = library.save(filepath) {
                 return ToolCallResult::error(format!("Failed to save library: {e}"));

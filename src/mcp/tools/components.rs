@@ -80,9 +80,11 @@ impl McpServer {
         };
 
         // Check if target already exists
-        if library.get(target_name).is_some() {
-            return ToolCallResult::error(format!(
-                "Component '{target_name}' already exists in library"
+        if let Some(existing) = library.get(target_name) {
+            return ToolCallResult::error(Self::taken_name_error(
+                format!("Component '{target_name}' already exists in library"),
+                target_name,
+                &existing.name,
             ));
         }
 
@@ -160,9 +162,11 @@ impl McpServer {
         };
 
         // Check if target already exists
-        if library.get(target_name).is_some() {
-            return ToolCallResult::error(format!(
-                "Component '{target_name}' already exists in library"
+        if let Some(existing) = library.get(target_name) {
+            return ToolCallResult::error(Self::taken_name_error(
+                format!("Component '{target_name}' already exists in library"),
+                target_name,
+                &existing.name,
             ));
         }
 
@@ -289,21 +293,20 @@ impl McpServer {
             Err(e) => return ToolCallResult::error(format!("Failed to read library: {e}")),
         };
 
-        // Check if new name already exists
-        if library.get(new_name).is_some() {
-            return ToolCallResult::error(format!(
-                "Component '{new_name}' already exists in library"
+        // Check if new name already exists. The component's own name in
+        // another case resolves to itself and is a legitimate rename.
+        if let Some(existing) = library.get(new_name).filter(|c| c.name != old_name) {
+            return ToolCallResult::error(Self::taken_name_error(
+                format!("Component '{new_name}' already exists in library"),
+                new_name,
+                &existing.name,
             ));
         }
 
-        // Find and remove the source component
-        let Some(mut footprint) = library.remove(old_name) else {
+        // Renamed in place: the component keeps its position in the library.
+        if !library.rename(old_name, new_name) {
             return ToolCallResult::error(format!("Component '{old_name}' not found in library"));
-        };
-
-        // Rename and add back
-        footprint.name = new_name.to_string();
-        library.add(footprint);
+        }
 
         // If dry_run, return what would happen without writing
         if dry_run {
@@ -356,21 +359,20 @@ impl McpServer {
             Err(e) => return ToolCallResult::error(format!("Failed to read library: {e}")),
         };
 
-        // Check if new name already exists
-        if library.get(new_name).is_some() {
-            return ToolCallResult::error(format!(
-                "Component '{new_name}' already exists in library"
+        // Check if new name already exists. The component's own name in
+        // another case resolves to itself and is a legitimate rename.
+        if let Some(existing) = library.get(new_name).filter(|c| c.name != old_name) {
+            return ToolCallResult::error(Self::taken_name_error(
+                format!("Component '{new_name}' already exists in library"),
+                new_name,
+                &existing.name,
             ));
         }
 
-        // Find and remove the source component
-        let Some(mut symbol) = library.remove(old_name) else {
+        // Renamed in place: the symbol keeps its position in the library.
+        if !library.rename(old_name, new_name) {
             return ToolCallResult::error(format!("Component '{old_name}' not found in library"));
-        };
-
-        // Rename and add back
-        symbol.name = new_name.to_string();
-        library.add(symbol);
+        }
 
         // If dry_run, return what would happen without writing
         if dry_run {
@@ -599,9 +601,11 @@ impl McpServer {
         };
 
         // Check if target already exists
-        if target_library.get(target_name).is_some() {
-            return ToolCallResult::error(format!(
-                "Component '{target_name}' already exists in target library"
+        if let Some(existing) = target_library.get(target_name) {
+            return ToolCallResult::error(Self::taken_name_error(
+                format!("Component '{target_name}' already exists in target library"),
+                target_name,
+                &existing.name,
             ));
         }
 
@@ -726,9 +730,11 @@ impl McpServer {
         };
 
         // Check if target already exists
-        if target_library.get(target_name).is_some() {
-            return ToolCallResult::error(format!(
-                "Component '{target_name}' already exists in target library"
+        if let Some(existing) = target_library.get(target_name) {
+            return ToolCallResult::error(Self::taken_name_error(
+                format!("Component '{target_name}' already exists in target library"),
+                target_name,
+                &existing.name,
             ));
         }
 
@@ -897,9 +903,13 @@ impl McpServer {
             PcbLib::new()
         };
 
-        // For dry_run, we track names that "would be" added to detect duplicates
-        let mut simulated_names: std::collections::HashSet<String> =
-            target_library.names().into_iter().collect();
+        // For dry_run, we track names that "would be" added to detect
+        // duplicates — case-folded, as the library resolves them.
+        let mut simulated_names: std::collections::HashSet<String> = target_library
+            .names()
+            .iter()
+            .map(|name| crate::altium::folded_name(name))
+            .collect();
 
         let initial_count = target_library.len();
         let mut merged_count = 0;
@@ -933,7 +943,7 @@ impl McpServer {
                 let mut fp_to_add = footprint.clone();
 
                 let name_exists = if dry_run {
-                    simulated_names.contains(&original_name)
+                    simulated_names.contains(&crate::altium::folded_name(&original_name))
                 } else {
                     target_library.get(&original_name).is_some()
                 };
@@ -954,7 +964,8 @@ impl McpServer {
                             // Find a unique name
                             let mut counter = 1;
                             let mut new_name = format!("{original_name}_{counter}");
-                            while (dry_run && simulated_names.contains(&new_name))
+                            while (dry_run
+                                && simulated_names.contains(&crate::altium::folded_name(&new_name)))
                                 || (!dry_run && target_library.get(&new_name).is_some())
                             {
                                 counter += 1;
@@ -962,7 +973,7 @@ impl McpServer {
                             }
                             fp_to_add.name.clone_from(&new_name);
                             if dry_run {
-                                simulated_names.insert(new_name);
+                                simulated_names.insert(crate::altium::folded_name(&new_name));
                             }
                             source_renamed += 1;
                             renamed_count += 1;
@@ -999,7 +1010,7 @@ impl McpServer {
                 }
 
                 if dry_run {
-                    simulated_names.insert(fp_to_add.name.clone());
+                    simulated_names.insert(crate::altium::folded_name(&fp_to_add.name));
                 } else {
                     target_library.add(fp_to_add);
                 }
@@ -1090,9 +1101,12 @@ impl McpServer {
             SchLib::new()
         };
 
-        // For dry_run, we track names that "would be" added to detect duplicates
-        let mut simulated_names: std::collections::HashSet<String> =
-            target_library.iter().map(|s| s.name.clone()).collect();
+        // For dry_run, we track names that "would be" added to detect
+        // duplicates — case-folded, as the library resolves them.
+        let mut simulated_names: std::collections::HashSet<String> = target_library
+            .iter()
+            .map(|s| crate::altium::folded_name(&s.name))
+            .collect();
 
         let initial_count = target_library.len();
         let mut merged_count = 0;
@@ -1122,7 +1136,7 @@ impl McpServer {
                 let mut sym_to_add = symbol;
 
                 let name_exists = if dry_run {
-                    simulated_names.contains(&original_name)
+                    simulated_names.contains(&crate::altium::folded_name(&original_name))
                 } else {
                     target_library.get(&original_name).is_some()
                 };
@@ -1143,7 +1157,8 @@ impl McpServer {
                             // Find a unique name
                             let mut counter = 1;
                             let mut new_name = format!("{original_name}_{counter}");
-                            while (dry_run && simulated_names.contains(&new_name))
+                            while (dry_run
+                                && simulated_names.contains(&crate::altium::folded_name(&new_name)))
                                 || (!dry_run && target_library.get(&new_name).is_some())
                             {
                                 counter += 1;
@@ -1151,7 +1166,7 @@ impl McpServer {
                             }
                             sym_to_add.name.clone_from(&new_name);
                             if dry_run {
-                                simulated_names.insert(new_name);
+                                simulated_names.insert(crate::altium::folded_name(&new_name));
                             }
                             source_renamed += 1;
                             renamed_count += 1;
@@ -1161,7 +1176,7 @@ impl McpServer {
                 }
 
                 if dry_run {
-                    simulated_names.insert(sym_to_add.name.clone());
+                    simulated_names.insert(crate::altium::folded_name(&sym_to_add.name));
                 } else {
                     target_library.add(sym_to_add);
                 }
@@ -1309,16 +1324,24 @@ impl McpServer {
             return ToolCallResult::error(serde_json::to_string_pretty(&result).unwrap());
         }
 
-        // Determine which components were not in the requested order
-        let requested_set: std::collections::HashSet<&str> = order.iter().copied().collect();
+        // Determine which components were not in the requested order; a
+        // name resolves the way the library resolves it, regardless of case.
+        let requested_set: std::collections::HashSet<String> = order
+            .iter()
+            .map(|name| crate::altium::folded_name(name))
+            .collect();
+        let original_set: std::collections::HashSet<String> = original_order
+            .iter()
+            .map(|name| crate::altium::folded_name(name))
+            .collect();
         let not_found: Vec<&str> = order
             .iter()
-            .filter(|name| !original_order.contains(&(**name).to_string()))
+            .filter(|name| !original_set.contains(&crate::altium::folded_name(name)))
             .copied()
             .collect();
         let not_requested: Vec<String> = original_order
             .iter()
-            .filter(|name| !requested_set.contains(name.as_str()))
+            .filter(|name| !requested_set.contains(&crate::altium::folded_name(name)))
             .cloned()
             .collect();
 
@@ -1393,16 +1416,24 @@ impl McpServer {
             return ToolCallResult::error(serde_json::to_string_pretty(&result).unwrap());
         }
 
-        // Determine which components were not in the requested order
-        let requested_set: std::collections::HashSet<&str> = order.iter().copied().collect();
+        // Determine which components were not in the requested order; a
+        // name resolves the way the library resolves it, regardless of case.
+        let requested_set: std::collections::HashSet<String> = order
+            .iter()
+            .map(|name| crate::altium::folded_name(name))
+            .collect();
+        let original_set: std::collections::HashSet<String> = original_order
+            .iter()
+            .map(|name| crate::altium::folded_name(name))
+            .collect();
         let not_found: Vec<&str> = order
             .iter()
-            .filter(|name| !original_order.contains(&(**name).to_string()))
+            .filter(|name| !original_set.contains(&crate::altium::folded_name(name)))
             .copied()
             .collect();
         let not_requested: Vec<String> = original_order
             .iter()
-            .filter(|name| !requested_set.contains(name.as_str()))
+            .filter(|name| !requested_set.contains(&crate::altium::folded_name(name)))
             .cloned()
             .collect();
 
@@ -3208,5 +3239,105 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// A name that differs from an existing one only in case is the same
+    /// storage to the OLE directory and the same component to Altium. Every
+    /// tool that creates a name refuses it — naming the existing spelling —
+    /// and a rename onto the component's own name in another case is the
+    /// one such rename that is allowed.
+    #[test]
+    fn a_name_differing_only_in_case_is_taken() {
+        let dir = test_temp_dir();
+        let server = create_test_server(dir.path());
+        let path = dir.path().join("Case.PcbLib");
+        create_test_pcblib(&path); // CHIP_0402 + CHIP_0603
+
+        let result = server.call_copy_component(&json!({
+            "filepath": path.to_string_lossy(),
+            "source_name": "CHIP_0402",
+            "target_name": "chip_0603",
+        }));
+        assert!(result.is_error);
+        assert!(
+            get_result_text(&result).contains(
+                "already exists in library as 'CHIP_0603' (component names are case-insensitive)"
+            ),
+            "{}",
+            get_result_text(&result)
+        );
+
+        let result = server.call_rename_component(&json!({
+            "filepath": path.to_string_lossy(),
+            "old_name": "CHIP_0402",
+            "new_name": "chip_0603",
+        }));
+        assert!(result.is_error);
+        assert!(get_result_text(&result).contains("as 'CHIP_0603'"));
+
+        // The component's own name in another case is a legitimate rename.
+        let result = server.call_rename_component(&json!({
+            "filepath": path.to_string_lossy(),
+            "old_name": "CHIP_0402",
+            "new_name": "chip_0402",
+        }));
+        assert!(!result.is_error, "{}", get_result_text(&result));
+        let lib = PcbLib::open(&path).unwrap();
+        assert_eq!(
+            lib.names(),
+            ["chip_0402", "CHIP_0603"],
+            "renamed in place, not moved to the end"
+        );
+
+        // Across libraries too.
+        let other = dir.path().join("Other.PcbLib");
+        create_test_pcblib(&other);
+        let result = server.call_copy_component_cross_library(&json!({
+            "source_filepath": other.to_string_lossy(),
+            "target_filepath": path.to_string_lossy(),
+            "component_name": "CHIP_0402",
+            "new_name": "Chip_0402",
+        }));
+        assert!(result.is_error);
+        assert!(
+            get_result_text(&result).contains("as 'chip_0402'"),
+            "{}",
+            get_result_text(&result)
+        );
+
+        // A merge sees the clash the same way in a dry run and for real.
+        for dry_run in [true, false] {
+            let result = server.call_merge_libraries(&json!({
+                "source_filepaths": [other.to_string_lossy()],
+                "target_filepath": path.to_string_lossy(),
+                "on_duplicate": "skip",
+                "dry_run": dry_run,
+            }));
+            assert!(!result.is_error, "{}", get_result_text(&result));
+            let parsed = parse_result_json(&result);
+            assert_eq!(parsed["skipped_count"], 2, "dry_run={dry_run}: {parsed}");
+        }
+        assert_eq!(PcbLib::open(&path).unwrap().len(), 2, "nothing merged");
+
+        // The same for symbols.
+        let sch = dir.path().join("Case.SchLib");
+        create_test_schlib(&sch); // RESISTOR + CAPACITOR
+        let result = server.call_copy_component(&json!({
+            "filepath": sch.to_string_lossy(),
+            "source_name": "RESISTOR",
+            "target_name": "capacitor",
+        }));
+        assert!(result.is_error);
+        assert!(get_result_text(&result).contains("as 'CAPACITOR'"));
+        let result = server.call_rename_component(&json!({
+            "filepath": sch.to_string_lossy(),
+            "old_name": "RESISTOR",
+            "new_name": "Resistor",
+        }));
+        assert!(!result.is_error, "{}", get_result_text(&result));
+        assert_eq!(
+            SchLib::open(&sch).unwrap().names(),
+            ["Resistor", "CAPACITOR"]
+        );
     }
 }

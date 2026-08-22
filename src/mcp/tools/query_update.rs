@@ -103,9 +103,15 @@ impl McpServer {
             if let Err(e) = Self::validate_ole_name(name) {
                 return ToolCallResult::error(e);
             }
-            if library.get(name).is_some() {
-                return ToolCallResult::error(format!(
-                    "Cannot rename '{component_name}' to '{name}': a footprint with that name already exists"
+            // The footprint's own name in another case resolves to itself
+            // and is a legitimate rename; any other holder is a clash.
+            if let Some(existing) = library.get(name).filter(|f| f.name != component_name) {
+                return ToolCallResult::error(Self::taken_name_error(
+                    format!(
+                        "Cannot rename '{component_name}' to '{name}': a footprint with that name already exists"
+                    ),
+                    name,
+                    &existing.name,
                 ));
             }
         }
@@ -303,9 +309,15 @@ impl McpServer {
             if let Err(e) = Self::validate_ole_name(name) {
                 return ToolCallResult::error(e);
             }
-            if library.get(name).is_some() {
-                return ToolCallResult::error(format!(
-                    "Cannot rename '{component_name}' to '{name}': a symbol with that name already exists"
+            // The symbol's own name in another case resolves to itself and
+            // is a legitimate rename; any other holder is a clash.
+            if let Some(existing) = library.get(name).filter(|s| s.name != component_name) {
+                return ToolCallResult::error(Self::taken_name_error(
+                    format!(
+                        "Cannot rename '{component_name}' to '{name}': a symbol with that name already exists"
+                    ),
+                    name,
+                    &existing.name,
                 ));
             }
         }
@@ -330,7 +342,7 @@ impl McpServer {
                     if name == component_name {
                         String::new()
                     } else {
-                        format!(" and change its saved name to '{name}' (use rename_component if you also need the in-session lookup key updated)")
+                        format!(" and rename it to '{name}'")
                     }
                 ),
             });
@@ -2298,5 +2310,56 @@ mod tests {
                 assert_eq!(results[1]["exists"], false, "{parsed}");
             }
         }
+    }
+
+    /// A component is found by its name regardless of case, as Altium and
+    /// the file's own directory find it; a rename onto another component's
+    /// name in a different case is refused, onto its own is allowed.
+    #[test]
+    fn names_resolve_regardless_of_case() {
+        use crate::altium::PcbLib;
+
+        let dir = test_temp_dir();
+        let server = create_test_server(dir.path());
+        let pcb = dir.path().join("Case.PcbLib");
+        create_test_pcblib(&pcb); // CHIP_0402 + CHIP_0603
+
+        let result = server.call_get_component(&json!({
+            "filepath": pcb.to_string_lossy(),
+            "component_name": "chip_0402",
+        }));
+        assert!(!result.is_error, "{}", get_result_text(&result));
+        assert_eq!(parse_result_json(&result)["component"]["name"], "CHIP_0402");
+
+        let result = server.call_update_component(&json!({
+            "filepath": pcb.to_string_lossy(),
+            "component_name": "CHIP_0402",
+            "footprint": {
+                "name": "chip_0603",
+                "pads": [{ "designator": "1", "x": 0.0, "y": 0.0, "width": 0.6, "height": 0.5 }],
+            },
+        }));
+        assert!(result.is_error);
+        assert!(
+            get_result_text(&result)
+                .contains("as 'CHIP_0603' (component names are case-insensitive)"),
+            "{}",
+            get_result_text(&result)
+        );
+
+        let result = server.call_update_component(&json!({
+            "filepath": pcb.to_string_lossy(),
+            "component_name": "CHIP_0402",
+            "footprint": {
+                "name": "Chip_0402",
+                "pads": [{ "designator": "1", "x": 0.0, "y": 0.0, "width": 0.6, "height": 0.5 }],
+            },
+        }));
+        assert!(!result.is_error, "{}", get_result_text(&result));
+        assert_eq!(parse_result_json(&result)["renamed"], true);
+        assert_eq!(
+            PcbLib::open(&pcb).unwrap().names(),
+            ["Chip_0402", "CHIP_0603"]
+        );
     }
 }

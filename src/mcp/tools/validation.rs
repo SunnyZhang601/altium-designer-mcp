@@ -35,6 +35,19 @@ impl McpServer {
     /// Note: OLE storage names are limited to 31 characters, but the library layer
     /// handles this by truncating storage names while preserving full names in
     /// the PATTERN/LIBREFERENCE fields.
+    /// The error for a name the library already holds: `message` as given
+    /// when the spelling is the same, and with the existing spelling named
+    /// when only the case differs — the two are one storage to the OLE
+    /// directory and one component to Altium, so the clash is real even
+    /// though the strings are not equal.
+    pub(crate) fn taken_name_error(message: String, requested: &str, existing: &str) -> String {
+        if existing == requested {
+            message
+        } else {
+            format!("{message} as '{existing}' (component names are case-insensitive)")
+        }
+    }
+
     pub(crate) fn validate_ole_name(name: &str) -> Result<(), String> {
         const INVALID_CHARS: &[char] = &['/', '\\', ':', '*', '?', '"', '<', '>', '|'];
 

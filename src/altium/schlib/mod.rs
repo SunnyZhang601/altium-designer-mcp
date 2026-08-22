@@ -140,16 +140,33 @@ impl SchLib {
         self.filepath.as_deref()
     }
 
-    /// Gets a symbol by name.
-    #[must_use]
-    pub fn get(&self, name: &str) -> Option<&Symbol> {
-        self.symbols.get(name)
+    /// The index of the symbol `name` resolves to: the exact name, else the
+    /// symbol whose name is the same regardless of case — the way the file's
+    /// own directory resolves it (see [`crate::altium::same_name`]).
+    fn index_of(&self, name: &str) -> Option<usize> {
+        self.symbols.get_index_of(name).or_else(|| {
+            self.symbols
+                .keys()
+                .position(|key| crate::altium::same_name(key, name))
+        })
     }
 
-    /// Gets a mutable reference to a symbol by name.
+    /// Gets a symbol by name — the exact name, else the one the name
+    /// resolves to regardless of case.
+    #[must_use]
+    pub fn get(&self, name: &str) -> Option<&Symbol> {
+        self.index_of(name)
+            .and_then(|i| self.symbols.get_index(i))
+            .map(|(_, symbol)| symbol)
+    }
+
+    /// Gets a mutable reference to a symbol by name (resolved as
+    /// [`Self::get`] resolves it).
     #[must_use]
     pub fn get_mut(&mut self, name: &str) -> Option<&mut Symbol> {
-        self.symbols.get_mut(name)
+        self.index_of(name)
+            .and_then(move |i| self.symbols.get_index_mut(i))
+            .map(|(_, symbol)| symbol)
     }
 
     /// Returns an iterator over all symbols.
@@ -183,20 +200,68 @@ impl SchLib {
     ///
     /// Returns the removed symbol if found, or `None` if no symbol with that name exists.
     pub fn remove(&mut self, name: &str) -> Option<Symbol> {
-        self.symbols.shift_remove(name)
+        self.index_of(name)
+            .and_then(|i| self.symbols.shift_remove_index(i))
+            .map(|(_, symbol)| symbol)
     }
 
     /// Updates a symbol in-place, preserving its position in the library.
     ///
-    /// The symbol is matched by the `name` parameter. The replacement symbol
-    /// will be stored under the same key, preserving position. If you need to
-    /// rename the symbol, use `rename` after updating.
+    /// The symbol is matched by the `name` parameter; a replacement that
+    /// carries another name renames it, and the library resolves the new
+    /// name from then on.
     ///
     /// Returns the old symbol if found, or `None` if no symbol with that name exists.
     pub fn update(&mut self, name: &str, replacement: Symbol) -> Option<Symbol> {
-        self.symbols
+        let renamed = self
+            .get(name)
+            .is_some_and(|old| old.name != replacement.name);
+        let old = self
             .get_mut(name)
-            .map(|old| std::mem::replace(old, replacement))
+            .map(|old| std::mem::replace(old, replacement));
+        if renamed {
+            self.rekey();
+        }
+        old
+    }
+
+    /// Renames a symbol in place, so it keeps its position in the library
+    /// and in the file. Returns whether `old_name` resolved to one.
+    pub fn rename(&mut self, old_name: &str, new_name: &str) -> bool {
+        self.rename_all(&[(old_name.to_string(), new_name.to_string())])
+            .is_empty()
+    }
+
+    /// Renames several symbols at once, each in place. Every `(old, new)`
+    /// pair resolves against the names as they were before the call, so a
+    /// chain such as `A -> B, B -> C` renames both rather than renaming the
+    /// new `B` twice. Returns the old names that resolved to nothing.
+    pub fn rename_all(&mut self, renames: &[(String, String)]) -> Vec<String> {
+        let mut missing = Vec::new();
+        let mut resolved: Vec<(usize, &str)> = Vec::with_capacity(renames.len());
+        for (old, new) in renames {
+            match self.index_of(old) {
+                Some(i) => resolved.push((i, new.as_str())),
+                None => missing.push(old.clone()),
+            }
+        }
+        for (i, new) in resolved {
+            if let Some((_, symbol)) = self.symbols.get_index_mut(i) {
+                symbol.name = new.to_string();
+            }
+        }
+        self.rekey();
+        missing
+    }
+
+    /// Re-derives every key from its symbol's name, in order, after names
+    /// were changed in place.
+    fn rekey(&mut self) {
+        self.symbols = self
+            .symbols
+            .drain(..)
+            .map(|(_, symbol)| (symbol.name.clone(), symbol))
+            .collect();
     }
 
     /// Returns a list of symbol names in order.

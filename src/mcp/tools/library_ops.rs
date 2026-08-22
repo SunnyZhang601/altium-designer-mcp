@@ -1276,9 +1276,11 @@ impl McpServer {
                 return ToolCallResult::error(format!("Footprint {idx}: {e}"));
             }
             // Check for duplicate
-            if library.get(name).is_some() {
-                return ToolCallResult::error(format!(
-                    "Component '{name}' already exists in library"
+            if let Some(existing) = library.get(name) {
+                return ToolCallResult::error(Self::taken_name_error(
+                    format!("Component '{name}' already exists in library"),
+                    name,
+                    &existing.name,
                 ));
             }
 
@@ -1484,9 +1486,11 @@ impl McpServer {
                 return ToolCallResult::error(format!("Symbol {idx}: {e}"));
             }
             // Check for duplicate
-            if library.get(name).is_some() {
-                return ToolCallResult::error(format!(
-                    "Component '{name}' already exists in library"
+            if let Some(existing) = library.get(name) {
+                return ToolCallResult::error(Self::taken_name_error(
+                    format!("Component '{name}' already exists in library"),
+                    name,
+                    &existing.name,
                 ));
             }
 

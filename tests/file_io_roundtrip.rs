@@ -953,3 +953,107 @@ fn pcblib_roundtrip_preserves_numeric_silkscreen_text() {
         "numeric silkscreen must round-trip verbatim"
     );
 }
+
+// =============================================================================
+// Component names that differ only in case
+// =============================================================================
+
+/// The OLE directory compares storage names without regard to case, so two
+/// components whose names differ only in case used to fail the whole save
+/// inside the directory (`Cannot create storage ... already exists`). They
+/// now get distinct storage names and both read back under their real
+/// names; a lookup resolves a name regardless of case, the exact spelling
+/// first when both exist.
+#[test]
+fn names_differing_only_in_case_save_and_resolve() {
+    let dir = test_temp_dir();
+
+    let mut lib = PcbLib::new();
+    let mut upper = Footprint::new("RES_0402");
+    upper.add_pad(Pad::smd("1", 0.0, 0.0, 0.5, 0.5));
+    let mut lower = Footprint::new("res_0402");
+    lower.add_pad(Pad::smd("1", 0.0, 0.0, 0.5, 0.5));
+    lower.add_pad(Pad::smd("2", 1.0, 0.0, 0.5, 0.5));
+    lib.add(upper);
+    lib.add(lower);
+    let path = dir.path().join("case.PcbLib");
+    lib.save(&path).expect("two case variants save");
+    let back = PcbLib::open(&path).expect("reopen");
+    assert_eq!(back.names(), ["RES_0402", "res_0402"]);
+    assert_eq!(back.get("res_0402").expect("exact").pads.len(), 2);
+    assert_eq!(back.get("RES_0402").expect("exact").pads.len(), 1);
+    assert_eq!(
+        back.get("Res_0402").expect("case-insensitive").name,
+        "RES_0402",
+        "the first match in library order when no spelling is exact"
+    );
+    assert!(back.get("RES_0603").is_none());
+
+    let mut lib = SchLib::new();
+    lib.add(Symbol::new("LM358"));
+    lib.add(Symbol::new("lm358"));
+    let path = dir.path().join("case.SchLib");
+    lib.save(&path).expect("two case variants save");
+    let mut back = SchLib::open(&path).expect("reopen");
+    assert_eq!(back.names(), ["LM358", "lm358"]);
+    assert_eq!(back.get("Lm358").expect("case-insensitive").name, "LM358");
+    assert_eq!(back.get_mut("LM358").expect("exact").name, "LM358");
+    assert_eq!(back.remove("lm358").expect("exact").name, "lm358");
+    assert_eq!(
+        back.remove("lm358")
+            .expect("now resolves to the other")
+            .name,
+        "LM358"
+    );
+    assert!(back.is_empty());
+}
+
+/// A rename keeps the component where it was, and a set of renames resolves
+/// every old name before any is applied, so a chain renames each once.
+#[test]
+fn renames_keep_positions_and_resolve_before_applying() {
+    let mut lib = PcbLib::new();
+    for name in ["A", "B", "C"] {
+        lib.add(Footprint::new(name));
+    }
+    assert!(lib.rename("A", "A2"));
+    assert!(!lib.rename("NOPE", "X"));
+    assert_eq!(lib.names(), ["A2", "B", "C"]);
+    let missing = lib.rename_all(&[
+        ("B".to_string(), "C".to_string()),
+        ("C".to_string(), "D".to_string()),
+        ("Z".to_string(), "Y".to_string()),
+    ]);
+    assert_eq!(missing, ["Z"]);
+    assert_eq!(
+        lib.names(),
+        ["A2", "C", "D"],
+        "B became C and the old C became D"
+    );
+
+    let mut lib = SchLib::new();
+    for name in ["A", "B", "C"] {
+        lib.add(Symbol::new(name));
+    }
+    assert!(lib.rename("a", "A2"), "resolved regardless of case");
+    assert_eq!(lib.names(), ["A2", "B", "C"]);
+    let missing = lib.rename_all(&[
+        ("B".to_string(), "C".to_string()),
+        ("C".to_string(), "D".to_string()),
+    ]);
+    assert!(missing.is_empty());
+    assert_eq!(lib.names(), ["A2", "C", "D"]);
+    assert_eq!(lib.get("D").expect("the old C under its new key").name, "D");
+
+    // An update that carries another name renames the symbol too, and the
+    // library resolves the new name from then on.
+    let mut replacement = Symbol::new("D2");
+    replacement.description = "updated".to_string();
+    assert_eq!(
+        lib.update("D", replacement).expect("the old symbol").name,
+        "D"
+    );
+    assert_eq!(lib.names(), ["A2", "C", "D2"]);
+    assert_eq!(lib.get("D2").expect("new key").description, "updated");
+    assert!(lib.get("D").is_none());
+}

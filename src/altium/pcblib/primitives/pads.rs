@@ -55,6 +55,14 @@ pub struct Pad {
     #[serde(default)]
     pub shape: PadShape,
 
+    /// The header layer byte exactly as read, kept when it is not the byte
+    /// `layer` would get: a library can store a mechanical layer past the
+    /// legacy sixteen under byte 72 with the real layer in the V7 layer id
+    /// (an AD-authored `Mechanical 20` track), so the byte goes back as it
+    /// was for as long as it still describes `layer`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub raw_layer_id: Option<u8>,
+
     /// Layer the pad is on.
     #[serde(default)]
     pub layer: Layer,
@@ -357,6 +365,7 @@ impl Pad {
     #[must_use]
     pub fn smd(designator: impl Into<String>, x: f64, y: f64, width: f64, height: f64) -> Self {
         Self {
+            raw_layer_id: None,
             designator: designator.into(),
             x,
             y,
@@ -413,6 +422,7 @@ impl Pad {
         hole_size: f64,
     ) -> Self {
         Self {
+            raw_layer_id: None,
             designator: designator.into(),
             x,
             y,
@@ -830,9 +840,11 @@ pub struct Via {
     /// The via's whole record block exactly as read (base64 in JSON), used as
     /// the write-side base with every typed field overlaid — so unmodelled
     /// bytes (the two in-record identity GUID slots, cache values, template
-    /// drift between AD versions) round-trip verbatim. `None` (from scratch)
-    /// uses the template with the GUID slots zeroed, which is what AD24 itself
-    /// writes for library vias (the golden's are all zeros).
+    /// drift between AD versions, the thirty bytes an older library's
+    /// 351-byte vias carry past the 321-byte template) round-trip verbatim,
+    /// length included. `None` (from scratch) uses the template with the GUID
+    /// slots zeroed, which is what AD24 itself writes for library vias (the
+    /// golden's are all zeros).
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",

@@ -505,6 +505,7 @@ impl McpServer {
                     .fold(f64::NEG_INFINITY, f64::max);
                 let y = if top.is_finite() { top + 0.6 } else { 0.0 };
                 footprint.add_text(Text {
+                    raw_layer_id: None,
                     barcode_full_width: None,
                     barcode_full_height: None,
                     barcode_x_margin: None,
@@ -1588,6 +1589,7 @@ mod tests {
             let mut fp = Footprint::new("REPLAY");
             fp.guid = Some("{11111111-2222-3333-4444-555555555555}".to_string());
             fp.add_text(Text {
+                raw_layer_id: None,
                 barcode_full_width: None,
                 barcode_full_height: None,
                 barcode_x_margin: None,

@@ -58,6 +58,13 @@ pub struct Track {
     /// Line width in mm.
     #[serde(serialize_with = "crate::altium::serde_round::serialize")]
     pub width: f64,
+    /// The header layer byte exactly as read, kept when it is not the byte
+    /// `layer` would get: a library can store a mechanical layer past the
+    /// legacy sixteen under byte 72 with the real layer in the V7 layer id
+    /// (an AD-authored `Mechanical 20` track), so the byte goes back as it
+    /// was for as long as it still describes `layer`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub raw_layer_id: Option<u8>,
     /// Layer the track is on.
     pub layer: Layer,
     /// Primitive flags (locked, keepout, etc.).
@@ -104,6 +111,7 @@ impl Track {
     #[must_use]
     pub const fn new(x1: f64, y1: f64, x2: f64, y2: f64, width: f64, layer: Layer) -> Self {
         Self {
+            raw_layer_id: None,
             x1,
             y1,
             x2,
@@ -152,6 +160,7 @@ impl Track {
 ///     end_angle: 90.0,
 ///     width: 0.15,
 ///     layer: Layer::TopOverlay,
+///     raw_layer_id: None,
 ///     flags: Default::default(),
 ///     net_index: 0xFFFF,
 ///     polygon_index: 0xFFFF,
@@ -182,6 +191,13 @@ pub struct Arc {
     /// Line width in mm.
     #[serde(serialize_with = "crate::altium::serde_round::serialize")]
     pub width: f64,
+    /// The header layer byte exactly as read, kept when it is not the byte
+    /// `layer` would get: a library can store a mechanical layer past the
+    /// legacy sixteen under byte 72 with the real layer in the V7 layer id
+    /// (an AD-authored `Mechanical 20` track), so the byte goes back as it
+    /// was for as long as it still describes `layer`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub raw_layer_id: Option<u8>,
     /// Layer the arc is on.
     pub layer: Layer,
     /// Primitive flags (locked, keepout, etc.).
@@ -228,6 +244,7 @@ impl Arc {
     #[must_use]
     pub const fn circle(x: f64, y: f64, radius: f64, width: f64, layer: Layer) -> Self {
         Self {
+            raw_layer_id: None,
             x,
             y,
             radius,

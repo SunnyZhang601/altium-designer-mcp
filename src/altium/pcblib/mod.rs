@@ -922,6 +922,7 @@ mod tests {
         body.unique_id = uid.clone();
         fp.add_component_body(body);
         fp.add_text(Text {
+            raw_layer_id: None,
             barcode_full_width: None,
             barcode_full_height: None,
             barcode_x_margin: None,
@@ -1381,6 +1382,7 @@ mod tests {
 
         // Add text with different rotations
         original.add_text(Text {
+            raw_layer_id: None,
             barcode_full_width: None,
             barcode_full_height: None,
             barcode_x_margin: None,
@@ -1420,6 +1422,7 @@ mod tests {
             raw_geometry: None,
         });
         original.add_text(Text {
+            raw_layer_id: None,
             barcode_full_width: None,
             barcode_full_height: None,
             barcode_x_margin: None,
@@ -1487,6 +1490,7 @@ mod tests {
         // round-trip rather than inheriting the template's 4-mil stroke.
         let mut original = Footprint::new("TEXT_STROKE");
         original.add_text(Text {
+            raw_layer_id: None,
             barcode_full_width: None,
             barcode_full_height: None,
             barcode_x_margin: None,
@@ -1542,6 +1546,7 @@ mod tests {
         // A TrueType italic text must round-trip italic@45 and derive baseFontType@43=1.
         let mut original = Footprint::new("TT_ITALIC");
         original.add_text(Text {
+            raw_layer_id: None,
             barcode_full_width: None,
             barcode_full_height: None,
             barcode_x_margin: None,
@@ -1597,6 +1602,7 @@ mod tests {
         // PR-10 offsets (mirror@35, bold@44, font-name@46-109, justification@132).
         let geom = writer::encode_text_geometry(
             &Text {
+                raw_layer_id: None,
                 barcode_full_width: None,
                 barcode_full_height: None,
                 barcode_x_margin: None,
@@ -1672,6 +1678,7 @@ mod tests {
         // mirror, bold, font_name, a non-default justification, kind, italic.
         let mut original = Footprint::new("TEXT_PR10");
         original.add_text(Text {
+            raw_layer_id: None,
             barcode_full_width: None,
             barcode_full_height: None,
             barcode_x_margin: None,
@@ -1735,6 +1742,7 @@ mod tests {
         // survive encode -> decode; a plain text keeps both false.
         let mut original = Footprint::new("TEXT_FLAGS");
         let mut text = Text {
+            raw_layer_id: None,
             barcode_full_width: None,
             barcode_full_height: None,
             barcode_x_margin: None,
@@ -1877,6 +1885,7 @@ mod tests {
         // InvertedRectTextOffset@133 (offsets verified against AltiumSharp ReadText).
         let mut original = Footprint::new("TEXT_INVRECT");
         original.add_text(Text {
+            raw_layer_id: None,
             barcode_full_width: None,
             barcode_full_height: None,
             barcode_x_margin: None,
@@ -1947,6 +1956,7 @@ mod tests {
         // a locked / tented text round-trips its flags.
         let mut original = Footprint::new("TEXT_FLAGS");
         original.add_text(Text {
+            raw_layer_id: None,
             barcode_full_width: None,
             barcode_full_height: None,
             barcode_x_margin: None,
@@ -2009,6 +2019,7 @@ mod tests {
 
         let long = "A".repeat(260) + "_END";
         let text_at = |content: &str, y: f64| Text {
+            raw_layer_id: None,
             barcode_full_width: None,
             barcode_full_height: None,
             barcode_x_margin: None,
@@ -2192,6 +2203,7 @@ mod tests {
         original.add_track(track);
 
         original.add_text(Text {
+            raw_layer_id: None,
             barcode_full_width: None,
             barcode_full_height: None,
             barcode_x_margin: None,
@@ -2326,6 +2338,7 @@ mod tests {
 
         // Add a rotated fill
         original.add_fill(Fill {
+            raw_layer_id: None,
             x1: -1.5,
             y1: -0.5,
             x2: 1.5,

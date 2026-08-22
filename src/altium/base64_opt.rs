@@ -112,3 +112,36 @@ mod tests {
         );
     }
 }
+
+/// (De)serialises a list of named binary streams as `[[name, base64], …]`.
+/// Used via `#[serde(with = "crate::altium::base64_opt::named")]` for the
+/// streams a symbol carries verbatim.
+pub mod named {
+    use super::{Deserialize, Deserializer, Serializer, STANDARD};
+    use base64::Engine as _;
+
+    pub fn serialize<S: Serializer>(
+        value: &[(String, Vec<u8>)],
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        let encoded: Vec<(&str, String)> = value
+            .iter()
+            .map(|(name, bytes)| (name.as_str(), STANDARD.encode(bytes)))
+            .collect();
+        serde::Serialize::serialize(&encoded, serializer)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Vec<(String, Vec<u8>)>, D::Error> {
+        Vec::<(String, String)>::deserialize(deserializer)?
+            .into_iter()
+            .map(|(name, text)| {
+                STANDARD
+                    .decode(text.as_bytes())
+                    .map(|bytes| (name, bytes))
+                    .map_err(serde::de::Error::custom)
+            })
+            .collect()
+    }
+}

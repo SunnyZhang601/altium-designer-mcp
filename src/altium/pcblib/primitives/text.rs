@@ -99,6 +99,13 @@ pub struct Text {
     /// Text height in mm.
     #[serde(serialize_with = "crate::altium::serde_round::serialize")]
     pub height: f64,
+    /// The header layer byte exactly as read, kept when it is not the byte
+    /// `layer` would get: a library can store a mechanical layer past the
+    /// legacy sixteen under byte 72 with the real layer in the V7 layer id
+    /// (an AD-authored `Mechanical 20` track), so the byte goes back as it
+    /// was for as long as it still describes `layer`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub raw_layer_id: Option<u8>,
     /// Layer the text is on.
     pub layer: Layer,
     /// Rotation angle in degrees.
@@ -308,6 +315,13 @@ pub struct Fill {
     /// Second corner Y position in mm.
     #[serde(serialize_with = "crate::altium::serde_round::serialize")]
     pub y2: f64,
+    /// The header layer byte exactly as read, kept when it is not the byte
+    /// `layer` would get: a library can store a mechanical layer past the
+    /// legacy sixteen under byte 72 with the real layer in the V7 layer id
+    /// (an AD-authored `Mechanical 20` track), so the byte goes back as it
+    /// was for as long as it still describes `layer`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub raw_layer_id: Option<u8>,
     /// Layer the fill is on.
     pub layer: Layer,
     /// Rotation angle in degrees.
@@ -357,6 +371,7 @@ impl Fill {
     #[must_use]
     pub const fn new(x1: f64, y1: f64, x2: f64, y2: f64, layer: Layer) -> Self {
         Self {
+            raw_layer_id: None,
             x1,
             y1,
             x2,
@@ -380,6 +395,7 @@ impl Fill {
         let half_w = width / 2.0;
         let half_h = height / 2.0;
         Self {
+            raw_layer_id: None,
             x1: x - half_w,
             y1: y - half_h,
             x2: x + half_w,

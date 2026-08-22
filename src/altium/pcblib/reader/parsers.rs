@@ -115,7 +115,7 @@ pub(super) fn parse_pad(data: &[u8], offset: usize) -> ParseResult<Pad> {
     let layer_id = *geometry
         .first()
         .ok_or_else(|| AltiumError::parse_error(offset, "failed to read Pad layer"))?;
-    let layer = layer_from_id(layer_id);
+    let (layer, raw_layer_id) = resolve_layer(layer_id, geometry, 114);
     let flags = read_flags(geometry);
     // Common-header connectivity indices @3-8 (net/polygon/component).
     let (net_index, polygon_index, component_index) = read_common_indices(geometry);
@@ -323,6 +323,7 @@ pub(super) fn parse_pad(data: &[u8], offset: usize) -> ParseResult<Pad> {
         height,
         shape: adjusted_shape,
         layer,
+        raw_layer_id,
         hole_size,
         is_plated,
         jumper_id,
@@ -659,7 +660,7 @@ pub(super) fn parse_track(data: &[u8], offset: usize) -> ParseResult<Track> {
     let layer_id = *block
         .first()
         .ok_or_else(|| AltiumError::parse_error(offset, "failed to read Track layer"))?;
-    let layer = layer_from_id(layer_id);
+    let (layer, raw_layer_id) = resolve_layer(layer_id, block, 41);
     let flags = read_flags(block);
     // Common-header connectivity indices @3-8 (net/polygon/component).
     let (net_index, polygon_index, component_index) = read_common_indices(block);
@@ -699,6 +700,7 @@ pub(super) fn parse_track(data: &[u8], offset: usize) -> ParseResult<Track> {
         y2,
         width,
         layer,
+        raw_layer_id,
         flags,
         net_index,
         polygon_index,
@@ -724,7 +726,7 @@ pub(super) fn parse_arc(data: &[u8], offset: usize) -> ParseResult<Arc> {
     let layer_id = *block
         .first()
         .ok_or_else(|| AltiumError::parse_error(offset, "failed to read Arc layer"))?;
-    let layer = layer_from_id(layer_id);
+    let (layer, raw_layer_id) = resolve_layer(layer_id, block, 52);
     let flags = read_flags(block);
     // Common-header connectivity indices @3-8 (net/polygon/component).
     let (net_index, polygon_index, component_index) = read_common_indices(block);
@@ -767,6 +769,7 @@ pub(super) fn parse_arc(data: &[u8], offset: usize) -> ParseResult<Arc> {
         end_angle,
         width,
         layer,
+        raw_layer_id,
         flags,
         net_index,
         polygon_index,
@@ -818,7 +821,7 @@ pub(super) fn parse_text(
     let layer_id = *geometry_block
         .first()
         .ok_or_else(|| AltiumError::parse_error(offset, "failed to read Text layer"))?;
-    let layer = layer_from_id(layer_id);
+    let (layer, raw_layer_id) = resolve_layer(layer_id, geometry_block, 226);
     // Decode the lock/tenting/keepout flag word like every other primitive does,
     // rather than discarding it (the write side already encodes these correctly).
     let flags = read_flags(geometry_block);
@@ -989,6 +992,7 @@ pub(super) fn parse_text(
         text: text_content,
         height,
         layer,
+        raw_layer_id,
         rotation,
         kind,
         stroke_font,
@@ -1367,6 +1371,29 @@ fn capture_additional_params(params_str: &str, modelled: &[&str]) -> Vec<(String
         .collect()
 }
 
+/// Resolves a record's layer from its legacy byte and the V7 layer id at
+/// `v7_at`, and keeps the byte when `layer` would not reproduce it.
+///
+/// The legacy byte holds sixteen mechanical layers; a library using more
+/// stores such a primitive under byte 72 (the last legacy one) with the real
+/// layer in the V7 id (`0x0102_0014` is Mechanical 20), so the id decides and
+/// the byte is carried for the rewrite.
+fn resolve_layer(byte: u8, block: &[u8], v7_at: usize) -> (Layer, Option<u8>) {
+    let mut layer = layer_from_id(byte);
+    if let Some(v7) = read_u32(block, v7_at) {
+        let mechanical = v7 >> 16 == 0x0102;
+        let index = v7 & 0xFFFF;
+        if mechanical && (17..=32).contains(&index) && (57..=72).contains(&byte) {
+            // Bytes 186-201 are Mechanical 17-32 in the extended scheme.
+            #[allow(clippy::cast_possible_truncation)]
+            let extended = (169 + index) as u8;
+            layer = layer_from_id(extended);
+        }
+    }
+    let raw = (crate::altium::pcblib::writer::layer_to_id(layer) != byte).then_some(byte);
+    (layer, raw)
+}
+
 /// Parses a Fill primitive (filled rectangle).
 /// Returns the parsed `Fill` and the new offset on success.
 ///
@@ -1393,7 +1420,7 @@ pub(super) fn parse_fill(data: &[u8], offset: usize) -> ParseResult<Fill> {
     let layer_id = *block
         .first()
         .ok_or_else(|| AltiumError::parse_error(offset, "failed to read Fill layer"))?;
-    let layer = layer_from_id(layer_id);
+    let (layer, raw_layer_id) = resolve_layer(layer_id, block, 42);
     let flags = read_flags(block);
     // Common-header connectivity indices @3-8 (net/polygon/component).
     let (net_index, polygon_index, component_index) = read_common_indices(block);
@@ -1427,6 +1454,7 @@ pub(super) fn parse_fill(data: &[u8], offset: usize) -> ParseResult<Fill> {
         x2,
         y2,
         layer,
+        raw_layer_id,
         rotation,
         flags,
         net_index,
@@ -3077,5 +3105,39 @@ mod tests {
         assert!((parse_mil_value(Some(" 100 mil")) - expected).abs() < 1e-9);
         assert!(parse_mil_value(None).abs() < EPS);
         assert!(parse_mil_value(Some("not-a-number")).abs() < EPS);
+    }
+
+    #[test]
+    fn the_v7_layer_id_names_a_mechanical_layer_past_the_legacy_sixteen() {
+        // Byte 72 is Mechanical 16, the last the legacy byte can hold; a
+        // track on Mechanical 20 carries 72 there and `0x0102_0014` in the
+        // V7 id at @41, which decides. The byte is kept for the rewrite only
+        // when the layer would not reproduce it.
+        let mut b = vec![0_u8; 46];
+        write_common_header(&mut b, 72);
+        b[29..33].copy_from_slice(&50_000_i32.to_le_bytes());
+        b[41..45].copy_from_slice(&0x0102_0014_u32.to_le_bytes());
+        let (track, _) = parse_track(&block(&b), 0).expect("a whole track");
+        assert_eq!(track.layer, Layer::Mechanical20);
+        assert_eq!(track.raw_layer_id, Some(72));
+
+        // A consistent V7 id carries nothing extra.
+        b[41..45].copy_from_slice(&0x0102_0010_u32.to_le_bytes());
+        let (track, _) = parse_track(&block(&b), 0).expect("a whole track");
+        assert_eq!(track.layer, Layer::Mechanical16);
+        assert_eq!(track.raw_layer_id, None);
+
+        // A legacy-only record (no V7 id) is its byte.
+        let (track, _) = parse_track(&block(&b[..33]), 0).expect("a whole track");
+        assert_eq!(track.layer, Layer::Mechanical16);
+        assert_eq!(track.raw_layer_id, None);
+
+        // The extension applies to mechanical bytes only: a copper byte with
+        // a stray mechanical V7 id stays copper.
+        write_common_header(&mut b, 1);
+        b[41..45].copy_from_slice(&0x0102_0014_u32.to_le_bytes());
+        let (track, _) = parse_track(&block(&b), 0).expect("a whole track");
+        assert_eq!(track.layer, Layer::TopLayer);
+        assert_eq!(track.raw_layer_id, None);
     }
 }

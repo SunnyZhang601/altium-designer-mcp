@@ -355,7 +355,7 @@ const POSITIONAL_KEYS: &[&str] = &["IndexInSheet", "OwnerIndex"];
 /// out: left out when the read record lacked it and the value is still the
 /// implicit one, so the file comes back as Altium wrote it; emitted once the
 /// field is edited away from it.
-const IMPLICIT_DEFAULTS: &[(&str, &str)] = &[("LineWidth", "1")];
+const IMPLICIT_DEFAULTS: &[(&str, &str)] = &[("LineWidth", "1"), ("Description", "")];
 
 /// Every key a content record's encoder can emit — the keys a struct field
 /// stands behind. A read key in this set that the canonical form now omits
@@ -435,6 +435,14 @@ const MODELLED_RECORD_KEYS: &[&str] = &[
     "Transparent",
     "UniqueID",
     "WordWrap",
+    // RECORD=45, the footprint link
+    "ModelName",
+    "ModelType",
+    "DatafileCount",
+    "ModelDatafile0",
+    "ModelDatafileEntity0",
+    "ModelDatafileKind0",
+    "IsCurrent",
 ];
 
 /// Whether `key` is one an encoder can emit: a vertex key (`X3`, `Y12`) or
@@ -1735,10 +1743,13 @@ pub fn encode_data_stream(symbol: &Symbol) -> crate::altium::error::AltiumResult
         let model_index = count_records(&data);
         write_text_record(
             &mut data,
-            &encode_footprint_model(
-                model,
-                impl_index,
-                model.is_current || (!has_current && i == 0),
+            &replay_record(
+                &encode_footprint_model(
+                    model,
+                    impl_index,
+                    model.is_current || (!has_current && i == 0),
+                ),
+                &model.raw_params,
             ),
         )?;
         write_text_record(&mut data, &encode_model_datafile_link(model_index))?;
@@ -3461,5 +3472,46 @@ mod tests {
                 "designator must survive UTF-8 round-trip intact"
             );
         }
+    }
+
+    #[test]
+    fn a_read_footprint_link_is_replayed_verbatim() {
+        // As the UI stores it: IntegratedModel and DatabaseModel, which this
+        // crate does not model, and no Description while it is empty.
+        let raw: Vec<(String, String)> = [
+            ("RECORD", "45"),
+            ("OwnerIndex", "1"),
+            ("IndexInSheet", "-1"),
+            ("ModelName", "MOUNTING_HOLE"),
+            ("ModelType", "PCBLIB"),
+            ("DatafileCount", "1"),
+            ("ModelDatafileEntity0", "MOUNTING_HOLE"),
+            ("ModelDatafileKind0", "PCBLib"),
+            ("IsCurrent", "T"),
+            ("IntegratedModel", "T"),
+            ("DatabaseModel", "T"),
+            ("UniqueID", "ABCDEFGH"),
+        ]
+        .iter()
+        .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+        .collect();
+        let mut model = FootprintModel::new("MOUNTING_HOLE");
+        model.unique_id = Some("ABCDEFGH".to_string());
+        model.raw_params = raw;
+
+        let verbatim = replay_record(&encode_footprint_model(&model, 1, true), &model.raw_params);
+        assert_eq!(
+            verbatim,
+            "|RECORD=45|OwnerIndex=1|IndexInSheet=-1|ModelName=MOUNTING_HOLE|ModelType=PCBLIB|DatafileCount=1|ModelDatafileEntity0=MOUNTING_HOLE|ModelDatafileKind0=PCBLib|IsCurrent=T|IntegratedModel=T|DatabaseModel=T|UniqueID=ABCDEFGH"
+        );
+
+        // No longer current, a description given: the unmodelled keys stay,
+        // IsCurrent goes, the description is appended.
+        model.description = "M3".to_string();
+        let edited = replay_record(&encode_footprint_model(&model, 1, false), &model.raw_params);
+        assert_eq!(
+            edited,
+            "|RECORD=45|OwnerIndex=1|IndexInSheet=-1|ModelName=MOUNTING_HOLE|ModelType=PCBLIB|DatafileCount=1|ModelDatafileEntity0=MOUNTING_HOLE|ModelDatafileKind0=PCBLib|IntegratedModel=T|DatabaseModel=T|UniqueID=ABCDEFGH|Description=M3"
+        );
     }
 }

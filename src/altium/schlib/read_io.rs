@@ -123,6 +123,7 @@ impl SchLib {
             reader::parse_data_stream(&mut symbol, &data);
 
             apply_pin_aux_streams(&mut cfb, &comp_name, &mut symbol);
+            carry_extra_streams(&mut cfb, &comp_name, &mut symbol);
 
             // Use the symbol's actual name (from LibReference) as the key
             // This handles long names that were truncated in the OLE storage path
@@ -175,6 +176,36 @@ fn apply_pin_aux_streams<R: Read + Seek>(
         crate::altium::read_stream_opt(&mut *cfb, format!("{comp_name}/PinWideText"))
     {
         pin_aux::apply_pin_wide_text(&mut symbol.pins, &wide);
+    }
+}
+
+/// The streams of the component's storage this crate does not read — a
+/// `PinFunctionData` from a newer Altium — are the names beside `Data` and
+/// the pin auxiliaries, kept verbatim as [`Symbol::extra_streams`].
+const READ_STREAMS: &[&str] = &["Data", "PinFrac", "PinSymbolLineWidth", "PinWideText"];
+
+/// Carries every stream of the component's storage that nothing above reads.
+fn carry_extra_streams<R: Read + Seek>(
+    cfb: &mut CompoundFile<R>,
+    comp_name: &str,
+    symbol: &mut Symbol,
+) {
+    let extra: Vec<String> = cfb
+        .read_storage(format!("/{comp_name}"))
+        .map(|entries| {
+            entries
+                .filter(cfb::Entry::is_stream)
+                .map(|entry| entry.name().to_string())
+                .filter(|name| !READ_STREAMS.contains(&name.as_str()))
+                .collect()
+        })
+        .unwrap_or_default();
+    for name in extra {
+        if let Some(bytes) =
+            crate::altium::read_stream_opt(&mut *cfb, format!("{comp_name}/{name}"))
+        {
+            symbol.extra_streams.push((name, bytes));
+        }
     }
 }
 

@@ -1544,6 +1544,7 @@ mod tests {
     /// Builds a minimal stroke text at the given position.
     fn make_text(content: &str, x: f64, y: f64) -> Text {
         Text {
+            raw_layer_id: None,
             barcode_full_width: None,
             barcode_full_height: None,
             barcode_x_margin: None,

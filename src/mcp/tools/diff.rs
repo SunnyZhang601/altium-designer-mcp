@@ -583,6 +583,7 @@ mod tests {
 
         fn pcb_text() -> Text {
             Text {
+                raw_layer_id: None,
                 barcode_full_width: None,
                 barcode_full_height: None,
                 barcode_x_margin: None,

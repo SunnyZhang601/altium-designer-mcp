@@ -469,7 +469,7 @@ pub fn read_flags_for_test(word: u16) -> PcbFlags {
 /// - 62 (Mech 6): Top 3D Body
 /// - 63 (Mech 7): Bottom 3D Body
 #[allow(clippy::too_many_lines)] // ID-to-layer lookup for all layer types
-const fn layer_from_id(id: u8) -> Layer {
+pub(super) const fn layer_from_id(id: u8) -> Layer {
     match id {
         1 => Layer::TopLayer,
         // Mid layers (IDs 2-31)

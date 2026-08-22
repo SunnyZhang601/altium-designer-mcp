@@ -369,6 +369,17 @@ pub struct Symbol {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub header_params: Vec<(String, String)>,
 
+    /// Streams of the symbol's storage this crate does not read — a
+    /// `PinFunctionData` from a newer Altium, say — carried verbatim and
+    /// written back beside the ones it does, so nothing Altium stored is
+    /// dropped for being unknown.
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        with = "crate::altium::base64_opt::named"
+    )]
+    pub extra_streams: Vec<(String, Vec<u8>)>,
+
     /// `AllPinCount` as stored. Altium keeps a stale value here — a 32-pin
     /// UI-drawn MCU stores 1, a one-pin header 2 — so it is carried rather
     /// than recomputed; `None` (a symbol built from scratch) writes the pin
@@ -2127,5 +2138,60 @@ mod tests {
         assert!(lib.get_mut("R1").is_some());
         assert_eq!(lib.iter().count(), 1);
         assert_eq!(lib.iter_mut().count(), 1);
+    }
+
+    #[test]
+    fn streams_this_crate_does_not_read_go_back_as_they_were() {
+        // A newer Altium adds streams beside Data (a `PinFunctionData`); a
+        // rewrite carries them verbatim rather than dropping what it does not
+        // understand, and a reopen offers them back the same way.
+        let mut symbol = Symbol::new("U1");
+        symbol.add_pin(Pin::new("1", "A", -10, 0, 10, PinOrientation::Right));
+        symbol.extra_streams = vec![
+            ("PinFunctionData".to_string(), vec![0x01, 0x00, 0xFF, 0x7E]),
+            ("Future".to_string(), b"|FUTURE=1".to_vec()),
+        ];
+        let mut lib = SchLib::new();
+        lib.add(symbol);
+
+        let mut buffer = Cursor::new(Vec::new());
+        lib.write(&mut buffer).expect("write");
+        buffer.set_position(0);
+        let mut cfb = cfb::CompoundFile::open(buffer).expect("cfb");
+        let mut stream = cfb
+            .open_stream("/U1/PinFunctionData")
+            .expect("the stream is written");
+        let mut bytes = Vec::new();
+        std::io::Read::read_to_end(&mut stream, &mut bytes).expect("read");
+        assert_eq!(bytes, vec![0x01, 0x00, 0xFF, 0x7E]);
+
+        let mut buffer = cfb.into_inner();
+        buffer.set_position(0);
+        let read_lib = SchLib::read(buffer).expect("read");
+        let read_symbol = read_lib.get("U1").expect("symbol");
+        let mut carried = read_symbol.extra_streams.clone();
+        carried.sort();
+        assert_eq!(
+            carried,
+            vec![
+                ("Future".to_string(), b"|FUTURE=1".to_vec()),
+                ("PinFunctionData".to_string(), vec![0x01, 0x00, 0xFF, 0x7E]),
+            ]
+        );
+        // The streams this crate reads are not doubled up as extras.
+        assert!(read_symbol
+            .extra_streams
+            .iter()
+            .all(|(name, _)| name != "Data"));
+
+        // The JSON form is a base64 string per stream, and reads back.
+        let json = serde_json::to_value(read_symbol).expect("json");
+        assert_eq!(
+            json["extra_streams"].as_array().map(Vec::len),
+            Some(2),
+            "{json}"
+        );
+        let back: Symbol = serde_json::from_value(json).expect("from json");
+        assert_eq!(back.extra_streams.len(), 2);
     }
 }

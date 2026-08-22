@@ -742,6 +742,32 @@ impl McpServer {
         Ok(JsonRpcResponse::success(req.id.clone(), result))
     }
 
+    /// Runs one tool call with a panic safety net.
+    ///
+    /// A panic anywhere below a tool — a parser assertion, an index past the
+    /// end, a third-party crate's debug check — must not take the server down
+    /// mid-conversation: the client loses every later call until someone
+    /// restarts the process. Caught here, it becomes an `isError` result like
+    /// any other failure, and the session continues. The panic payload is
+    /// logged server-side only; the client message carries no detail, because
+    /// a payload may quote a path or file content.
+    fn guard_panics(tool: &str, call: impl FnOnce() -> ToolCallResult) -> ToolCallResult {
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(call)) {
+            Ok(result) => result,
+            Err(payload) => {
+                let detail = payload
+                    .downcast_ref::<String>()
+                    .map(String::as_str)
+                    .or_else(|| payload.downcast_ref::<&str>().copied())
+                    .unwrap_or("non-string panic payload");
+                tracing::error!(tool = %tool, panic = %detail, "tool call panicked; server kept running");
+                ToolCallResult::error(format!(
+                    "Internal error while running '{tool}'. The server is still running; please report this with the arguments used."
+                ))
+            }
+        }
+    }
+
     /// Handles the tools/call request.
     fn handle_tools_call(&self, req: &JsonRpcRequest) -> Result<JsonRpcResponse, JsonRpcError> {
         self.require_running(&req.id)?;
@@ -775,7 +801,7 @@ impl McpServer {
                  Please slow down and retry.",
             )
         } else {
-            match params.name.as_str() {
+            Self::guard_panics(&params.name, || match params.name.as_str() {
                 // Library I/O tools
                 "read_pcblib" => self.call_read_pcblib(&params.arguments),
                 "write_pcblib" => self.call_write_pcblib(&params.arguments),
@@ -816,7 +842,7 @@ impl McpServer {
                 "update_primitive" => self.call_update_primitive(&params.arguments),
                 // Unknown tool
                 _ => ToolCallResult::error(format!("Unknown tool: {}", params.name)),
-            }
+            })
         };
 
         // Audit destructive operations at the dispatch chokepoint (best-effort;
@@ -2886,6 +2912,45 @@ mod tests {
 
     mod dispatch_and_lifecycle {
         use super::*;
+
+        /// A tool that panics answers its call with an error result and the
+        /// server keeps running; the panic's own text stays in the log, never
+        /// in the client-facing message. A tool that returns normally is
+        /// passed through untouched.
+        #[test]
+        fn guard_panics_turns_a_panic_into_an_error_result() {
+            // Silence the default hook's stderr noise for this one test.
+            let previous = std::panic::take_hook();
+            std::panic::set_hook(Box::new(|_| {}));
+            let result = McpServer::guard_panics("boom_tool", || {
+                panic!("secret detail: C:/Users/someone/Library.PcbLib");
+            });
+            let payload_result = McpServer::guard_panics("boom_tool", || {
+                std::panic::panic_any(42_u8);
+            });
+            std::panic::set_hook(previous);
+
+            assert!(result.is_error);
+            let text = match &result.content[0] {
+                ToolContent::Text { text } => text.clone(),
+            };
+            assert!(
+                text.contains("Internal error while running 'boom_tool'"),
+                "{text}"
+            );
+            assert!(text.contains("still running"), "{text}");
+            assert!(
+                !text.contains("secret detail"),
+                "panic text must not reach the client: {text}"
+            );
+            assert!(
+                payload_result.is_error,
+                "non-string payloads are guarded too"
+            );
+
+            let ok = McpServer::guard_panics("fine_tool", || ToolCallResult::text("fine"));
+            assert!(!ok.is_error);
+        }
 
         fn req(method: &str, params: Option<Value>) -> JsonRpcRequest {
             JsonRpcRequest {

@@ -123,11 +123,12 @@ Use this to learn from existing libraries and create consistent new components.
 
 Write footprints to an Altium .PcbLib file (set 'append': true to add to an existing library instead of replacing it). Each footprint is defined by its primitives: pads
 (with position, size, shape, layer), tracks, vias, fills, arcs, regions, text and component_bodies. The AI is responsible for calculating correct positions and sizes
-based on IPC-7351B or other standards. All coordinates and dimensions must be in millimetres (mm). A footprint given no '.Designator' text receives one on the Top Overlay
-automatically, just above its topmost pad, so every placed part shows its reference designator; supply your own to control its placement. The response 'bodies' array
-echoes each footprint's 3D body height and source; a footprint with no STEP model and no component body reports source 'none'. Set 'auto_3d_body': true to have an
-extruded placeholder body (default height 1.0 mm, flagged 'assumed_height': true) added to such footprints, then confirm or override it by supplying 'component_bodies'
-explicitly. The response also includes a 'warnings' array flagging silkscreen (overlay) tracks that overlap a pad (silk-on-pad) so you can move them clear.
+based on IPC-7351B or other standards. All coordinates and dimensions must be in millimetres (mm). A footprint authored without a '.Designator' text receives one on the
+Top Overlay automatically, just above its topmost pad, so every placed part shows its reference designator: supply your own to control its placement, or set
+'auto_designator': false to omit it; a footprint echoed back from a read (carrying primitive_order) is never touched. The response 'bodies' array echoes each footprint's
+3D body height and source; a footprint with no STEP model and no component body reports source 'none'. Set 'auto_3d_body': true to have an extruded placeholder body
+(default height 1.0 mm, flagged 'assumed_height': true) added to such footprints, then confirm or override it by supplying 'component_bodies' explicitly. The response
+also includes a 'warnings' array flagging silkscreen (overlay) tracks that overlap a pad (silk-on-pad) so you can move them clear.
 
 **Example**
 
@@ -210,6 +211,7 @@ explicitly. The response also includes a 'warnings' array flagging silkscreen (o
 | --- | --- | --- | --- |
 | `append` | boolean | no | If true, append to existing file; if false, create new file |
 | `auto_3d_body` | boolean | no | If true, footprints with pads but no STEP model and no component body get a placeholder extruded 3D body (1.0 mm tall, flagged assumed_height). Default false: nothing is added unless you ask, since many footprints (fiducials, test points, mounting holes) legitimately have no body. Prefer supplying real heights via component_bodies. |
+| `auto_designator` | boolean | no | If true (default), a footprint authored without a '.Designator' text gets one on the Top Overlay just above its topmost pad, so the placed part shows its reference designator. Never applied to a footprint echoed back from read_pcblib/get_component (one carrying primitive_order): Altium's own library footprints carry no designator text, and a read-modify-write must not add primitives. Set false to author a footprint without one. |
 | `filepath` | string | yes | Path to the .PcbLib file to create/modify |
 | `footprints` | array<object> | yes | Array of footprint definitions |
 

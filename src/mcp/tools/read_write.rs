@@ -501,6 +501,10 @@ impl McpServer {
             .get("auto_3d_body")
             .and_then(Value::as_bool)
             .unwrap_or(false);
+        let auto_designator = arguments
+            .get("auto_designator")
+            .and_then(Value::as_bool)
+            .unwrap_or(true);
 
         // If append mode and file exists, read existing library; otherwise create new
         let mut library = if append && std::path::Path::new(filepath).exists() {
@@ -889,11 +893,17 @@ impl McpServer {
             // caller did not provide one, so every placed footprint renders its
             // reference designator. Placed just above the topmost pad (or at the
             // origin when there are no pads); the user can reposition in Altium.
+            // Never for a footprint echoed back from a read: Altium's own
+            // library footprints carry no designator text (none of the 22
+            // golden ones does), so adding one there would change every real
+            // footprint on a read-modify-write. A read echo always carries
+            // `primitive_order`; from-scratch JSON never does.
+            let is_read_echo = fp_json.get("primitive_order").is_some();
             let has_designator = footprint
                 .text
                 .iter()
                 .any(|t| t.text.trim().eq_ignore_ascii_case(".designator"));
-            if !has_designator {
+            if auto_designator && !is_read_echo && !has_designator {
                 use crate::altium::pcblib::{Layer, PcbFlags, Text, TextJustification, TextKind};
                 let top = footprint
                     .pads
@@ -2790,6 +2800,84 @@ mod tests {
                 footprints_before, footprints_after,
                 "read → write → read is lossless"
             );
+        }
+
+        /// An Altium-authored footprint carries no `.Designator` text (none of
+        /// the golden's 22 does), so a read → write through the tool layer must
+        /// not add one: the echo's `primitive_order` marks it as a replay and
+        /// the primitive count comes back unchanged.
+        #[test]
+        fn write_pcblib_does_not_add_a_designator_to_a_read_echo() {
+            let dir = test_temp_dir();
+            let samples = std::path::Path::new("scripts/samples")
+                .canonicalize()
+                .unwrap();
+            let server =
+                crate::mcp::server::McpServer::new(vec![dir.path().to_path_buf(), samples.clone()]);
+
+            let read = server.call_read_pcblib(&json!({
+                "filepath": samples.join("footprints.PcbLib").to_string_lossy(),
+                "component_name": "PAD_SHAPES",
+            }));
+            assert!(!read.is_error, "{}", get_result_text(&read));
+            let footprints = parse_result_json(&read)["footprints"].clone();
+            let texts_before = footprints[0]["text"].as_array().map_or(0, Vec::len);
+            let has_designator = footprints[0]["text"].as_array().is_some_and(|texts| {
+                texts.iter().any(|t| {
+                    t["text"]
+                        .as_str()
+                        .is_some_and(|s| s.eq_ignore_ascii_case(".designator"))
+                })
+            });
+            assert!(
+                !has_designator,
+                "the golden footprint has no designator text to begin with"
+            );
+
+            let out = dir.path().join("Echo.PcbLib");
+            let written = server.call_write_pcblib(&json!({
+                "filepath": out.to_string_lossy(),
+                "footprints": footprints,
+            }));
+            assert!(!written.is_error, "{}", get_result_text(&written));
+            let back = server.call_read_pcblib(&json!({ "filepath": out.to_string_lossy() }));
+            let texts_after = parse_result_json(&back)["footprints"][0]["text"]
+                .as_array()
+                .map_or(0, Vec::len);
+            assert_eq!(
+                texts_after, texts_before,
+                "no primitive was added to a replayed footprint"
+            );
+        }
+
+        /// From scratch the designator is still added by default, and
+        /// `auto_designator: false` switches it off.
+        #[test]
+        fn write_pcblib_auto_designator_is_opt_out_for_new_footprints() {
+            let dir = test_temp_dir();
+            let server = create_test_server(dir.path());
+            let pads =
+                json!([{ "designator": "1", "x": 0.0, "y": 0.0, "width": 0.6, "height": 0.5 }]);
+            for (i, (auto, expected_texts)) in [(None, 1), (Some(true), 1), (Some(false), 0)]
+                .into_iter()
+                .enumerate()
+            {
+                let path = dir.path().join(format!("Auto{i}.PcbLib"));
+                let mut args = json!({
+                    "filepath": path.to_string_lossy(),
+                    "footprints": [{ "name": "FP", "pads": pads }],
+                });
+                if let Some(flag) = auto {
+                    args["auto_designator"] = json!(flag);
+                }
+                let written = server.call_write_pcblib(&args);
+                assert!(!written.is_error, "{}", get_result_text(&written));
+                let back = server.call_read_pcblib(&json!({ "filepath": path.to_string_lossy() }));
+                let texts = parse_result_json(&back)["footprints"][0]["text"]
+                    .as_array()
+                    .map_or(0, Vec::len);
+                assert_eq!(texts, expected_texts, "auto_designator={auto:?}");
+            }
         }
 
         /// `read_schlib` → `write_schlib` replays a symbol's interleaved

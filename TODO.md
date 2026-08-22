@@ -24,8 +24,3 @@ record). The specialised worklists stay the single source of truth for their are
 - [ ] **`.mcpb` Claude Desktop extension** for one-click install — the format that
       superseded `.dxt`; Claude Desktop now steers users to extensions over hand-edited
       JSON (pattern from coffeenmusic/altium-mcp).
-
-## C. Docs / AI workflow
-
-- [ ] Enrich `docs/AI_WORKFLOW.md` with symbol pin-placement guidance (idea from
-      coffeenmusic's `symbol_placement_rules.txt`).

@@ -1982,15 +1982,19 @@ fn read_schlib_exposes_round_rects_and_polygons() {
     );
     assert_eq!(len_of(pg, "polygons"), 2, "POLYGONS exposes 2 polygons");
 
+    // A symbol without a family omits its key — the struct's own serde shape,
+    // which write_schlib and import_library default to empty — so a client
+    // must not rely on every list being present.
     let pins = find_by(symbols, "name", "PINS_ETYPE").expect("PINS_ETYPE symbol");
     assert!(
-        pins.get("round_rects").is_some(),
-        "PINS_ETYPE has 'round_rects' field"
+        pins.get("round_rects").is_none(),
+        "PINS_ETYPE carries no round_rects, so the key is omitted"
     );
     assert!(
-        pins.get("polygons").is_some(),
-        "PINS_ETYPE has 'polygons' field"
+        pins.get("polygons").is_none(),
+        "PINS_ETYPE carries no polygons, so the key is omitted"
     );
+    assert!(len_of(pins, "pins") > 0, "its pins are there");
 }
 
 /// Collects an `additional_parameters` array of `[key, value]` pairs.

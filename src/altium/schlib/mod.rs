@@ -565,6 +565,28 @@ impl Symbol {
         self.primitive_order.push(SchPrimitiveKind::Parameter);
     }
 
+    /// Removes the parameter at `index` and its slot in
+    /// [`Self::primitive_order`], so every other record keeps its place in
+    /// the file instead of the later parameters each moving up one slot.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `index` is past the end of [`Self::parameters`].
+    pub fn remove_parameter(&mut self, index: usize) -> Parameter {
+        let param = self.parameters.remove(index);
+        let slot = self
+            .primitive_order
+            .iter()
+            .enumerate()
+            .filter(|(_, kind)| **kind == SchPrimitiveKind::Parameter)
+            .nth(index)
+            .map(|(position, _)| position);
+        if let Some(position) = slot {
+            self.primitive_order.remove(position);
+        }
+        param
+    }
+
     /// Adds a footprint model reference.
     pub fn add_footprint(&mut self, footprint: FootprintModel) {
         self.footprints.push(footprint);
@@ -2193,5 +2215,34 @@ mod tests {
         );
         let back: Symbol = serde_json::from_value(json).expect("from json");
         assert_eq!(back.extra_streams.len(), 2);
+    }
+
+    #[test]
+    fn removing_a_parameter_leaves_the_other_records_where_they_were() {
+        // Interleaved as a file might store it: A, pin 1, B, pin 2. Removing
+        // A must not move B in front of pin 1, which is what a bare
+        // `parameters.remove` does once the order has one slot too many.
+        let mut symbol = Symbol::new("U1");
+        symbol.add_parameter(Parameter::new("A", "1"));
+        symbol.add_pin(Pin::new("1", "A", -10, 0, 10, PinOrientation::Right));
+        symbol.add_parameter(Parameter::new("B", "2"));
+        symbol.add_pin(Pin::new("2", "B", -10, -10, 10, PinOrientation::Right));
+
+        let removed = symbol.remove_parameter(0);
+        assert_eq!(removed.name, "A");
+        assert_eq!(
+            symbol.write_sequence(),
+            vec![
+                (SchPrimitiveKind::Pin, 0),
+                (SchPrimitiveKind::Parameter, 0),
+                (SchPrimitiveKind::Pin, 1),
+            ]
+        );
+
+        // A symbol whose order was never recorded is unaffected.
+        symbol.primitive_order.clear();
+        symbol.remove_parameter(0);
+        assert!(symbol.parameters.is_empty());
+        assert!(symbol.primitive_order.is_empty());
     }
 }

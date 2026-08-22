@@ -1859,11 +1859,11 @@ impl McpServer {
                         },
                         "x": {
                             "type": "integer",
-                            "description": "X position in schematic units (optional for add)"
+                            "description": "X position in schematic units (optional for set, add)"
                         },
                         "y": {
                             "type": "integer",
-                            "description": "Y position in schematic units (optional for add)"
+                            "description": "Y position in schematic units (optional for set, add)"
                         }
                     },
                     "required": ["filepath", "component_name", "operation"]

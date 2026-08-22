@@ -894,8 +894,8 @@ Manage component parameters in Altium SchLib files. Supports listing, getting, s
 | `read_only_state` | integer | no | Read-only state (0=editable, 1=read-only) (optional for set, add). Default: 0 |
 | `unique_id` | string | no | 8-char Altium unique ID (optional for set, add). Default: auto-generated |
 | `value` | string | no | Parameter value (required for set, add) |
-| `x` | integer | no | X position in schematic units (optional for add) |
-| `y` | integer | no | Y position in schematic units (optional for add) |
+| `x` | integer | no | X position in schematic units (optional for set, add) |
+| `y` | integer | no | Y position in schematic units (optional for set, add) |
 
 ## `manage_schlib_footprints`
 

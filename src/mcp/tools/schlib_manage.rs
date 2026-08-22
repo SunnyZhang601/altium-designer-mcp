@@ -54,19 +54,12 @@ impl McpServer {
                 };
 
                 if operation == "list" {
-                    // List all parameters
-                    let params: Vec<_> = symbol
+                    // Every parameter in the shape read_schlib and
+                    // get_component use.
+                    let params: Vec<Value> = symbol
                         .parameters
                         .iter()
-                        .map(|p| {
-                            json!({
-                                "name": p.name,
-                                "value": p.value,
-                                "hidden": p.hidden,
-                                "x": p.x,
-                                "y": p.y,
-                            })
-                        })
+                        .map(|p| serde_json::to_value(p).unwrap_or(Value::Null))
                         .collect();
 
                     let result = json!({
@@ -101,13 +94,7 @@ impl McpServer {
                             "filepath": filepath,
                             "component_name": component_name,
                             "operation": "get",
-                            "parameter": {
-                                "name": p.name,
-                                "value": p.value,
-                                "hidden": p.hidden,
-                                "x": p.x,
-                                "y": p.y,
-                            },
+                            "parameter": serde_json::to_value(p).unwrap_or(Value::Null),
                         });
                         ToolCallResult::text(serde_json::to_string_pretty(&result).unwrap())
                     }
@@ -179,6 +166,23 @@ impl McpServer {
                                     arguments.get("unique_id").and_then(Value::as_str)
                                 {
                                     p.unique_id = Some(uid.to_string());
+                                }
+                                // A parameter is moved the same way it is placed.
+                                if let Some(x) = arguments.get("x").and_then(Value::as_f64) {
+                                    if let Err(e) =
+                                        Self::validate_schlib_coordinate(x, "parameter x")
+                                    {
+                                        return ToolCallResult::error(e);
+                                    }
+                                    p.x = x;
+                                }
+                                if let Some(y) = arguments.get("y").and_then(Value::as_f64) {
+                                    if let Err(e) =
+                                        Self::validate_schlib_coordinate(y, "parameter y")
+                                    {
+                                        return ToolCallResult::error(e);
+                                    }
+                                    p.y = y;
                                 }
 
                                 json!({
@@ -272,16 +276,23 @@ impl McpServer {
                     }
 
                     "delete" => {
-                        // Find and remove parameter
-                        let original_len = symbol.parameters.len();
-                        symbol
+                        // Every parameter of that name goes, last first so the
+                        // earlier indices stay valid; the record order is kept
+                        // in step so nothing else in the symbol moves.
+                        let matches: Vec<usize> = symbol
                             .parameters
-                            .retain(|p| !p.name.eq_ignore_ascii_case(parameter_name));
-
-                        if symbol.parameters.len() == original_len {
+                            .iter()
+                            .enumerate()
+                            .filter(|(_, p)| p.name.eq_ignore_ascii_case(parameter_name))
+                            .map(|(index, _)| index)
+                            .collect();
+                        if matches.is_empty() {
                             return ToolCallResult::error(format!(
                                 "Parameter '{parameter_name}' not found in symbol '{component_name}'"
                             ));
+                        }
+                        for index in matches.into_iter().rev() {
+                            symbol.remove_parameter(index);
                         }
 
                         json!({
@@ -361,17 +372,11 @@ impl McpServer {
                     ));
                 };
 
-                // List all footprints
-                let footprints: Vec<_> = symbol
+                // Every link in the shape read_schlib and get_component use.
+                let footprints: Vec<Value> = symbol
                     .footprints
                     .iter()
-                    .map(|f| {
-                        json!({
-                            "name": f.name,
-                            "description": f.description,
-                            "library_path": f.library_path,
-                        })
-                    })
+                    .map(|f| serde_json::to_value(f).unwrap_or(Value::Null))
                     .collect();
 
                 let result = json!({
@@ -802,6 +807,12 @@ mod tests {
         assert_eq!(parsed["footprints"][0]["name"], "CHIP_0402");
         assert_eq!(parsed["footprints"][0]["description"], "0402 body");
         assert_eq!(parsed["footprints"][0]["library_path"], "Resistors.PcbLib");
+        // The whole link, as read_schlib reports it — not a three-field excerpt.
+        assert_eq!(parsed["footprints"][0]["is_current"], true, "{parsed}");
+        assert!(
+            parsed["footprints"][0].get("unique_id").is_some(),
+            "{parsed}"
+        );
 
         // Duplicate add is rejected.
         let result = server.call_manage_schlib_footprints(&json!({
@@ -1181,7 +1192,8 @@ mod tests {
     mod optional_properties {
         use crate::altium::SchLib;
         use crate::mcp::tools::test_support::{
-            create_test_schlib, create_test_server, get_result_text, test_temp_dir,
+            create_test_schlib, create_test_server, get_result_text, parse_result_json,
+            test_temp_dir,
         };
         use serde_json::json;
 
@@ -1243,6 +1255,113 @@ mod tests {
             assert!(!param.hidden);
             assert_eq!(param.param_type, 1);
             assert_eq!(param.unique_id.as_deref(), Some("HGFEDCBA"));
+        }
+
+        #[test]
+        fn deleting_a_parameter_leaves_the_other_records_where_they_were() {
+            // Stored interleaved — A, pin, B, pin — deleting A must not move
+            // B in front of the first pin: the record order is kept in step.
+            use crate::altium::schlib::{Parameter, Pin, PinOrientation, SchPrimitiveKind, Symbol};
+            let dir = test_temp_dir();
+            let server = create_test_server(dir.path());
+            let path = dir.path().join("Order.SchLib");
+            let mut symbol = Symbol::new("U1");
+            symbol.add_parameter(Parameter::new("A", "1"));
+            symbol.add_pin(Pin::new("1", "IN", -10, 0, 10, PinOrientation::Right));
+            symbol.add_parameter(Parameter::new("B", "2"));
+            symbol.add_pin(Pin::new("2", "OUT", -10, -10, 10, PinOrientation::Right));
+            let mut lib = SchLib::new();
+            lib.add(symbol);
+            lib.save(&path).expect("save");
+
+            let deleted = server.call_manage_schlib_parameters(&json!({
+                "filepath": path.to_string_lossy(),
+                "component_name": "U1",
+                "operation": "delete",
+                "parameter_name": "a",
+            }));
+            assert!(!deleted.is_error, "{}", get_result_text(&deleted));
+
+            let lib = SchLib::open(&path).expect("reopen");
+            let symbol = lib.get("U1").expect("symbol");
+            assert_eq!(symbol.parameters.len(), 1);
+            assert_eq!(symbol.parameters[0].name, "B");
+            assert_eq!(
+                symbol.primitive_order,
+                vec![
+                    SchPrimitiveKind::Pin,
+                    SchPrimitiveKind::Parameter,
+                    SchPrimitiveKind::Pin,
+                ]
+            );
+        }
+
+        #[test]
+        fn set_moves_a_parameter_and_get_reports_the_whole_record() {
+            // `x`/`y` are accepted by `add`; `set` takes them the same way
+            // rather than reporting success and leaving the parameter where
+            // it was. `get` and `list` report the parameter in the shape
+            // read_schlib uses, not a five-field excerpt.
+            let dir = test_temp_dir();
+            let server = create_test_server(dir.path());
+            let path = dir.path().join("Move.SchLib");
+            create_test_schlib(&path);
+            let added = server.call_manage_schlib_parameters(&json!({
+                "filepath": path.to_string_lossy(),
+                "component_name": "RESISTOR",
+                "operation": "add",
+                "parameter_name": "Value",
+                "value": "10k",
+            }));
+            assert!(!added.is_error, "{}", get_result_text(&added));
+
+            let moved = server.call_manage_schlib_parameters(&json!({
+                "filepath": path.to_string_lossy(),
+                "component_name": "RESISTOR",
+                "operation": "set",
+                "parameter_name": "Value",
+                "x": 15,
+                "y": -25,
+            }));
+            assert!(!moved.is_error, "{}", get_result_text(&moved));
+            let got = server.call_manage_schlib_parameters(&json!({
+                "filepath": path.to_string_lossy(),
+                "component_name": "RESISTOR",
+                "operation": "get",
+                "parameter_name": "Value",
+            }));
+            let param = parse_result_json(&got)["parameter"].clone();
+            assert_eq!(param["x"], 15.0, "{param}");
+            assert_eq!(param["y"], -25.0, "{param}");
+            assert!(param.get("read_only_state").is_some(), "{param}");
+            assert!(param.get("font_id").is_some(), "{param}");
+
+            let listed = server.call_manage_schlib_parameters(&json!({
+                "filepath": path.to_string_lossy(),
+                "component_name": "RESISTOR",
+                "operation": "list",
+            }));
+            let listed = parse_result_json(&listed);
+            assert!(
+                listed["parameters"]
+                    .as_array()
+                    .expect("array")
+                    .iter()
+                    .all(|p| p.get("font_id").is_some()),
+                "{listed}"
+            );
+
+            for axis in ["x", "y"] {
+                let refused = server.call_manage_schlib_parameters(&json!({
+                    "filepath": path.to_string_lossy(),
+                    "component_name": "RESISTOR",
+                    "operation": "set",
+                    "parameter_name": "Value",
+                    axis: 1.0e12,
+                }));
+                assert!(refused.is_error, "{axis}");
+                assert!(get_result_text(&refused).contains(&format!("parameter {axis}")));
+            }
         }
 
         #[test]

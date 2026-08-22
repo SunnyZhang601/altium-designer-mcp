@@ -122,7 +122,7 @@ each holding the golden's bytes through a different route:
 
 | Layer | Suite | Route |
 |-------|-------|-------|
-| Library API | `tests/golden_fidelity.rs` | `PcbLib::open` → `save`, every stream and parameter block |
+| Library API | `tests/golden_fidelity.rs` | `PcbLib::open` → `save`, every stream and parameter block; two saves of a library, and a save of our own output, are byte-identical |
 | JSON boundary | `fidelity_replay` in `src/mcp/tools/read_write.rs` | `read_*` → `write_*` and `read_*` → `update_component`, re-reading the server's own output save after save |
 | Mutating tools | `src/mcp/tools/mutation_fidelity.rs` | each tool on a copy of the golden; every component it was not asked to touch must be byte-identical, and export → import / merge must be too |
 

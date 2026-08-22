@@ -504,6 +504,10 @@ The first record of each component's Data stream. Keys as written (in order):
 > `ComponentDescription=<Windows-1252 bytes>` (twin first, two empty segments, code-page
 > plain key); a scripted one puts UTF-8 bytes in both keys.
 
+A record the file stores without a `UniqueID` (Altium writes a pie that way) is not given one:
+a save is deterministic, so a version-controlled library shows no phantom diff. The library's
+own `UniqueID` in the `FileHeader` is kept for its lifetime as well.
+
 Every content record is carried the same way — `raw_params` on each record struct holds its
 segments as read — and replayed verbatim where the field behind a segment is unchanged: the
 UI omits `LineWidth=1` on a rectangle where a script writes it, stores a Latin-1 label as

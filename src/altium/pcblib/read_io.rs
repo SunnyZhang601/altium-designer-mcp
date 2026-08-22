@@ -176,6 +176,28 @@ impl PcbLib {
                 if let Ok(version) = std::str::from_utf8(&data[5..5 + str_len]) {
                     if version.contains("PCB") && version.contains("Binary Library File") {
                         metadata.header = version.to_string();
+                        // After the version string and the 8-byte format
+                        // double: `[len:4][len:1][8-char UniqueId]`.
+                        let uid = 5 + str_len + 8;
+                        if let Some(block) = data.get(uid..) {
+                            if block.len() >= 5 {
+                                let n = usize::from(block[4]);
+                                if let Some(id) = block.get(5..5 + n) {
+                                    if !id.is_empty() {
+                                        metadata.unique_id =
+                                            Some(crate::altium::decode_windows1252(id));
+                                    }
+                                }
+                            }
+                        }
+                        metadata.pad_via_library_id =
+                            crate::altium::read_stream_opt(cfb, "/Library/PadViaLibrary/Data")
+                                .and_then(|pvl| {
+                                    let text = crate::altium::decode_windows1252(&pvl);
+                                    crate::altium::parse_pipe_params(&text)
+                                        .get("padvialibrary.libraryid")
+                                        .cloned()
+                                });
                         tracing::debug!(
                             header = %metadata.header,
                             "Parsed FileHeader (binary version string)"

@@ -458,6 +458,125 @@ fn pcblib_golden_survives_a_round_trip() {
     );
 }
 
+/// Two saves of the same `PcbLib` are byte-identical, and so is a save of
+/// our own output: nothing varies per save and nothing moves.
+#[test]
+fn pcblib_saves_are_deterministic() {
+    let src = sample("footprints.PcbLib");
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (a, b, c) = (
+        dir.path().join("a.PcbLib"),
+        dir.path().join("b.PcbLib"),
+        dir.path().join("c.PcbLib"),
+    );
+    PcbLib::open(&src).expect("read").save(&a).expect("save a");
+    PcbLib::open(&src).expect("read").save(&b).expect("save b");
+    PcbLib::open(&a).expect("reopen").save(&c).expect("save c");
+    // /Library/Data names this save — the path written, the date and time
+    // — in three keys Altium rewrites on every save too; everything else in
+    // it must be the same.
+    let masked = |bytes: &[u8]| -> Vec<u8> {
+        let text = String::from_utf8_lossy(bytes).into_owned();
+        let mut out = Vec::new();
+        for (i, segment) in text.split('|').enumerate() {
+            if i > 0 {
+                out.push(b'|');
+            }
+            let key = segment.split('=').next().unwrap_or("");
+            if ["FILENAME", "DATE", "TIME"].contains(&key) {
+                out.extend_from_slice(format!("{key}=*").as_bytes());
+            } else {
+                out.extend_from_slice(segment.as_bytes());
+            }
+        }
+        out
+    };
+    let sa = stream_map(&a);
+    for (other, label) in [
+        (&b, "two saves of the same library"),
+        (&c, "our own output re-saved"),
+    ] {
+        let so = stream_map(other);
+        assert_eq!(
+            sa.keys().collect::<Vec<_>>(),
+            so.keys().collect::<Vec<_>>(),
+            "{label}"
+        );
+        for (canonical, path) in &sa {
+            let (mut ours, mut theirs) = (
+                stream_bytes(&a, path).unwrap_or_default(),
+                stream_bytes(other, &so[canonical]).unwrap_or_default(),
+            );
+            if canonical == "library/data" {
+                (ours, theirs) = (masked(&ours[4..]), masked(&theirs[4..]));
+            }
+            if ours != theirs {
+                let first = ours
+                    .iter()
+                    .zip(theirs.iter())
+                    .position(|(p, q)| p != q)
+                    .unwrap_or_else(|| ours.len().min(theirs.len()));
+                panic!(
+                    "{canonical} differs ({label}; lens {}/{}, at {first:#x}): {:?} vs {:?}",
+                    ours.len(),
+                    theirs.len(),
+                    &ours[first.saturating_sub(24)..(first + 24).min(ours.len())],
+                    &theirs[first.saturating_sub(24)..(first + 24).min(theirs.len())]
+                );
+            }
+        }
+    }
+}
+
+/// Two saves of the same `SchLib` are byte-identical: no record gains an
+/// identity the file never gave it (a pie is stored without a `UniqueID`
+/// and must stay that way), and nothing else varies per save. A failure
+/// here names a record that changes on every write — the kind of drift a
+/// version-controlled library shows as a phantom diff.
+#[test]
+fn schlib_saves_are_deterministic() {
+    let src = sample("symbols.SchLib");
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (a, b) = (dir.path().join("a.SchLib"), dir.path().join("b.SchLib"));
+    SchLib::open(&src).expect("read").save(&a).expect("save a");
+    SchLib::open(&src).expect("read").save(&b).expect("save b");
+    let (sa, sb) = (stream_map(&a), stream_map(&b));
+    assert_eq!(sa.keys().collect::<Vec<_>>(), sb.keys().collect::<Vec<_>>());
+    for (canonical, path) in &sa {
+        let (x, y) = (stream_bytes(&a, path), stream_bytes(&b, &sb[canonical]));
+        assert!(
+            x == y,
+            "{canonical} differs between two saves of the same library"
+        );
+    }
+    // And the second generation: a save of our own output re-saved.
+    let c = dir.path().join("c.SchLib");
+    SchLib::open(&a).expect("reopen").save(&c).expect("save c");
+    let sc = stream_map(&c);
+    for (canonical, path) in &sa {
+        let (ours, theirs) = (stream_bytes(&a, path), stream_bytes(&c, &sc[canonical]));
+        if ours != theirs {
+            let (ours, theirs) = (ours.unwrap_or_default(), theirs.unwrap_or_default());
+            let first = ours
+                .iter()
+                .zip(theirs.iter())
+                .position(|(p, q)| p != q)
+                .unwrap_or_else(|| ours.len().min(theirs.len()));
+            let window = |v: &[u8]| {
+                String::from_utf8_lossy(&v[first.saturating_sub(40)..(first + 40).min(v.len())])
+                    .into_owned()
+            };
+            panic!(
+                "{canonical} differs once our own output is re-saved (lens {}/{}, at {first:#x}):\n  a: {}\n  c: {}",
+                ours.len(),
+                theirs.len(),
+                window(&ours),
+                window(&theirs)
+            );
+        }
+    }
+}
+
 /// Every binary (pin) record of a `SchLib` `Data` stream, bytes included,
 /// in stream order.
 fn binary_records(data: &[u8]) -> Vec<Vec<u8>> {

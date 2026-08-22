@@ -334,6 +334,45 @@ impl McpServer {
         self
     }
 
+    /// Every tool's documented argument names, from the same schemas
+    /// `tools/list` serves and `docs/TOOLS.md` is generated from.
+    fn tool_argument_names() -> &'static std::collections::HashMap<String, Vec<String>> {
+        static NAMES: std::sync::OnceLock<std::collections::HashMap<String, Vec<String>>> =
+            std::sync::OnceLock::new();
+        NAMES.get_or_init(|| {
+            Self::get_tool_definitions()
+                .into_iter()
+                .map(|tool| {
+                    let names = tool.input_schema["properties"]
+                        .as_object()
+                        .map(|props| props.keys().cloned().collect())
+                        .unwrap_or_default();
+                    (tool.name, names)
+                })
+                .collect()
+        })
+    }
+
+    /// Refuses a call carrying an argument the tool's schema does not
+    /// document — a typo (`dryrun`, `compnent_name`) every handler would
+    /// otherwise ignore, silently taking the default. An unknown tool name
+    /// is left to dispatch to report.
+    fn check_tool_arguments(name: &str, arguments: &Value) -> Result<(), String> {
+        let (Some(known), Some(given)) =
+            (Self::tool_argument_names().get(name), arguments.as_object())
+        else {
+            return Ok(());
+        };
+        given
+            .keys()
+            .find(|key| !known.contains(key))
+            .map_or(Ok(()), |unknown| {
+                Err(format!(
+                    "Unknown argument '{unknown}' for tool '{name}'. Accepted arguments are: {known:?}"
+                ))
+            })
+    }
+
     /// Returns `true` if the named tool mutates a library file on disk.
     ///
     /// Only these destructive operations are rate limited; read-only tools
@@ -789,9 +828,9 @@ impl McpServer {
 
         // Throttle mutating operations so a runaway AI loop cannot thrash the
         // disk with repeated full-file rewrites + backups. Reads are unmetered.
-        let result = if Self::is_mutating_tool(params.name.as_str())
-            && !self.rate_limiter.try_acquire()
-        {
+        let result = if let Err(e) = Self::check_tool_arguments(&params.name, &params.arguments) {
+            ToolCallResult::error(e)
+        } else if Self::is_mutating_tool(params.name.as_str()) && !self.rate_limiter.try_acquire() {
             tracing::warn!(
                 tool = %params.name,
                 "Rate limit exceeded; rejecting mutating operation"
@@ -3029,6 +3068,45 @@ mod tests {
                 .as_str()
                 .unwrap()
                 .contains("Unknown tool"));
+        }
+
+        /// Every tool refuses an argument its schema does not document, and
+        /// every tool's own documented example passes the same check — so
+        /// the schemas, the examples and the handlers cannot drift apart.
+        #[test]
+        fn tools_call_refuses_an_undocumented_argument_on_every_tool() {
+            let dir = test_temp_dir();
+            let server = running_server(dir.path());
+            for tool in McpServer::get_tool_definitions() {
+                let r = req(
+                    "tools/call",
+                    Some(
+                        json!({ "name": tool.name, "arguments": { "filepath": "x", "dryrun": true } }),
+                    ),
+                );
+                let resp = server.handle_tools_call(&r).unwrap();
+                let text = resp.result["content"][0]["text"]
+                    .as_str()
+                    .unwrap()
+                    .to_string();
+                assert_eq!(resp.result["isError"], json!(true), "{}: {text}", tool.name);
+                assert!(
+                    text.contains("Unknown argument 'dryrun'") && text.contains(&tool.name),
+                    "{}: {text}",
+                    tool.name
+                );
+
+                let example = tool.example.expect("every tool documents an example");
+                assert_eq!(example["name"], tool.name);
+                assert!(
+                    McpServer::check_tool_arguments(&tool.name, &example["arguments"]).is_ok(),
+                    "{}: its own example carries an undocumented argument",
+                    tool.name
+                );
+            }
+            // Non-object arguments and unknown tools are left to dispatch.
+            assert!(McpServer::check_tool_arguments("read_pcblib", &json!(null)).is_ok());
+            assert!(McpServer::check_tool_arguments("no_such_tool", &json!({ "x": 1 })).is_ok());
         }
 
         #[test]

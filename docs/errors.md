@@ -171,7 +171,13 @@ The structured document inside `text` always carries these keys:
 - **`component`** — the component being processed, or `null` if not applicable.
 - **`details`** — additional context about what was happening, or `null`.
 
-### Unknown-Field Rejection
+### Unknown-Argument and Unknown-Field Rejection
+
+Every `tools/call` is first checked against the called tool's own schema (the one
+`tools/list` serves): an argument the schema does not document —
+`Unknown argument 'dryrun' for tool 'update_pad'. Accepted arguments are: [...]` — is
+refused before the handler runs, because every handler would otherwise ignore it and
+silently take the default (`src/mcp/server.rs`, `check_tool_arguments`).
 
 `write_pcblib`, `write_schlib`, `update_component`, `update_pad`, `update_primitive` and
 `batch_update` refuse any JSON object key they do not know —

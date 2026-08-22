@@ -523,6 +523,15 @@ impl McpServer {
             }
         }
 
+        // The header exactly as read — key order, unmodelled keys and the
+        // stale AllPinCount — so a read-modify-write reproduces it.
+        if let Some(params) = sym_json.get("header_params") {
+            symbol.header_params = serde_json::from_value(params.clone()).unwrap_or_default();
+        }
+        if let Some(count) = sym_json.get("all_pin_count").and_then(Value::as_u64) {
+            symbol.all_pin_count = u32::try_from(count).ok();
+        }
+
         // The interleaved record order `read_schlib` reported; replaying it
         // replaces the grouped order the add_* calls accumulated, so a
         // read-modify-write keeps the source's record order.

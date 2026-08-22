@@ -52,13 +52,17 @@ impl SchLib {
         )?;
 
         // Root SectionKeys stream: the LibRef -> storage-name map for every
-        // symbol whose name did not survive the storage cap, so the real name
-        // stays recoverable by Altium and by our own reader's ordering pass.
-        // With no truncated name the stream is not written, as in Altium.
+        // symbol whose name reaches the storage cap — truncated or, as a
+        // UI-authored `Generic Non-polarised Capacitor` (31 units exactly)
+        // shows, merely filling it — so the real name stays recoverable by
+        // Altium and by our own reader's ordering pass. With no such name the
+        // stream is not written, as in Altium.
         let truncated: Vec<(String, String)> = storage_names
             .iter()
             .zip(ole_names.iter())
-            .filter(|(wire, ole)| wire != ole)
+            .filter(|(wire, ole)| {
+                wire != ole || wire.encode_utf16().count() >= crate::altium::MAX_OLE_NAME_LEN
+            })
             .map(|(wire, ole)| (wire.clone(), ole.clone()))
             .collect();
         if let Some(section_keys) = crate::altium::encode_section_keys(&truncated) {

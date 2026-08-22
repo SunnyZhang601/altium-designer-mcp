@@ -122,6 +122,12 @@ fn contains_utf8_marker(data: &[u8]) -> bool {
         .any(|w| w.eq_ignore_ascii_case(MARKER))
 }
 
+/// [`parse_text_record_from_string`] for the writer's tests.
+#[cfg(test)]
+pub(crate) fn parse_text_record_from_string_for_test(symbol: &mut Symbol, text: &str) {
+    parse_text_record_from_string(symbol, text);
+}
+
 /// Parses a text record from a decoded string.
 #[allow(clippy::too_many_lines)] // Property parsing for all record types
 fn parse_text_record_from_string(symbol: &mut Symbol, text: &str) {
@@ -167,6 +173,24 @@ fn parse_text_record_from_string(symbol: &mut Symbol, text: &str) {
             if let Some(target_file) = props.get("targetfilename") {
                 symbol.target_file_name.clone_from(target_file);
             }
+            if let Some(count) = props.get("allpincount").and_then(|v| v.trim().parse().ok()) {
+                symbol.all_pin_count = Some(count);
+            }
+            // The record exactly as stored — every segment, an empty one
+            // included, because the UI writes a `%UTF8%` twin as
+            // `%UTF8%Key=…|||Key=…` — so the writer reproduces this header
+            // rather than the canonical one.
+            symbol.header_params = text
+                .trim_end_matches('\0')
+                .split('|')
+                .skip(1)
+                .map(|segment| {
+                    segment.split_once('=').map_or_else(
+                        || (segment.to_string(), String::new()),
+                        |(key, value)| (key.to_string(), value.to_string()),
+                    )
+                })
+                .collect();
         }
         14 => {
             // Rectangle

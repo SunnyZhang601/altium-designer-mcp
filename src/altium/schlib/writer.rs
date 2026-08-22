@@ -256,33 +256,167 @@ pub(crate) fn write_binary_pin(
     write_record_frame(data, &record, 1)
 }
 
+/// Header keys that exist only as constants: emitted for a symbol built from
+/// scratch (the scripted golden carries them) and otherwise only when the
+/// header read them — a UI-authored header omits them.
+const HEADER_CONSTANT_KEYS: &[&str] = &["LibraryPath", "SheetPartFileName"];
+
+/// Replays a read header segment by segment (see [`encode_component_header`]).
+///
+/// A segment whose field was not edited goes back verbatim: its plain value
+/// still names the same text once decoded the way the reader decoded it, or
+/// its canonical rendering is unchanged. A `%UTF8%` twin follows its plain
+/// key's verdict. An edited field is emitted in canonical form, its stale
+/// twin dropped when the new value is ASCII.
+fn replay_header(symbol: &Symbol, canonical: &[(String, String)]) -> Vec<String> {
+    let canonical_value = |key: &str| {
+        canonical
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case(key))
+            .map(|(_, v)| v.as_str())
+    };
+    let is_text_key = |key: &str| {
+        ["LibReference", "ComponentDescription", "SourceLibraryName"]
+            .iter()
+            .any(|k| k.eq_ignore_ascii_case(key))
+    };
+    // The value the reader derived from a plain text key.
+    let read_text =
+        |raw: &str| crate::altium::from_wire_text(raw).unwrap_or_else(|| raw.to_string());
+    let current_text = |key: &str| -> Option<&str> {
+        if key.eq_ignore_ascii_case("LibReference") {
+            Some(symbol.name.as_str())
+        } else if key.eq_ignore_ascii_case("ComponentDescription") {
+            Some(symbol.description.as_str())
+        } else if key.eq_ignore_ascii_case("SourceLibraryName") {
+            Some(symbol.source_library_name.as_str())
+        } else {
+            None
+        }
+    };
+    let plain_unchanged = |key: &str| {
+        symbol
+            .header_params
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case(key))
+            .is_some_and(|(_, raw)| current_text(key) == Some(read_text(raw).as_str()))
+    };
+
+    let mut placed: Vec<bool> = vec![false; canonical.len()];
+    let mut parts = Vec::with_capacity(symbol.header_params.len() + 4);
+    for (key, raw) in &symbol.header_params {
+        if key.is_empty() {
+            parts.push(String::new()); // an empty segment of `%UTF8%Key=…|||Key=…`
+            continue;
+        }
+        let plain_key = key.strip_prefix("%UTF8%").unwrap_or(key);
+        let index = canonical
+            .iter()
+            .position(|(k, _)| k.eq_ignore_ascii_case(key));
+        if let Some(i) = index {
+            placed[i] = true;
+        }
+        let unchanged = if is_text_key(plain_key) {
+            plain_unchanged(plain_key)
+        } else {
+            index.map_or(true, |i| canonical[i].1 == *raw)
+        };
+        if unchanged {
+            parts.push(format!("{key}={raw}"));
+        } else if let Some(value) = canonical_value(key) {
+            parts.push(format!("{key}={value}"));
+        }
+        // An edited text key whose stale twin is in canonical no longer:
+        // dropped with the segment (`canonical_value` found nothing).
+    }
+    for (i, (key, value)) in canonical.iter().enumerate() {
+        if !placed[i] && !HEADER_CONSTANT_KEYS.contains(&key.as_str()) {
+            parts.push(format!("{key}={value}"));
+        }
+    }
+    parts
+}
+
+/// Whether a parameter is Altium's own system `Comment` record — stored after
+/// the designator with the `IndexInSheet=-1` sentinel, outside the counter.
+/// `OwnerPartId=-1` alone does not make one: the UI stores every user
+/// parameter that way too, as a content record with its own slot.
+fn is_system_parameter(param: &super::Parameter) -> bool {
+    param.owner_part_id == -1 && param.name.eq_ignore_ascii_case("Comment")
+}
+
 /// Encodes a component header record.
+///
+/// A symbol read from a file replays its own header (`header_params`):
+/// every segment as read, verbatim, unless the field behind it was edited,
+/// in which case the canonical form of the new value takes its place. That
+/// keeps whichever `%UTF8%` layout Altium used (the UI's
+/// `%UTF8%Key=<UTF-8>|||Key=<Windows-1252>`, the scripted one's UTF-8 bytes
+/// in both keys), the keys it omitted and the ones this crate does not
+/// model. Modelled keys the record lacked are appended so a typed edit is
+/// never lost, except the constant ones it omitted on purpose. A symbol
+/// built from scratch emits the canonical header.
 fn encode_component_header(symbol: &Symbol) -> String {
+    let from_file = !symbol.header_params.is_empty();
+    let text = |key: &str, value: &str| -> Vec<(String, String)> {
+        if value.is_ascii() {
+            vec![(key.to_string(), value.to_string())]
+        } else {
+            let bytes = crate::altium::encode_utf8_param_value(value);
+            vec![
+                (key.to_string(), bytes.clone()),
+                (format!("%UTF8%{key}"), bytes),
+            ]
+        }
+    };
     let part_id_locked = if symbol.part_id_locked { "T" } else { "F" };
-    let parts = vec![
-        "RECORD=1".to_string(),
-        text_field("LibReference", &symbol.name),
-        text_field("ComponentDescription", &symbol.description),
-        format!("PartCount={}", symbol.part_count + 1), // Altium uses part_count + 1
-        format!("DisplayModeCount={}", symbol.display_mode_count),
-        "IndexInSheet=-1".to_string(),
-        "OwnerPartId=-1".to_string(),
-        format!("CurrentPartId={}", symbol.current_part_id),
-        "LibraryPath=*".to_string(),
-        text_field("SourceLibraryName", &symbol.source_library_name),
-        "SheetPartFileName=*".to_string(),
-        format!("TargetFileName={}", symbol.target_file_name),
-        format!("AllPinCount={}", symbol.pins.len()),
-        "AreaColor=11599871".to_string(), // Light yellow fill
-        "Color=128".to_string(),          // Dark red outline
-        format!("PartIDLocked={part_id_locked}"),
-    ];
-    // Omitted at zero, like every zero-valued integer key: the golden's
-    // pinless symbols carry no AllPinCount key at all.
-    let parts: Vec<String> = parts
-        .into_iter()
-        .filter(|p| !(symbol.pins.is_empty() && p == "AllPinCount=0"))
-        .collect();
+    let mut canonical: Vec<(String, String)> = vec![("RECORD".to_string(), "1".to_string())];
+    canonical.extend(text("LibReference", &symbol.name));
+    canonical.extend(text("ComponentDescription", &symbol.description));
+    canonical.extend([
+        ("PartCount".to_string(), (symbol.part_count + 1).to_string()), // Altium uses part_count + 1
+        (
+            "DisplayModeCount".to_string(),
+            symbol.display_mode_count.to_string(),
+        ),
+        ("IndexInSheet".to_string(), "-1".to_string()),
+        ("OwnerPartId".to_string(), "-1".to_string()),
+        (
+            "CurrentPartId".to_string(),
+            symbol.current_part_id.to_string(),
+        ),
+        ("LibraryPath".to_string(), "*".to_string()),
+    ]);
+    canonical.extend(text("SourceLibraryName", &symbol.source_library_name));
+    canonical.extend([
+        ("SheetPartFileName".to_string(), "*".to_string()),
+        (
+            "TargetFileName".to_string(),
+            symbol.target_file_name.clone(),
+        ),
+    ]);
+    // Altium keeps a stale count here, so a read value is carried; a
+    // from-scratch symbol writes its pin count, omitted at zero like every
+    // zero-valued integer key (the golden's pinless symbols carry none).
+    #[allow(clippy::cast_possible_truncation)]
+    let all_pin_count = symbol.all_pin_count.unwrap_or(symbol.pins.len() as u32);
+    if all_pin_count != 0 || symbol.all_pin_count.is_some() {
+        canonical.push(("AllPinCount".to_string(), all_pin_count.to_string()));
+    }
+    canonical.extend([
+        ("AreaColor".to_string(), "11599871".to_string()), // Light yellow fill
+        ("Color".to_string(), "128".to_string()),          // Dark red outline
+        ("PartIDLocked".to_string(), part_id_locked.to_string()),
+    ]);
+
+    let parts: Vec<String> = if from_file {
+        replay_header(symbol, &canonical)
+    } else {
+        canonical
+            .iter()
+            .map(|(key, value)| format!("{key}={value}"))
+            .collect()
+    };
 
     // Leading pipe, NO trailing pipe (matches Altium's ParametersToString).
     format!("|{}", parts.join("|"))
@@ -556,17 +690,18 @@ fn encode_line(line: &Line, index: usize) -> String {
 /// when set, `Text` / `Description` only when non-empty, and the read
 /// `UniqueID` is preserved.
 ///
-/// A **system** parameter — the Altium-authored `Comment`/`Designator`-class
-/// record with `owner_part_id == -1` — carries the `IndexInSheet=-1` sentinel
-/// (every golden symbol's system Comment stores
+/// The **system** parameter — Altium's own `Comment` record, see
+/// [`is_system_parameter`] — carries the `IndexInSheet=-1` sentinel (every
+/// golden symbol's system Comment stores
 /// `|RECORD=41|IndexInSheet=-1|OwnerPartId=-1|`) and never a content-counter
-/// slot; `index` is ignored for it. User parameters (`owner_part_id >= 1`)
-/// follow the shared 0-based content counter like every other record.
+/// slot; `index` is ignored for it. Every other parameter follows the shared
+/// 0-based content counter like every other record, whatever its owner — the
+/// UI stores user parameters with `OwnerPartId=-1` too.
 fn encode_parameter(param: &Parameter, index: usize) -> String {
     let mut parts = vec!["RECORD=41".to_string()];
     // IndexInSheet (system sentinel or counter, 0 omitted) directly after
     // RECORD, then OwnerPartId (parameters carry no IsNotAccesible token).
-    if param.owner_part_id == -1 {
+    if is_system_parameter(param) {
         parts.push("IndexInSheet=-1".to_string());
     } else {
         push_index_in_sheet(&mut parts, index);
@@ -1198,7 +1333,9 @@ fn count_records(data: &[u8]) -> usize {
 /// Encodes a footprint model record (`RECORD=45`).
 ///
 /// `owner_index` is the stream-index of the owning `RECORD=44` implementation list.
-/// `is_current` marks the default footprint (`IsCurrent=T`, set on one model).
+/// `is_current` marks the default footprint (`IsCurrent=T` on that model; a
+/// UI-authored library omits the key on every other one, like any false
+/// boolean, rather than writing `IsCurrent=F`).
 ///
 /// `DatafileCount=1` plus `ModelDatafileEntity0` is what lets Altium *resolve*
 /// the model to an actual footprint in a `PcbLib` (rendering the preview and
@@ -1216,13 +1353,13 @@ fn encode_footprint_model(model: &FootprintModel, owner_index: usize, is_current
     // from-scratch model gets a fresh one.
     let unique_id = model.unique_id.clone().unwrap_or_else(generate_unique_id);
     format!(
-        "|RECORD=45|OwnerIndex={}|IndexInSheet=-1|Description={}|ModelName={}|ModelType=PCBLIB|DatafileCount=1{}|ModelDatafileEntity0={}|ModelDatafileKind0=PCBLib|IsCurrent={}|UniqueID={}",
+        "|RECORD=45|OwnerIndex={}|IndexInSheet=-1|Description={}|ModelName={}|ModelType=PCBLIB|DatafileCount=1{}|ModelDatafileEntity0={}|ModelDatafileKind0=PCBLib{}|UniqueID={}",
         owner_index,
         model.description,
         model.name,
         datafile,
         model.name,
-        if is_current { "T" } else { "F" },
+        if is_current { "|IsCurrent=T" } else { "" },
         unique_id
     )
 }
@@ -1288,7 +1425,7 @@ pub fn encode_data_stream(symbol: &Symbol) -> crate::altium::error::AltiumResult
             }
             SchPrimitiveKind::Parameter => {
                 let param = &symbol.parameters[index];
-                if param.owner_part_id == -1 {
+                if is_system_parameter(param) {
                     continue;
                 }
                 encode_parameter(param, index_counter)
@@ -1326,14 +1463,16 @@ pub fn encode_data_stream(symbol: &Symbol) -> crate::altium::error::AltiumResult
         write_text_record(&mut data, &record)?;
     }
 
-    // 15b. SYSTEM parameters (owner_part_id == -1, the Altium-authored
-    // Comment-class records): golden order puts them after the designator, and
-    // they carry the IndexInSheet=-1 sentinel WITHOUT consuming a counter slot
-    // (the golden DISPMODE system Comment stores
-    // `|RECORD=41|IndexInSheet=-1|OwnerPartId=-1|` while the rectangles keep
-    // slots 0 and 1). Regressing them onto the counter destroyed the -1 and
-    // shifted every later content index by one on read-modify-write.
-    for param in symbol.parameters.iter().filter(|p| p.owner_part_id == -1) {
+    // 15b. The SYSTEM parameter — Altium's own Comment record: golden order
+    // puts it after the designator, and it carries the IndexInSheet=-1
+    // sentinel WITHOUT consuming a counter slot (the golden DISPMODE system
+    // Comment stores `|RECORD=41|IndexInSheet=-1|OwnerPartId=-1|` while the
+    // rectangles keep slots 0 and 1). Regressing it onto the counter destroyed
+    // the -1 and shifted every later content index by one on
+    // read-modify-write. Only the Comment is system: a UI-authored Value or
+    // Part Number carries OwnerPartId=-1 too and is still a content record
+    // with a counter slot, stored before the graphics in authoring order.
+    for param in symbol.parameters.iter().filter(|p| is_system_parameter(p)) {
         let record = encode_parameter(param, 0);
         write_text_record(&mut data, &record)?;
     }
@@ -1838,6 +1977,142 @@ mod tests {
         assert!(
             line.contains("|IndexInSheet=4|"),
             "line after two pins takes slot 4 (pins consumed 2 and 3): {line}"
+        );
+    }
+
+    /// A UI-authored header comes back segment for segment: the twin-first
+    /// `%UTF8%Key=<UTF-8>|||Key=<Windows-1252>` description, the omitted
+    /// `LibraryPath`/`SheetPartFileName`, the unmodelled
+    /// `COMPONENTKINDVERSION2`, the stale `AllPinCount` — and an edited field
+    /// takes the canonical form in its own slot.
+    #[test]
+    fn a_read_header_is_replayed_verbatim_until_a_field_is_edited() {
+        use super::super::reader;
+
+        // Exactly what a UI-drawn 32-pin MCU stores (AllPinCount=1 and all).
+        let record = concat!(
+            "|RECORD=1|LibReference=STM32G0C1KET6N",
+            "|%UTF8%ComponentDescription=STM32G0, Arm\u{c2}\u{ae} Cortex\u{c2}\u{ae}-M0+",
+            "|||ComponentDescription=STM32G0, Arm\u{ae} Cortex\u{ae}-M0+",
+            "|PartCount=2|DisplayModeCount=1|IndexInSheet=-1|OwnerPartId=-1|CurrentPartId=1",
+            "|SourceLibraryName=*|TargetFileName=*|AllPinCount=1|AreaColor=11599871|Color=128",
+            "|PartIDLocked=F|COMPONENTKINDVERSION2=5"
+        );
+        let mut symbol = Symbol::new("placeholder");
+        reader::parse_text_record_from_string_for_test(&mut symbol, record);
+        assert_eq!(symbol.name, "STM32G0C1KET6N");
+        assert_eq!(symbol.description, "STM32G0, Arm\u{ae} Cortex\u{ae}-M0+");
+        assert_eq!(symbol.all_pin_count, Some(1));
+        assert_eq!(symbol.header_params.len(), 18, "{:?}", symbol.header_params);
+        for _ in 0..32 {
+            symbol.add_pin(Pin::new("P", "1", 0, 0, 10, PinOrientation::Left));
+        }
+
+        // Unchanged: byte-identical, stale count and all.
+        assert_eq!(encode_component_header(&symbol), record);
+
+        // An edit to the description replaces its two segments with the
+        // canonical form (ASCII here, so no twin) at the plain key's slot.
+        symbol.description = "CAN transceiver".to_string();
+        let edited = encode_component_header(&symbol);
+        assert!(
+            edited.contains(
+                "|LibReference=STM32G0C1KET6N|||ComponentDescription=CAN transceiver|PartCount=2|"
+            ),
+            "{edited}"
+        );
+        assert!(!edited.contains("%UTF8%"), "{edited}");
+        assert!(
+            edited.ends_with("|PartIDLocked=F|COMPONENTKINDVERSION2=5"),
+            "{edited}"
+        );
+
+        // A field the header never carried is appended when set; the
+        // constant keys it omitted stay omitted.
+        symbol.part_id_locked = true;
+        let locked = encode_component_header(&symbol);
+        assert!(locked.contains("|PartIDLocked=T|"), "{locked}");
+        assert!(!locked.contains("LibraryPath"), "{locked}");
+    }
+
+    /// From scratch the canonical header is unchanged: every constant key,
+    /// the pin count, and the scripted `%UTF8%` form for a non-ASCII value.
+    #[test]
+    fn a_fresh_header_is_canonical() {
+        let mut symbol = Symbol::new("R\u{e9}sistance");
+        symbol.add_pin(Pin::new("1", "1", 0, 0, 10, PinOrientation::Left));
+        let header = encode_component_header(&symbol);
+        let bytes = crate::altium::encode_utf8_param_value("R\u{e9}sistance");
+        assert!(
+            header.starts_with(&format!(
+                "|RECORD=1|LibReference={bytes}|%UTF8%LibReference={bytes}|ComponentDescription=|"
+            )),
+            "{header}"
+        );
+        assert!(header.contains("|LibraryPath=*|SourceLibraryName=*|SheetPartFileName=*|TargetFileName=*|AllPinCount=1|"), "{header}");
+        symbol.all_pin_count = Some(7);
+        assert!(encode_component_header(&symbol).contains("|AllPinCount=7|"));
+    }
+
+    /// Only Altium's own `Comment` is the system parameter: a user parameter
+    /// stored with `OwnerPartId=-1` — the UI's habit — is a content record
+    /// with a counter slot, in authoring order before the graphics.
+    #[test]
+    fn user_parameters_with_owner_minus_one_keep_their_slots_and_order() {
+        let mut symbol = Symbol::new("PESD1CAN");
+        symbol.designator = "U?".to_string();
+        for (name, value) in [("Value", "PESD1CAN"), ("Part Number", "PESD1CAN")] {
+            let mut p = Parameter::new(name, value);
+            p.owner_part_id = -1;
+            symbol.add_parameter(p);
+        }
+        symbol.add_rectangle(Rectangle::new(-20, -10, 30, 20));
+        let mut comment = Parameter::new("Comment", "=VALUE");
+        comment.owner_part_id = -1;
+        symbol.add_parameter(comment);
+
+        let data = encode_data_stream(&symbol).expect("encode");
+        let records = stream_records(&data);
+        let kinds: Vec<String> = records
+            .iter()
+            .map(|r| {
+                let kind = r.split('|').nth(1).unwrap_or("").to_string();
+                let index = r
+                    .split('|')
+                    .find_map(|t| t.strip_prefix("IndexInSheet="))
+                    .unwrap_or("(absent)")
+                    .to_string();
+                format!("{kind} {index}")
+            })
+            .collect();
+        assert_eq!(
+            &kinds[..5],
+            [
+                "RECORD=1 -1",
+                "RECORD=41 (absent)", // Value: slot 0, key omitted
+                "RECORD=41 1",        // Part Number
+                "RECORD=14 2",        // the rectangle
+                "RECORD=34 -1",       // the designator
+            ],
+            "{kinds:?}"
+        );
+        assert_eq!(
+            kinds[5], "RECORD=41 -1",
+            "the system Comment, after the designator"
+        );
+    }
+
+    /// A footprint model that is not the current one carries no `IsCurrent`
+    /// key at all, like every false boolean.
+    #[test]
+    fn is_current_is_written_only_when_true() {
+        let model = FootprintModel::new("SOT-23");
+        assert!(encode_footprint_model(&model, 1, true).contains("|IsCurrent=T|UniqueID="));
+        let other = encode_footprint_model(&model, 1, false);
+        assert!(!other.contains("IsCurrent"), "{other}");
+        assert!(
+            other.contains("|ModelDatafileKind0=PCBLib|UniqueID="),
+            "{other}"
         );
     }
 

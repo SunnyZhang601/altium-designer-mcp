@@ -110,8 +110,7 @@ pub fn parse_wide_strings(data: &[u8]) -> WideStrings {
         if let Some(rest) = pair.strip_prefix("ENCODEDTEXT") {
             if let Some((index_str, encoded)) = rest.split_once('=') {
                 if let Ok(index) = index_str.parse::<usize>() {
-                    // Decode comma-separated ASCII codes
-                    let decoded = decode_ascii_codes(encoded);
+                    let decoded = decode_wide_string(encoded);
                     if !decoded.is_empty() {
                         tracing::trace!(index, text = %decoded, "Decoded WideStrings entry");
                         strings.insert(index, decoded);
@@ -125,26 +124,19 @@ pub fn parse_wide_strings(data: &[u8]) -> WideStrings {
     strings
 }
 
-/// Decodes comma-separated ASCII codes to a string.
+/// Decodes an `ENCODEDTEXT` value — comma-separated UTF-16 code units in
+/// decimal — to a string: `"84,69,83,84"` → `"TEST"`, `"49,48,181,70"` →
+/// `"10µF"`, `"937"` → `"Ω"`.
 ///
-/// # Example
-///
-/// `"84,69,83,84"` → `"TEST"`
-///
-/// # Non-ASCII Handling
-///
-/// Values 0-127 are valid ASCII and converted directly.
-/// Values 128-255 are replaced with the Unicode replacement character (U+FFFD)
-/// since Altium's ENCODEDTEXT format should only contain ASCII.
-fn decode_ascii_codes(encoded: &str) -> String {
-    // The values are Windows-1252 bytes despite the ENCODEDTEXT name — Altium
-    // writes `10µF` as `49,48,181,70` — so the whole set goes through the
-    // shared decoder rather than being treated as ASCII.
-    let bytes: Vec<u8> = encoded
+/// The units are what `WideStrings` exists to carry: text the Windows-1252
+/// `Data` stream cannot hold. A unit that does not parse is skipped; an
+/// unpaired surrogate becomes U+FFFD.
+fn decode_wide_string(encoded: &str) -> String {
+    let units: Vec<u16> = encoded
         .split(',')
-        .filter_map(|s| s.trim().parse::<u8>().ok())
+        .filter_map(|s| s.trim().parse::<u16>().ok())
         .collect();
-    crate::altium::decode_windows1252(&bytes)
+    String::from_utf16_lossy(&units)
 }
 
 /// Parses the `UniqueIDPrimitiveInformation/Data` stream content.
@@ -1175,26 +1167,31 @@ mod tests {
     }
 
     #[test]
-    fn test_decode_ascii_codes() {
-        assert_eq!(decode_ascii_codes("84,69,83,84"), "TEST");
-        assert_eq!(decode_ascii_codes("72,69,76,76,79"), "HELLO");
-        assert_eq!(decode_ascii_codes("65"), "A");
-        assert_eq!(decode_ascii_codes(""), "");
+    fn decode_wide_string_reads_ascii() {
+        assert_eq!(decode_wide_string("84,69,83,84"), "TEST");
+        assert_eq!(decode_wide_string("72,69,76,76,79"), "HELLO");
+        assert_eq!(decode_wide_string("65"), "A");
+        assert_eq!(decode_wide_string(""), "");
     }
 
+    /// The values are UTF-16 code units, not bytes: Altium writes `10µF` as
+    /// `49,48,181,70` (the golden `TEXT_WIN1252`), and a character beyond
+    /// Latin-1 is one unit above 255 — which is the whole point of the stream.
     #[test]
-    fn test_decode_ascii_codes_high_bytes_are_windows_1252() {
-        // The values are Windows-1252 bytes, despite the ENCODEDTEXT name:
-        // Altium writes `10µF` as `49,48,181,70`. Anything above 127 must
-        // decode through the code page, not be treated as non-ASCII and lost.
-        assert_eq!(decode_ascii_codes("49,48,181,70"), "10\u{B5}F");
-        assert_eq!(decode_ascii_codes("177,53,37"), "\u{B1}5%");
-        assert_eq!(decode_ascii_codes("65,200,66"), "A\u{C8}B");
-        assert_eq!(decode_ascii_codes("255"), "\u{FF}");
-        // 0x7F is a control character and maps to itself; 0x80 is the Euro
-        // sign in Windows-1252, not an invalid byte.
-        assert_eq!(decode_ascii_codes("127"), "\x7F");
-        assert_eq!(decode_ascii_codes("128"), "\u{20AC}");
+    fn decode_wide_string_reads_utf16_code_units() {
+        assert_eq!(decode_wide_string("49,48,181,70"), "10\u{B5}F");
+        assert_eq!(decode_wide_string("177,53,37"), "\u{B1}5%");
+        assert_eq!(decode_wide_string("937"), "\u{3A9}");
+        assert_eq!(decode_wide_string("8364"), "\u{20AC}");
+        assert_eq!(decode_wide_string("26085,26412"), "日本");
+        // A surrogate pair is two units; a lone one is replaced, not dropped.
+        assert_eq!(decode_wide_string("55357,56832"), "\u{1F600}");
+        assert_eq!(decode_wide_string("55357"), "\u{FFFD}");
+        // Unit 128 is U+0080 (a control), not the Windows-1252 Euro: the
+        // Euro is 8364 here.
+        assert_eq!(decode_wide_string("128"), "\u{80}");
+        // A value that is not a unit is skipped rather than failing the text.
+        assert_eq!(decode_wide_string("65,x,66,70000"), "AB");
     }
 
     // =============================================================================

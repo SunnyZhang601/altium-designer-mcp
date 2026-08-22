@@ -441,7 +441,7 @@ impl McpServer {
     /// Writes footprints to a `PcbLib` file.
     #[allow(clippy::too_many_lines)]
     pub(crate) fn call_write_pcblib(&self, arguments: &Value) -> ToolCallResult {
-        use crate::altium::pcblib::{Footprint, Model3D, PcbLib};
+        use crate::altium::pcblib::PcbLib;
 
         let Some(filepath) = arguments.get("filepath").and_then(Value::as_str) else {
             return ToolCallResult::error("Missing required parameter: filepath");
@@ -551,279 +551,16 @@ impl McpServer {
 
         let keys = allowed_keys::PcbLibKeys::new();
         for fp_json in footprints_json {
-            check_keys!(fp_json, &keys.footprint);
-            let name = fp_json
-                .get("name")
-                .and_then(Value::as_str)
-                .unwrap_or("Unnamed");
-            let mut footprint = Footprint::new(name);
-
-            if let Some(desc) = fp_json.get("description").and_then(Value::as_str) {
-                footprint.description = desc.to_string();
-            }
-
-            // Parse pads
-            if let Some(pads) = fp_json.get("pads").and_then(Value::as_array) {
-                for (i, pad_json) in pads.iter().enumerate() {
-                    check_keys!(pad_json, &keys.pad);
-                    match Self::parse_pad(pad_json) {
-                        Ok(pad) => footprint.add_pad(pad),
-                        Err(e) => {
-                            return ToolCallResult::error_with_context(
-                                ErrorContext::new("write_pcblib", e)
-                                    .with_filepath(filepath)
-                                    .with_component(name)
-                                    .with_details(format!("Failed to parse pad at index {i}")),
-                            )
-                        }
-                    }
-                }
-            }
-
-            // Parse tracks
-            if let Some(tracks) = fp_json.get("tracks").and_then(Value::as_array) {
-                for (i, track_json) in tracks.iter().enumerate() {
-                    check_keys!(track_json, &keys.track);
-                    match Self::parse_track(track_json) {
-                        Ok(track) => footprint.add_track(track),
-                        Err(e) => {
-                            return ToolCallResult::error_with_context(
-                                ErrorContext::new("write_pcblib", e)
-                                    .with_filepath(filepath)
-                                    .with_component(name)
-                                    .with_details(format!("Failed to parse track at index {i}")),
-                            )
-                        }
-                    }
-                }
-            }
-
-            // Parse vias
-            if let Some(vias) = fp_json.get("vias").and_then(Value::as_array) {
-                for (i, via_json) in vias.iter().enumerate() {
-                    check_keys!(via_json, &keys.via);
-                    match Self::parse_via(via_json) {
-                        Ok(via) => footprint.add_via(via),
-                        Err(e) => {
-                            return ToolCallResult::error_with_context(
-                                ErrorContext::new("write_pcblib", e)
-                                    .with_filepath(filepath)
-                                    .with_component(name)
-                                    .with_details(format!("Failed to parse via at index {i}")),
-                            )
-                        }
-                    }
-                }
-            }
-
-            // Parse fills
-            if let Some(fills) = fp_json.get("fills").and_then(Value::as_array) {
-                for (i, fill_json) in fills.iter().enumerate() {
-                    check_keys!(fill_json, &keys.fill);
-                    match Self::parse_fill(fill_json) {
-                        Ok(fill) => footprint.add_fill(fill),
-                        Err(e) => {
-                            return ToolCallResult::error_with_context(
-                                ErrorContext::new("write_pcblib", e)
-                                    .with_filepath(filepath)
-                                    .with_component(name)
-                                    .with_details(format!("Failed to parse fill at index {i}")),
-                            )
-                        }
-                    }
-                }
-            }
-
-            // Parse arcs
-            if let Some(arcs) = fp_json.get("arcs").and_then(Value::as_array) {
-                for (i, arc_json) in arcs.iter().enumerate() {
-                    check_keys!(arc_json, &keys.arc);
-                    match Self::parse_arc(arc_json) {
-                        Ok(arc) => footprint.add_arc(arc),
-                        Err(e) => {
-                            return ToolCallResult::error_with_context(
-                                ErrorContext::new("write_pcblib", e)
-                                    .with_filepath(filepath)
-                                    .with_component(name)
-                                    .with_details(format!("Failed to parse arc at index {i}")),
-                            )
-                        }
-                    }
-                }
-            }
-
-            // Parse regions
-            if let Some(regions) = fp_json.get("regions").and_then(Value::as_array) {
-                for region_json in regions {
-                    check_keys!(region_json, &keys.region);
-                    if let Some(region) = Self::parse_region(region_json) {
-                        footprint.add_region(region);
-                    }
-                }
-            }
-
-            // Parse text
-            if let Some(texts) = fp_json.get("text").and_then(Value::as_array) {
-                for text_json in texts {
-                    check_keys!(text_json, &keys.text);
-                    if let Some(text) = Self::parse_text(text_json) {
-                        footprint.add_text(text);
-                    }
-                }
-            }
-
-            // Parse 3D model
-            if let Some(model_json) = fp_json.get("step_model") {
-                check_keys!(model_json, &keys.model);
-                if let Some(model_path) = model_json.get("filepath").and_then(Value::as_str) {
-                    let embed = model_json
-                        .get("embed")
-                        .and_then(Value::as_bool)
-                        .unwrap_or(true);
-
-                    if embed {
-                        // The embed source is read from disk at save time
-                        // (prepare_3d_models_for_writing -> std::fs::read), far from
-                        // this handler. Validate it against the allow-list now so a
-                        // caller cannot embed an arbitrary file (e.g. "../../etc/passwd")
-                        // into the library. External references (embed=false) are only
-                        // stored as a string and never read, so they are not gated here.
-                        if let Err(e) = self.validate_path(model_path) {
-                            return ToolCallResult::error(e);
-                        }
-
-                        // Embedded model - use Model3D which will read the file on save
-                        footprint.model_3d = Some(Model3D {
-                            filepath: model_path.to_string(),
-                            x_offset: model_json
-                                .get("x_offset")
-                                .and_then(Value::as_f64)
-                                .unwrap_or(0.0),
-                            y_offset: model_json
-                                .get("y_offset")
-                                .and_then(Value::as_f64)
-                                .unwrap_or(0.0),
-                            z_offset: model_json
-                                .get("z_offset")
-                                .and_then(Value::as_f64)
-                                .unwrap_or(0.0),
-                            rotation: model_json
-                                .get("rotation")
-                                .and_then(Value::as_f64)
-                                .unwrap_or(0.0),
-                        });
-                    } else {
-                        // External reference only - create ComponentBody directly
-                        // Preserve the full path for external references so organized subfolders work
-                        use crate::altium::pcblib::{ComponentBody, Layer};
-                        footprint.add_component_body(ComponentBody {
-                            model_id: String::new(), // No GUID for external reference
-                            identifier: String::new(),
-                            texture_center_x: None,
-                            texture_center_y: None,
-                            texture_size_x: None,
-                            texture_size_y: None,
-                            raw_layer_id: None,
-                            v7_layer: None,
-                            model_name: model_path.to_string(), // Preserve full path
-                            embedded: false,
-                            rotation_x: 0.0,
-                            rotation_y: 0.0,
-                            rotation_z: model_json
-                                .get("rotation")
-                                .and_then(Value::as_f64)
-                                .unwrap_or(0.0),
-                            z_offset: model_json
-                                .get("z_offset")
-                                .and_then(Value::as_f64)
-                                .unwrap_or(0.0),
-                            overall_height: 0.0,
-                            standoff_height: 0.0,
-                            cavity_height: 0.0,
-                            layer: Layer::Top3DBody,
-                            outline: Vec::new(),
-                            unique_id: None,
-                            guid: None,
-                            model_checksum: 0, // External reference: no embedded model.
-                            name: " ".to_string(),
-                            kind: 0,
-                            sub_poly_index: -1,
-                            union_index: 0,
-                            is_shape_based: false,
-                            body_projection: 0,
-                            body_color_3d: 8_421_504,
-                            body_opacity_3d: 1.0,
-                            model_2d_rotation: 0.0,
-                            model_2d_x: 0.0,
-                            model_2d_y: 0.0,
-                            // External reference: no board association (free primitive).
-                            net_index: 0xFFFF,
-                            polygon_index: 0xFFFF,
-                            component_index: -1,
-                            additional_parameters: Vec::new(),
-                        });
-                    }
-                }
-            }
-
-            // Parse "model_3d" — read_pcblib's spelling of the same model
-            // reference (it emits the key for every footprint, null when there
-            // is no model), accepted so a read result replays into
-            // write_pcblib unchanged. `step_model` wins when both are given
-            // (it is the authoring-time spelling, incl. the embed switch);
-            // null is ignored. The fields mirror the Model3D serde shape
-            // (filepath + offsets/rotation).
-            if fp_json.get("step_model").is_none() {
-                if let Some(model_json) = fp_json.get("model_3d").filter(|v| !v.is_null()) {
-                    check_keys!(model_json, &keys.model);
-                    let model_path = model_json
-                        .get("filepath")
-                        .and_then(Value::as_str)
-                        .unwrap_or_default();
-                    // The save path embeds the file (std::fs::read) when the
-                    // path resolves to an existing file, so gate exactly that
-                    // case against the allow-list — the same arbitrary-file-
-                    // read defence as step_model. Bare model names replayed
-                    // from read_pcblib output don't exist on disk and are kept
-                    // as inert references, so they are not gated.
-                    if std::path::Path::new(model_path).is_file() {
-                        if let Err(e) = self.validate_path(model_path) {
-                            return ToolCallResult::error(e);
-                        }
-                    }
-                    footprint.model_3d = Some(Model3D {
-                        filepath: model_path.to_string(),
-                        x_offset: model_json
-                            .get("x_offset")
-                            .and_then(Value::as_f64)
-                            .unwrap_or(0.0),
-                        y_offset: model_json
-                            .get("y_offset")
-                            .and_then(Value::as_f64)
-                            .unwrap_or(0.0),
-                        z_offset: model_json
-                            .get("z_offset")
-                            .and_then(Value::as_f64)
-                            .unwrap_or(0.0),
-                        rotation: model_json
-                            .get("rotation")
-                            .and_then(Value::as_f64)
-                            .unwrap_or(0.0),
-                    });
-                }
-            }
-
-            // Parse generic extruded 3D bodies (no STEP model). Each body is
-            // defined by an optional 2D outline (auto-bounding-box from pads when
-            // omitted) plus standoff/overall heights, on the Top/Bottom 3D Body
-            // layer. model_id/model_name stay empty so the writer marks them as
-            // shape-based extruded bodies.
-            if let Some(bodies) = fp_json.get("component_bodies").and_then(Value::as_array) {
-                for body_json in bodies {
-                    check_keys!(body_json, &keys.component_body);
-                    footprint.add_component_body(Self::parse_component_body_json(body_json));
-                }
-            }
+            let mut footprint = match self.parse_footprint_json(
+                fp_json,
+                &keys,
+                "write_pcblib",
+                filepath,
+                "Unnamed",
+            ) {
+                Ok(footprint) => footprint,
+                Err(result) => return result,
+            };
 
             // Auto-inject the `.Designator` special string on the Top Overlay if the
             // caller did not provide one, so every placed footprint renders its
@@ -951,28 +688,6 @@ impl McpServer {
                 false
             };
             bodies_echo.push(body_3d_summary(&footprint, assumed_height));
-
-            // Footprint-level replay fields `read_pcblib` emits. The guid is
-            // the kind-85 identity record; the interleaved Data-stream order
-            // replaces the grouped order the add_* calls accumulated, so a
-            // read-modify-write keeps the source's stream order
-            // (`write_sequence` is advisory-safe against a stale list).
-            if let Some(g) = fp_json.get("guid").and_then(Value::as_str) {
-                footprint.guid = Some(g.to_string());
-            }
-            if let Some(order) = fp_json.get("primitive_order") {
-                match serde_json::from_value(order.clone()) {
-                    Ok(kinds) => footprint.primitive_order = kinds,
-                    Err(e) => {
-                        tracing::debug!(error = %e, "invalid primitive_order; using default order");
-                    }
-                }
-            }
-
-            // Validate coordinates before adding
-            if let Err(e) = Self::validate_footprint_coordinates(&footprint) {
-                return ToolCallResult::error(e);
-            }
 
             silk_warnings.extend(silk_over_pad_warnings(&footprint));
             silk_warnings.extend(pad_copper_overlap_warnings(&footprint));
@@ -2540,7 +2255,7 @@ mod tests {
 
             for (g_name, o_name) in pairs {
                 let (g, o) = (&golden[g_name], &ours[o_name]);
-                for stream in ["Data", "UniqueIDPrimitiveInformation/Data"] {
+                for stream in ["Data", "WideStrings", "UniqueIDPrimitiveInformation/Data"] {
                     assert_same_stream(&format!("{g_name}/{stream}"), g.get(stream), o.get(stream));
                 }
                 // Altium scrambles the PrimitiveGuids record order while the
@@ -2878,6 +2593,179 @@ mod tests {
             assert_eq!(link["unique_id"], "ABCDEFGH", "{link}");
             assert_eq!(link["is_current"], true, "{link}");
             assert_eq!(link["library_path"], "Lib.PcbLib", "{link}");
+        }
+
+        /// The in-place twin: every golden footprint read through
+        /// `read_pcblib` and handed back to `update_component` as its own
+        /// replacement leaves the library byte-for-byte as the library-level
+        /// save has it — the update path parses with its own hands, so it is
+        /// held to the same bar as `write_pcblib`.
+        #[test]
+        fn update_component_replays_every_golden_footprint_byte_for_byte() {
+            use crate::altium::PcbLib;
+
+            let dir = test_temp_dir();
+            let samples = std::path::Path::new("scripts/samples")
+                .canonicalize()
+                .unwrap();
+            let server =
+                crate::mcp::server::McpServer::new(vec![dir.path().to_path_buf(), samples.clone()]);
+            let src = samples.join("footprints.PcbLib");
+
+            let baseline = dir.path().join("Baseline.PcbLib");
+            PcbLib::open(&src).unwrap().save(&baseline).unwrap();
+            let work = dir.path().join("Work.PcbLib");
+            std::fs::copy(&src, &work).unwrap();
+
+            let read = server.call_read_pcblib(&json!({ "filepath": src.to_string_lossy() }));
+            assert!(!read.is_error, "{}", get_result_text(&read));
+            let footprints = parse_result_json(&read)["footprints"].clone();
+            for fp in footprints.as_array().unwrap() {
+                let updated = server.call_update_component(&json!({
+                    "filepath": work.to_string_lossy(),
+                    "component_name": fp["name"],
+                    "footprint": fp,
+                }));
+                assert!(
+                    !updated.is_error,
+                    "{}: {}",
+                    fp["name"],
+                    get_result_text(&updated)
+                );
+            }
+
+            let (expected, ours) = (component_streams(&baseline), component_streams(&work));
+            assert_eq!(
+                expected.keys().collect::<Vec<_>>(),
+                ours.keys().collect::<Vec<_>>(),
+                "footprint storages differ"
+            );
+            for (name, e) in &expected {
+                let o = &ours[name];
+                for stream in ["Data", "WideStrings", "UniqueIDPrimitiveInformation/Data"] {
+                    assert_same_stream(&format!("{name}/{stream}"), e.get(stream), o.get(stream));
+                }
+            }
+        }
+
+        /// `update_component` parses with `write_pcblib`'s parser: a typo on
+        /// any object is refused, and the 3D-model spellings are honoured.
+        #[test]
+        fn update_component_parses_exactly_what_write_pcblib_does() {
+            let dir = test_temp_dir();
+            let server = create_test_server(dir.path());
+            let lib = dir.path().join("Upd.PcbLib");
+            let pad = json!({ "designator": "1", "x": 0.0, "y": 0.0, "width": 1.0, "height": 1.0 });
+            let written = server.call_write_pcblib(&json!({
+                "filepath": lib.to_string_lossy(),
+                "footprints": [{ "name": "U", "pads": [pad] }],
+            }));
+            assert!(!written.is_error, "{}", get_result_text(&written));
+
+            for (kind, footprint) in [
+                (
+                    "footprint",
+                    json!({ "name": "U", "pads": [pad], "descripton": "x" }),
+                ),
+                (
+                    "pad",
+                    json!({ "name": "U", "pads": [{ "designator": "1", "x": 0.0, "y": 0.0, "width": 1.0, "height": 1.0, "shpae": "round" }] }),
+                ),
+                (
+                    "track",
+                    json!({ "name": "U", "pads": [pad], "tracks": [{ "x1": 0.0, "y1": 0.0, "x2": 1.0, "y2": 1.0, "width": 0.2, "layr": "Top Overlay" }] }),
+                ),
+                (
+                    "body",
+                    json!({ "name": "U", "pads": [pad], "component_bodies": [{ "overal_height": 1.0 }] }),
+                ),
+                (
+                    "step_model",
+                    json!({ "name": "U", "pads": [pad], "step_model": { "filepath": "x.step", "embed": false, "rotaton": 0.0 } }),
+                ),
+            ] {
+                let result = server.call_update_component(&json!({
+                    "filepath": lib.to_string_lossy(),
+                    "component_name": "U",
+                    "footprint": footprint,
+                }));
+                let text = get_result_text(&result);
+                assert!(result.is_error, "{kind}: a typo was accepted: {text}");
+                assert!(text.contains("Unknown field"), "{kind}: {text}");
+            }
+
+            // An external STEP reference lands as a component body, as it
+            // does on a write.
+            let result = server.call_update_component(&json!({
+                "filepath": lib.to_string_lossy(),
+                "component_name": "U",
+                "footprint": { "name": "U", "pads": [pad], "step_model": { "filepath": "models/U.step", "embed": false, "rotation": 90.0 } },
+            }));
+            assert!(!result.is_error, "{}", get_result_text(&result));
+            let back = server.call_read_pcblib(&json!({ "filepath": lib.to_string_lossy() }));
+            let fp = parse_result_json(&back)["footprints"][0].clone();
+            assert_eq!(
+                fp["component_bodies"][0]["model_name"], "models/U.step",
+                "{fp}"
+            );
+            assert_eq!(fp["component_bodies"][0]["embedded"], false, "{fp}");
+        }
+
+        /// Text beyond ASCII survives a write, a read and — the case that
+        /// corrupted it a character per save — every further open/save.
+        #[test]
+        fn write_pcblib_keeps_non_ascii_text_through_repeated_saves() {
+            use crate::altium::PcbLib;
+
+            let dir = test_temp_dir();
+            let server = create_test_server(dir.path());
+            let lib = dir.path().join("Wide.PcbLib");
+            let texts = ["10µF", "Ω ±5%", "日本語", "€ 1,50"];
+            let written = server.call_write_pcblib(&json!({
+                "filepath": lib.to_string_lossy(),
+                "footprints": [{
+                    "name": "W",
+                    "pads": [{ "designator": "1", "x": 0.0, "y": 0.0, "width": 1.0, "height": 1.0 }],
+                    "text": texts.iter().enumerate().map(|(i, t)| json!({
+                        "x": 0.0, "y": f64::from(u8::try_from(i).unwrap()) * 2.0, "text": t, "height": 1.0,
+                    })).collect::<Vec<_>>(),
+                }],
+            }));
+            assert!(!written.is_error, "{}", get_result_text(&written));
+
+            let read_texts = |path: &std::path::Path| -> Vec<String> {
+                let back = server.call_read_pcblib(&json!({ "filepath": path.to_string_lossy() }));
+                parse_result_json(&back)["footprints"][0]["text"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .filter(|t| !t["text"].as_str().unwrap().starts_with('.'))
+                    .map(|t| t["text"].as_str().unwrap().to_string())
+                    .collect()
+            };
+            assert_eq!(read_texts(&lib), texts);
+
+            let first = std::fs::read(&lib).unwrap();
+            for _ in 0..3 {
+                let mut opened = PcbLib::open(&lib).unwrap();
+                opened.save(&lib).unwrap();
+            }
+            assert_eq!(read_texts(&lib), texts);
+            let streams_after = component_streams(&lib);
+            assert_eq!(
+                component_streams(&dir.path().join("Wide.PcbLib"))["W"]["WideStrings"],
+                streams_after["W"]["WideStrings"]
+            );
+            let wide = String::from_utf8_lossy(&streams_after["W"]["WideStrings"]).into_owned();
+            assert!(wide.contains("|ENCODEDTEXT0=49,48,181,70|"), "{wide}");
+            assert!(wide.contains("|ENCODEDTEXT1=937,32,177,53,37|"), "{wide}");
+            assert!(wide.contains("|ENCODEDTEXT2=26085,26412,35486|"), "{wide}");
+            assert!(wide.contains("|ENCODEDTEXT3=8364,32,49,44,53,48"), "{wide}");
+            assert_eq!(
+                std::fs::read(&lib).unwrap().len(),
+                first.len(),
+                "a save must not grow the file"
+            );
         }
 
         /// From scratch the designator is still added by default, and

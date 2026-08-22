@@ -39,7 +39,7 @@ impl McpServer {
                         "Missing required parameter: footprint (required for .PcbLib files)",
                     );
                 };
-                Self::update_pcblib_component(filepath, component_name, fp_json, dry_run)
+                self.update_pcblib_component(filepath, component_name, fp_json, dry_run)
             }
             Some("schlib") => {
                 let Some(sym_json) = arguments.get("symbol") else {
@@ -56,12 +56,13 @@ impl McpServer {
     /// Updates a footprint in-place within a `PcbLib` file.
     #[allow(clippy::too_many_lines)] // Includes parsing and dry_run logic
     pub(crate) fn update_pcblib_component(
+        &self,
         filepath: &str,
         component_name: &str,
         fp_json: &Value,
         dry_run: bool,
     ) -> ToolCallResult {
-        use crate::altium::pcblib::{Footprint, PcbLib};
+        use crate::altium::pcblib::PcbLib;
 
         // Read the library
         let mut library = match PcbLib::open(filepath) {
@@ -79,119 +80,21 @@ impl McpServer {
             ));
         }
 
-        // Parse the replacement footprint
-        let name = fp_json
-            .get("name")
-            .and_then(Value::as_str)
-            .unwrap_or(component_name);
-        let mut footprint = Footprint::new(name);
-
-        if let Some(desc) = fp_json.get("description").and_then(Value::as_str) {
-            footprint.description = desc.to_string();
-        }
-
-        // Parse pads
-        if let Some(pads) = fp_json.get("pads").and_then(Value::as_array) {
-            for (i, pad_json) in pads.iter().enumerate() {
-                match Self::parse_pad(pad_json) {
-                    Ok(pad) => footprint.add_pad(pad),
-                    Err(e) => return ToolCallResult::error(format!("Pad {i}: {e}")),
-                }
-            }
-        }
-
-        // Parse tracks
-        if let Some(tracks) = fp_json.get("tracks").and_then(Value::as_array) {
-            for (i, track_json) in tracks.iter().enumerate() {
-                match Self::parse_track(track_json) {
-                    Ok(track) => footprint.add_track(track),
-                    Err(e) => return ToolCallResult::error(format!("Track {i}: {e}")),
-                }
-            }
-        }
-
-        // Parse arcs
-        if let Some(arcs) = fp_json.get("arcs").and_then(Value::as_array) {
-            for (i, arc_json) in arcs.iter().enumerate() {
-                match Self::parse_arc(arc_json) {
-                    Ok(arc) => footprint.add_arc(arc),
-                    Err(e) => return ToolCallResult::error(format!("Arc {i}: {e}")),
-                }
-            }
-        }
-
-        // Parse regions
-        if let Some(regions) = fp_json.get("regions").and_then(Value::as_array) {
-            for region_json in regions {
-                if let Some(region) = Self::parse_region(region_json) {
-                    footprint.add_region(region);
-                }
-            }
-        }
-
-        // Parse vias, fills and component bodies. The create path (call_write_pcblib)
-        // handles these, and this update path must mirror it exactly: omitting
-        // them makes a read-modify-write of a footprint carrying any via / fill
-        // / 3D body silently drop it.
-        if let Some(vias) = fp_json.get("vias").and_then(Value::as_array) {
-            for (i, via_json) in vias.iter().enumerate() {
-                match Self::parse_via(via_json) {
-                    Ok(via) => footprint.add_via(via),
-                    Err(e) => return ToolCallResult::error(format!("Via {i}: {e}")),
-                }
-            }
-        }
-        if let Some(fills) = fp_json.get("fills").and_then(Value::as_array) {
-            for (i, fill_json) in fills.iter().enumerate() {
-                match Self::parse_fill(fill_json) {
-                    Ok(fill) => footprint.add_fill(fill),
-                    Err(e) => return ToolCallResult::error(format!("Fill {i}: {e}")),
-                }
-            }
-        }
-        if let Some(bodies) = fp_json.get("component_bodies").and_then(Value::as_array) {
-            for body_json in bodies {
-                footprint.add_component_body(Self::parse_component_body_json(body_json));
-            }
-        }
-
-        // Parse text. Accept both "text" (the create-path key) and the legacy
-        // "texts", so reusing the create schema for an update does not silently
-        // drops text primitives.
-        if let Some(texts) = fp_json
-            .get("text")
-            .or_else(|| fp_json.get("texts"))
-            .and_then(Value::as_array)
-        {
-            for text_json in texts {
-                if let Some(text) = Self::parse_text(text_json) {
-                    footprint.add_text(text);
-                }
-            }
-        }
-
-        // Footprint-level replay fields, mirroring the create path: the
-        // kind-85 identity and the interleaved stream order a
-        // get_component → update_component loop echoes back.
-        if let Some(g) = fp_json.get("guid").and_then(Value::as_str) {
-            footprint.guid = Some(g.to_string());
-        }
-        if let Some(order) = fp_json.get("primitive_order") {
-            match serde_json::from_value(order.clone()) {
-                Ok(kinds) => footprint.primitive_order = kinds,
-                Err(e) => {
-                    tracing::debug!(error = %e, "invalid primitive_order; using default order");
-                }
-            }
-        }
-
-        // Reject out-of-range / non-finite geometry before it can saturate in
-        // from_mm() on save. The create path validates here; this path skipped
-        // it (parallels the #102 update_pad/update_primitive bug). Runs in
-        // dry-run too so previews report the error.
-        if let Err(e) = Self::validate_footprint_coordinates(&footprint) {
-            return ToolCallResult::error(e);
-        }
+        // Parse the replacement footprint — the same parser as write_pcblib,
+        // so an update accepts exactly what a write does.
+        let keys = crate::mcp::tools::allowed_keys::PcbLibKeys::new();
+        let footprint = match self.parse_footprint_json(
+            fp_json,
+            &keys,
+            "update_component",
+            filepath,
+            component_name,
+        ) {
+            Ok(footprint) => footprint,
+            Err(result) => return result,
+        };
+        let name = footprint.name.clone();
+        let name = name.as_str();
 
         // A replacement may carry a new name, which makes this a rename too —
         // and a rename onto a name another footprint already holds would leave
@@ -2324,33 +2227,34 @@ mod tests {
             let fx = Fixtures::new();
             let server = create_test_server(fx.dir.path());
 
-            // The update path mirrors the create path's parsing, so a malformed
-            // primitive is named and indexed the same way rather than dropped.
+            // The update path IS the create path's parser, so a malformed
+            // primitive is named and indexed the same way rather than dropped,
+            // under the updating tool's name.
             let cases: [(&str, serde_json::Value, &str); 5] = [
                 (
                     "pads",
                     json!([{ "x": 0.0, "y": 0.0, "width": 1.0, "height": 1.0 }]),
-                    "Pad 0",
+                    "Failed to parse pad at index 0",
                 ),
                 (
                     "tracks",
                     json!([{ "y1": 0.0, "x2": 1.0, "y2": 0.0, "width": 0.2 }]),
-                    "Track 0",
+                    "Failed to parse track at index 0",
                 ),
                 (
                     "arcs",
                     json!([{ "x": 0.0, "y": 0.0, "radius": 1.0, "start_angle": 0.0, "end_angle": 90.0 }]),
-                    "Arc 0",
+                    "Failed to parse arc at index 0",
                 ),
                 (
                     "vias",
                     json!([{ "x": 0.0, "y": 0.0, "diameter": 0.0, "hole_size": 0.3 }]),
-                    "Via 0",
+                    "Failed to parse via at index 0",
                 ),
                 (
                     "fills",
                     json!([{ "y1": 0.0, "x2": 1.0, "y2": 1.0 }]),
-                    "Fill 0",
+                    "Failed to parse fill at index 0",
                 ),
             ];
 
@@ -2363,6 +2267,7 @@ mod tests {
                     "footprint": footprint,
                 }));
                 assert_error_mentions(&r, expected);
+                assert_error_mentions(&r, "update_component");
             }
         }
 

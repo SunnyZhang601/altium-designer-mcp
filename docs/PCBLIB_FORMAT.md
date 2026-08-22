@@ -133,8 +133,10 @@ Standard `WriteCStringParameterBlock` encoding. Altium-authored libraries also c
 ```
 
 One `|ENCODEDTEXT{n}=` entry per text primitive with real (non-special, non-empty) content, in
-primitive order — a leading pipe per entry, NO trailing pipe. The value is the comma-separated
-byte values of the text.
+primitive order — a leading pipe per entry, NO trailing pipe. The value is the text as
+comma-separated **UTF-16 code units** in decimal (`10µF` → `49,48,181,70`, `Ω` → `937`), which is
+how the stream carries text the Windows-1252 `Data` block cannot; a text with an entry here is
+read from it in preference to the `Data` block.
 
 When empty (no text content): `[block_len:4][\x00]` (`block_len` = 1 — just the null terminator,
 no pipe).

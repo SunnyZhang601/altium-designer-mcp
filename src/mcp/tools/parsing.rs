@@ -5,7 +5,8 @@
 
 use serde_json::Value;
 
-use crate::mcp::server::McpServer;
+use crate::altium::pcblib::Footprint;
+use crate::mcp::server::{ErrorContext, McpServer, ToolCallResult};
 
 /// Reads a JSON integer field as `i32`, returning `None` if it is missing, not
 /// an integer, or outside `i32` range — so an out-of-range value is rejected
@@ -180,6 +181,339 @@ impl McpServer {
     }
 
     // ==================== Primitive Parsing Helpers ====================
+
+    /// Refuses a JSON object carrying a key outside `keys` (see
+    /// [`check_unknown_fields`](Self::check_unknown_fields)).
+    fn refuse_unknown(json: &Value, keys: &[&str]) -> Result<(), ToolCallResult> {
+        Self::check_unknown_fields(json, keys).map_err(ToolCallResult::error)
+    }
+
+    /// Parses one footprint object — the `footprints[]` element of
+    /// `write_pcblib` and the `footprint` of `update_component` — into a
+    /// [`Footprint`], refusing unknown keys on every object and validating the
+    /// geometry. Both tools go through here so neither can fall behind the
+    /// other on a primitive kind, a 3D-model spelling or a replay field.
+    ///
+    /// `operation` names the calling tool in error context; `default_name` is
+    /// the footprint name when the object carries none.
+    #[allow(clippy::too_many_lines)] // one straight-line pass over every footprint field
+    pub(crate) fn parse_footprint_json(
+        &self,
+        fp_json: &Value,
+        keys: &crate::mcp::tools::allowed_keys::PcbLibKeys,
+        operation: &str,
+        filepath: &str,
+        default_name: &str,
+    ) -> Result<Footprint, ToolCallResult> {
+        use crate::altium::pcblib::Model3D;
+
+        Self::refuse_unknown(fp_json, &keys.footprint)?;
+        let name = fp_json
+            .get("name")
+            .and_then(Value::as_str)
+            .unwrap_or(default_name);
+        let mut footprint = Footprint::new(name);
+
+        if let Some(desc) = fp_json.get("description").and_then(Value::as_str) {
+            footprint.description = desc.to_string();
+        }
+
+        // Parse pads
+        if let Some(pads) = fp_json.get("pads").and_then(Value::as_array) {
+            for (i, pad_json) in pads.iter().enumerate() {
+                Self::refuse_unknown(pad_json, &keys.pad)?;
+                match Self::parse_pad(pad_json) {
+                    Ok(pad) => footprint.add_pad(pad),
+                    Err(e) => {
+                        return Err(ToolCallResult::error_with_context(
+                            ErrorContext::new(operation, e)
+                                .with_filepath(filepath)
+                                .with_component(name)
+                                .with_details(format!("Failed to parse pad at index {i}")),
+                        ))
+                    }
+                }
+            }
+        }
+
+        // Parse tracks
+        if let Some(tracks) = fp_json.get("tracks").and_then(Value::as_array) {
+            for (i, track_json) in tracks.iter().enumerate() {
+                Self::refuse_unknown(track_json, &keys.track)?;
+                match Self::parse_track(track_json) {
+                    Ok(track) => footprint.add_track(track),
+                    Err(e) => {
+                        return Err(ToolCallResult::error_with_context(
+                            ErrorContext::new(operation, e)
+                                .with_filepath(filepath)
+                                .with_component(name)
+                                .with_details(format!("Failed to parse track at index {i}")),
+                        ))
+                    }
+                }
+            }
+        }
+
+        // Parse vias
+        if let Some(vias) = fp_json.get("vias").and_then(Value::as_array) {
+            for (i, via_json) in vias.iter().enumerate() {
+                Self::refuse_unknown(via_json, &keys.via)?;
+                match Self::parse_via(via_json) {
+                    Ok(via) => footprint.add_via(via),
+                    Err(e) => {
+                        return Err(ToolCallResult::error_with_context(
+                            ErrorContext::new(operation, e)
+                                .with_filepath(filepath)
+                                .with_component(name)
+                                .with_details(format!("Failed to parse via at index {i}")),
+                        ))
+                    }
+                }
+            }
+        }
+
+        // Parse fills
+        if let Some(fills) = fp_json.get("fills").and_then(Value::as_array) {
+            for (i, fill_json) in fills.iter().enumerate() {
+                Self::refuse_unknown(fill_json, &keys.fill)?;
+                match Self::parse_fill(fill_json) {
+                    Ok(fill) => footprint.add_fill(fill),
+                    Err(e) => {
+                        return Err(ToolCallResult::error_with_context(
+                            ErrorContext::new(operation, e)
+                                .with_filepath(filepath)
+                                .with_component(name)
+                                .with_details(format!("Failed to parse fill at index {i}")),
+                        ))
+                    }
+                }
+            }
+        }
+
+        // Parse arcs
+        if let Some(arcs) = fp_json.get("arcs").and_then(Value::as_array) {
+            for (i, arc_json) in arcs.iter().enumerate() {
+                Self::refuse_unknown(arc_json, &keys.arc)?;
+                match Self::parse_arc(arc_json) {
+                    Ok(arc) => footprint.add_arc(arc),
+                    Err(e) => {
+                        return Err(ToolCallResult::error_with_context(
+                            ErrorContext::new(operation, e)
+                                .with_filepath(filepath)
+                                .with_component(name)
+                                .with_details(format!("Failed to parse arc at index {i}")),
+                        ))
+                    }
+                }
+            }
+        }
+
+        // Parse regions
+        if let Some(regions) = fp_json.get("regions").and_then(Value::as_array) {
+            for region_json in regions {
+                Self::refuse_unknown(region_json, &keys.region)?;
+                if let Some(region) = Self::parse_region(region_json) {
+                    footprint.add_region(region);
+                }
+            }
+        }
+
+        // Parse text
+        if let Some(texts) = fp_json.get("text").and_then(Value::as_array) {
+            for text_json in texts {
+                Self::refuse_unknown(text_json, &keys.text)?;
+                if let Some(text) = Self::parse_text(text_json) {
+                    footprint.add_text(text);
+                }
+            }
+        }
+
+        // Parse 3D model
+        if let Some(model_json) = fp_json.get("step_model") {
+            Self::refuse_unknown(model_json, &keys.model)?;
+            if let Some(model_path) = model_json.get("filepath").and_then(Value::as_str) {
+                let embed = model_json
+                    .get("embed")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(true);
+
+                if embed {
+                    // The embed source is read from disk at save time
+                    // (prepare_3d_models_for_writing -> std::fs::read), far from
+                    // this handler. Validate it against the allow-list now so a
+                    // caller cannot embed an arbitrary file (e.g. "../../etc/passwd")
+                    // into the library. External references (embed=false) are only
+                    // stored as a string and never read, so they are not gated here.
+                    if let Err(e) = self.validate_path(model_path) {
+                        return Err(ToolCallResult::error(e));
+                    }
+
+                    // Embedded model - use Model3D which will read the file on save
+                    footprint.model_3d = Some(Model3D {
+                        filepath: model_path.to_string(),
+                        x_offset: model_json
+                            .get("x_offset")
+                            .and_then(Value::as_f64)
+                            .unwrap_or(0.0),
+                        y_offset: model_json
+                            .get("y_offset")
+                            .and_then(Value::as_f64)
+                            .unwrap_or(0.0),
+                        z_offset: model_json
+                            .get("z_offset")
+                            .and_then(Value::as_f64)
+                            .unwrap_or(0.0),
+                        rotation: model_json
+                            .get("rotation")
+                            .and_then(Value::as_f64)
+                            .unwrap_or(0.0),
+                    });
+                } else {
+                    // External reference only: a model-backed body whose file
+                    // stays outside the library. The writer emits the MODEL.*
+                    // group — MODEL.EMBED=FALSE and MODEL.NAME carrying the
+                    // full path, so organised subfolders resolve — only for a
+                    // body with a MODELID, so the reference gets a fresh one
+                    // here or the path would not reach the file at all. No
+                    // golden carries a non-embedded model; the form follows
+                    // the group Altium writes for embedded ones.
+                    use crate::altium::pcblib::{ComponentBody, Layer};
+                    let model_id =
+                        format!("{{{}}}", uuid::Uuid::new_v4().to_string().to_uppercase());
+                    footprint.add_component_body(ComponentBody {
+                        model_id,
+                        identifier: String::new(),
+                        texture_center_x: None,
+                        texture_center_y: None,
+                        texture_size_x: None,
+                        texture_size_y: None,
+                        raw_layer_id: None,
+                        v7_layer: None,
+                        model_name: model_path.to_string(), // Preserve full path
+                        embedded: false,
+                        rotation_x: 0.0,
+                        rotation_y: 0.0,
+                        rotation_z: model_json
+                            .get("rotation")
+                            .and_then(Value::as_f64)
+                            .unwrap_or(0.0),
+                        z_offset: model_json
+                            .get("z_offset")
+                            .and_then(Value::as_f64)
+                            .unwrap_or(0.0),
+                        overall_height: 0.0,
+                        standoff_height: 0.0,
+                        cavity_height: 0.0,
+                        layer: Layer::Top3DBody,
+                        outline: Vec::new(),
+                        unique_id: None,
+                        guid: None,
+                        model_checksum: 0, // External reference: no embedded model.
+                        name: " ".to_string(),
+                        kind: 0,
+                        sub_poly_index: -1,
+                        union_index: 0,
+                        is_shape_based: false,
+                        body_projection: 0,
+                        body_color_3d: 8_421_504,
+                        body_opacity_3d: 1.0,
+                        model_2d_rotation: 0.0,
+                        model_2d_x: 0.0,
+                        model_2d_y: 0.0,
+                        // External reference: no board association (free primitive).
+                        net_index: 0xFFFF,
+                        polygon_index: 0xFFFF,
+                        component_index: -1,
+                        additional_parameters: Vec::new(),
+                    });
+                }
+            }
+        }
+
+        // Parse "model_3d" — read_pcblib's spelling of the same model
+        // reference (it emits the key for every footprint, null when there
+        // is no model), accepted so a read result replays into
+        // write_pcblib unchanged. `step_model` wins when both are given
+        // (it is the authoring-time spelling, incl. the embed switch);
+        // null is ignored. The fields mirror the Model3D serde shape
+        // (filepath + offsets/rotation).
+        if fp_json.get("step_model").is_none() {
+            if let Some(model_json) = fp_json.get("model_3d").filter(|v| !v.is_null()) {
+                Self::refuse_unknown(model_json, &keys.model)?;
+                let model_path = model_json
+                    .get("filepath")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                // The save path embeds the file (std::fs::read) when the
+                // path resolves to an existing file, so gate exactly that
+                // case against the allow-list — the same arbitrary-file-
+                // read defence as step_model. Bare model names replayed
+                // from read_pcblib output don't exist on disk and are kept
+                // as inert references, so they are not gated.
+                if std::path::Path::new(model_path).is_file() {
+                    if let Err(e) = self.validate_path(model_path) {
+                        return Err(ToolCallResult::error(e));
+                    }
+                }
+                footprint.model_3d = Some(Model3D {
+                    filepath: model_path.to_string(),
+                    x_offset: model_json
+                        .get("x_offset")
+                        .and_then(Value::as_f64)
+                        .unwrap_or(0.0),
+                    y_offset: model_json
+                        .get("y_offset")
+                        .and_then(Value::as_f64)
+                        .unwrap_or(0.0),
+                    z_offset: model_json
+                        .get("z_offset")
+                        .and_then(Value::as_f64)
+                        .unwrap_or(0.0),
+                    rotation: model_json
+                        .get("rotation")
+                        .and_then(Value::as_f64)
+                        .unwrap_or(0.0),
+                });
+            }
+        }
+
+        // Parse generic extruded 3D bodies (no STEP model). Each body is
+        // defined by an optional 2D outline (auto-bounding-box from pads when
+        // omitted) plus standoff/overall heights, on the Top/Bottom 3D Body
+        // layer. model_id/model_name stay empty so the writer marks them as
+        // shape-based extruded bodies.
+        if let Some(bodies) = fp_json.get("component_bodies").and_then(Value::as_array) {
+            for body_json in bodies {
+                Self::refuse_unknown(body_json, &keys.component_body)?;
+                footprint.add_component_body(Self::parse_component_body_json(body_json));
+            }
+        }
+
+        // Footprint-level replay fields `read_pcblib` emits. The guid is
+        // the kind-85 identity record; the interleaved Data-stream order
+        // replaces the grouped order the add_* calls accumulated, so a
+        // read-modify-write keeps the source's stream order
+        // (`write_sequence` is advisory-safe against a stale list).
+        if let Some(g) = fp_json.get("guid").and_then(Value::as_str) {
+            footprint.guid = Some(g.to_string());
+        }
+        if let Some(order) = fp_json.get("primitive_order") {
+            match serde_json::from_value(order.clone()) {
+                Ok(kinds) => footprint.primitive_order = kinds,
+                Err(e) => {
+                    tracing::debug!(error = %e, "invalid primitive_order; using default order");
+                }
+            }
+        }
+
+        // Out-of-range or non-finite geometry would saturate in from_mm() on
+        // save; refused here so both tools report it the same way.
+        if let Err(e) = Self::validate_footprint_coordinates(&footprint) {
+            return Err(ToolCallResult::error(e));
+        }
+
+        Ok(footprint)
+    }
 
     pub(crate) fn check_unknown_fields(
         json: &serde_json::Value,

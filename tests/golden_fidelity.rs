@@ -421,6 +421,33 @@ fn pcblib_golden_survives_a_round_trip() {
         }
     }
 
+    // 6. Every footprint's WideStrings stream byte-identical: it carries the
+    //    text the Windows-1252 Data block cannot (as UTF-16 code units), and
+    //    the reader prefers it, so a wrong encoding here corrupts every
+    //    non-ASCII text a character further on each save while the Data
+    //    stream above stays byte-identical.
+    for (canonical, g_path) in &before {
+        let Some(name) = canonical
+            .strip_suffix("/widestrings")
+            .filter(|n| !n.contains('/'))
+        else {
+            continue;
+        };
+        if is_known(canonical) {
+            continue;
+        }
+        let g = stream_bytes(&src, g_path).expect("walked stream exists");
+        match after.get(canonical).and_then(|p| stream_bytes(&out, p)) {
+            Some(o) if o == g => {}
+            Some(o) => failures.push(format!(
+                "{name}: WideStrings not byte-identical: golden {:?}, ours {:?}",
+                String::from_utf8_lossy(&g),
+                String::from_utf8_lossy(&o)
+            )),
+            None => failures.push(format!("{name}: WideStrings not written back")),
+        }
+    }
+
     assert!(
         failures.is_empty(),
         "the golden does not survive a read/write cycle intact ({} divergence(s)).\n\

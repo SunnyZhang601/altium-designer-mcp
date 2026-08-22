@@ -58,11 +58,11 @@ pub struct Track {
     /// Line width in mm.
     #[serde(serialize_with = "crate::altium::serde_round::serialize")]
     pub width: f64,
-    /// The header layer byte exactly as read, kept when it is not the byte
-    /// `layer` would get: a library can store a mechanical layer past the
-    /// legacy sixteen under byte 72 with the real layer in the V7 layer id
-    /// (an AD-authored `Mechanical 20` track), so the byte goes back as it
-    /// was for as long as it still describes `layer`.
+    /// The header layer byte exactly as read, kept only when the layer table
+    /// does not map it — the primitive then sits on the `MultiLayer`
+    /// catch-all, and without the byte a rewrite would store `74` in its
+    /// place. Replayed while the primitive still sits there; moving it to a
+    /// layer the model can name discards the byte for that layer's own.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub raw_layer_id: Option<u8>,
     /// Layer the track is on.
@@ -191,11 +191,11 @@ pub struct Arc {
     /// Line width in mm.
     #[serde(serialize_with = "crate::altium::serde_round::serialize")]
     pub width: f64,
-    /// The header layer byte exactly as read, kept when it is not the byte
-    /// `layer` would get: a library can store a mechanical layer past the
-    /// legacy sixteen under byte 72 with the real layer in the V7 layer id
-    /// (an AD-authored `Mechanical 20` track), so the byte goes back as it
-    /// was for as long as it still describes `layer`.
+    /// The header layer byte exactly as read, kept only when the layer table
+    /// does not map it — the primitive then sits on the `MultiLayer`
+    /// catch-all, and without the byte a rewrite would store `74` in its
+    /// place. Replayed while the primitive still sits there; moving it to a
+    /// layer the model can name discards the byte for that layer's own.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub raw_layer_id: Option<u8>,
     /// Layer the arc is on.

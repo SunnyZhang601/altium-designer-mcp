@@ -38,9 +38,10 @@ impl McpServer {
                      component_bodies). Returns structured data that can be used to understand \
                      existing footprint styles. All coordinates and dimensions are in millimetres \
                      (mm). Fields such as guid, unique_id, raw_tail, raw_block, raw_geometry, \
-                     param_key_order and primitive_order are fidelity carriers: pass them back \
-                     unchanged to write_pcblib or update_component and the rewrite is \
-                     byte-identical to the source; omit them when authoring from scratch. \
+                     raw_layer_id, param_key_order and primitive_order are fidelity carriers: \
+                     pass them back unchanged to write_pcblib or update_component and the \
+                     rewrite is byte-identical to the source; omit them when authoring from \
+                     scratch. \
                      Each footprint is the same JSON shape get_component, export_library and \
                      write_pcblib use; a list with no entries and an optional field with no \
                      value are omitted rather than empty/null. \
@@ -84,10 +85,11 @@ impl McpServer {
                      polygons, arcs, pies, images, text_frames, beziers, ellipses, \
                      elliptical_arcs, labels, text), parameters and footprint links. \
                      Coordinates are in schematic units (10 units = 1 grid square, not mm). \
-                     Fields such as unique_id and primitive_order are fidelity carriers: pass \
-                     them back unchanged to write_schlib or update_component to keep the \
-                     source's record identities and order; omit them when authoring from \
-                     scratch. Each symbol is the same JSON shape get_component, \
+                     Fields such as unique_id, primitive_order, header_params, raw_params, \
+                     all_pin_count and extra_streams are fidelity carriers: pass them back \
+                     unchanged to write_schlib or update_component and the rewrite is \
+                     byte-identical to the source; omit them when authoring from scratch. \
+                     Each symbol is the same JSON shape get_component, \
                      export_library and write_schlib use; a list with no entries and an \
                      optional field with no value are omitted rather than empty/null. \
                      For large libraries, use component_name to fetch specific \

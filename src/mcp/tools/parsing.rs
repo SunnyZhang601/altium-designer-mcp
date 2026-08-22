@@ -186,8 +186,21 @@ fn json_guid(json: &Value) -> Option<String> {
     json.get("guid").and_then(Value::as_str).map(str::to_string)
 }
 
+/// The streams a symbol carries verbatim (`extra_streams`), in the
+/// `[[name, base64], …]` form `read_schlib` emits; anything else is no
+/// streams, like every other carrier this parser reads leniently.
+fn json_extra_streams(json: &Value) -> Vec<(String, Vec<u8>)> {
+    #[derive(serde::Deserialize)]
+    struct Streams(#[serde(with = "crate::altium::base64_opt::named")] Vec<(String, Vec<u8>)>);
+    json.get("extra_streams")
+        .cloned()
+        .and_then(|v| serde_json::from_value::<Streams>(v).ok())
+        .map_or_else(Vec::new, |streams| streams.0)
+}
+
 /// A read primitive's header layer byte (`raw_layer_id`), carried so the
-/// rewrite keeps a clamped legacy byte while it still describes the layer.
+/// rewrite keeps an unmapped byte while the primitive still sits on the
+/// Multi-Layer catch-all it decoded to.
 fn json_raw_layer_id(json: &Value) -> Option<u8> {
     json.get("raw_layer_id")
         .and_then(Value::as_u64)
@@ -542,23 +555,7 @@ impl McpServer {
         }
 
         // The streams this crate does not read, carried verbatim.
-        if let Some(streams) = sym_json.get("extra_streams") {
-            symbol.extra_streams = serde_json::from_value::<Vec<(String, String)>>(streams.clone())
-                .ok()
-                .map(|pairs| {
-                    pairs
-                        .into_iter()
-                        .filter_map(|(name, text)| {
-                            use base64::Engine as _;
-                            base64::engine::general_purpose::STANDARD
-                                .decode(text.as_bytes())
-                                .ok()
-                                .map(|bytes| (name, bytes))
-                        })
-                        .collect()
-                })
-                .unwrap_or_default();
-        }
+        symbol.extra_streams = json_extra_streams(sym_json);
         // The header exactly as read — key order, unmodelled keys and the
         // stale AllPinCount — so a read-modify-write reproduces it.
         if let Some(params) = sym_json.get("header_params") {
@@ -3820,12 +3817,12 @@ mod tests {
 
     #[test]
     fn every_layered_primitive_carries_its_read_layer_byte() {
-        // The clamped legacy byte of an AD-authored Mechanical 20 primitive
-        // survives the JSON boundary on each of the five kinds that have one.
+        // An unmapped header byte read onto the Multi-Layer catch-all
+        // survives the JSON boundary on each of the five kinds that carry one.
         let with = |fields: serde_json::Value| {
             let mut json = fields;
-            json["layer"] = json!("Mechanical 20");
-            json["raw_layer_id"] = json!(72);
+            json["layer"] = json!("Multi-Layer");
+            json["raw_layer_id"] = json!(100);
             json
         };
         let pad = McpServer::parse_pad(&with(json!({
@@ -3856,9 +3853,9 @@ mod tests {
                 text.raw_layer_id,
                 fill.raw_layer_id,
             ],
-            [Some(72); 5]
+            [Some(100); 5]
         );
-        assert_eq!(track.layer, crate::altium::pcblib::Layer::Mechanical20);
+        assert_eq!(track.layer, crate::altium::pcblib::Layer::MultiLayer);
         // An out-of-range value is not a byte.
         let plain = McpServer::parse_fill(&json!({
             "x1": 0.0, "y1": 0.0, "x2": 1.0, "y2": 1.0, "layer": "Top Layer", "raw_layer_id": 300,

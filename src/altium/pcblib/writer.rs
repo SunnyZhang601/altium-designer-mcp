@@ -268,26 +268,30 @@ const fn encode_altium_flags(flags: PcbFlags) -> u16 {
 
 /// Writes the common 13-byte header for primitives.
 fn write_common_header(data: &mut Vec<u8>, layer: Layer, flags: PcbFlags) {
-    write_common_header_with_byte(data, layer_to_id(layer), flags);
+    write_common_header_with_byte(data, disk_layer_byte(layer), flags);
 }
 
-/// The layer byte a read primitive goes back out with: its own byte while
-/// that byte still describes `layer` (the legacy byte 72 an AD-authored
-/// `Mechanical 20` track carries, the V7 id holding the real layer), else
-/// the canonical byte for the layer it now has.
+/// The header layer byte Altium stores for a layer. Mechanical 17-32 have
+/// no byte of their own: Altium writes 72 (Mechanical 16, the last the byte
+/// can hold) and names the real layer in the V7 layer id or `V7_LAYER`
+/// token — an AD-authored `Mechanical 20` track is `72` + `0x0102_0014` —
+/// so that is what a from-scratch primitive gets too. Every other layer is
+/// its [`layer_to_id`] byte.
+pub(super) const fn disk_layer_byte(layer: Layer) -> u8 {
+    match layer_to_id(layer) {
+        186..=201 => 72,
+        id => id,
+    }
+}
+
+/// The layer byte a read primitive goes back out with: the byte as read
+/// while the primitive still sits on the `MultiLayer` catch-all an unmapped
+/// byte decodes to (see `raw_layer_id` on every layered primitive), else
+/// the byte Altium stores for the layer it now has.
 fn layer_byte(raw: Option<u8>, layer: Layer) -> u8 {
-    let canonical = layer_to_id(layer);
     match raw {
-        Some(byte) if byte != canonical => {
-            let same_layer = super::reader::layer_from_id(byte) == layer;
-            let clamped_mechanical = (57..=72).contains(&byte) && (186..=201).contains(&canonical);
-            if same_layer || clamped_mechanical {
-                byte
-            } else {
-                canonical
-            }
-        }
-        _ => canonical,
+        Some(byte) if layer == Layer::MultiLayer => byte,
+        _ => disk_layer_byte(layer),
     }
 }
 
@@ -1717,12 +1721,8 @@ fn encode_component_body_block(body: &ComponentBody, outline: &[(f64, f64)]) -> 
     // Layer ID (1 byte). An unmapped byte the reader could not decode is
     // replayed verbatim while the body still sits on the `MultiLayer`
     // catch-all its decode produced (#391); a retargeted body gets the
-    // canonical id for its new layer.
-    let layer_id = match body.raw_layer_id {
-        Some(id) if body.layer == Layer::MultiLayer => id,
-        _ => layer_to_id(body.layer),
-    };
-    block.push(layer_id);
+    // byte Altium stores for its new layer.
+    block.push(layer_byte(body.raw_layer_id, body.layer));
 
     // Record type marker (2 bytes): 0x0C 0x00
     block.push(0x0C);
@@ -4330,36 +4330,37 @@ mod tests {
     }
 
     #[test]
-    fn a_read_layer_byte_goes_back_while_it_still_describes_the_layer() {
-        // An AD-authored Mechanical 20 track is stored under legacy byte 72
-        // with the real layer in the V7 id. The byte goes back as read, the
-        // V7 id still names Mechanical 20, and the carried byte is dropped
-        // the moment the layer is edited to one it does not describe.
+    fn a_mechanical_layer_past_sixteen_is_stored_the_way_altium_stores_it() {
+        // Altium keeps a Mechanical 20 track under legacy byte 72 with the
+        // real layer in the V7 id at @41; a track placed there from scratch
+        // gets the same pair, and so does one read from such a file.
         let mut track = Track::new(0.0, 0.0, 1.0, 0.0, 0.2, Layer::Mechanical20);
-        track.raw_layer_id = Some(72);
         let mut data = Vec::new();
         encode_track(&mut data, &track);
-        assert_eq!(data[4], 72, "the clamped legacy byte as read");
+        assert_eq!(data[4], 72, "the legacy byte Altium writes");
         assert_eq!(&data[4 + 41..4 + 45], &0x0102_0014_u32.to_le_bytes());
+        for layer in [
+            Layer::Mechanical17,
+            Layer::Mechanical32,
+            Layer::Mechanical16,
+        ] {
+            assert_eq!(disk_layer_byte(layer), 72, "{layer:?}");
+        }
+        assert_eq!(disk_layer_byte(Layer::Mechanical15), 71);
+        assert_eq!(disk_layer_byte(Layer::TopOverlay), 33);
 
-        // From scratch the extended byte scheme names the layer itself.
-        track.raw_layer_id = None;
+        // A byte outside every documented range reads as Multi-Layer and, the
+        // primitive unmoved, goes back as the byte it was rather than as 74;
+        // moved to a layer the model can name, it gets that layer's byte.
+        track.layer = Layer::MultiLayer;
+        track.raw_layer_id = Some(100);
         let mut data = Vec::new();
         encode_track(&mut data, &track);
-        assert_eq!(data[4], 189, "Mechanical 20 is byte 186 + 3");
-
-        // Edited onto a layer the byte does not describe: the canonical byte.
-        track.raw_layer_id = Some(72);
+        assert_eq!(data[4], 100);
         track.layer = Layer::TopOverlay;
         let mut data = Vec::new();
         encode_track(&mut data, &track);
-        assert_eq!(data[4], layer_to_id(Layer::TopOverlay));
-
-        // A byte outside every documented range reads as Multi-Layer and, the
-        // layer unedited, goes back as the byte it was rather than as 74.
-        assert_eq!(layer_byte(Some(100), Layer::MultiLayer), 100);
-        assert_eq!(layer_byte(Some(100), Layer::TopLayer), 1);
-        assert_eq!(layer_byte(None, Layer::Mechanical17), 186);
-        assert_eq!(layer_byte(Some(57), Layer::Mechanical17), 57);
+        assert_eq!(data[4], 33);
+        assert_eq!(layer_byte(None, Layer::MultiLayer), 74);
     }
 }

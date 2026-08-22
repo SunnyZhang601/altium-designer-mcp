@@ -2120,6 +2120,41 @@ mod tests {
             assert_eq!(link["library_path"], "Lib.PcbLib", "{link}");
         }
 
+        /// A stream this crate does not read (a newer Altium's
+        /// `PinFunctionData`) crosses the JSON boundary as `read_schlib`
+        /// emits it and is written back; a malformed carrier is no streams,
+        /// not an error, like the other carriers.
+        #[test]
+        fn write_schlib_carries_a_symbol_stream_it_does_not_read() {
+            let dir = test_temp_dir();
+            let server = create_test_server(dir.path());
+            let out = dir.path().join("Extra.SchLib");
+            let written = server.call_write_schlib(&json!({
+                "filepath": out.to_string_lossy(),
+                "symbols": [{
+                    "name": "X",
+                    "extra_streams": [["PinFunctionData", "AQD/fg=="]],
+                }],
+            }));
+            assert!(!written.is_error, "{}", get_result_text(&written));
+            let back = server.call_read_schlib(&json!({ "filepath": out.to_string_lossy() }));
+            let symbol = parse_result_json(&back)["symbols"][0].clone();
+            assert_eq!(
+                symbol["extra_streams"],
+                json!([["PinFunctionData", "AQD/fg=="]]),
+                "{symbol}"
+            );
+
+            let written = server.call_write_schlib(&json!({
+                "filepath": out.to_string_lossy(),
+                "symbols": [{ "name": "X", "extra_streams": [["PinFunctionData", "not base64!"]] }],
+            }));
+            assert!(!written.is_error, "{}", get_result_text(&written));
+            let back = server.call_read_schlib(&json!({ "filepath": out.to_string_lossy() }));
+            let symbol = parse_result_json(&back)["symbols"][0].clone();
+            assert!(symbol.get("extra_streams").is_none(), "{symbol}");
+        }
+
         /// The in-place twin: every golden footprint read through
         /// `read_pcblib` and handed back to `update_component` as its own
         /// replacement leaves the library byte-for-byte as the library-level

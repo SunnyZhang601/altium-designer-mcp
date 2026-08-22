@@ -16,6 +16,10 @@ Found while fixing something else; each needs its own verification or a fixture 
       (`graphically_locked`, `disabled`, `dimmed`, `owner_part_display_mode`) in the model,
       while the other 13 graphics do — almost certainly a gap, but no golden record exists
       to verify the keys AD24 emits. Blocked on the fixture (see `docs/FIXTURE_COVERAGE.md`).
+- [ ] **Mechanical 17-32 on pads, arcs, text, fills, regions and bodies** is stored the way
+      hand-authored *tracks* store it (byte 72 + V7 id `0x010200nn`, `MECHANICAL{nn}` token
+      for regions/bodies) — inferred from the one kind seen, not verified per kind. Blocked on
+      the fixture (`docs/FIXTURE_COVERAGE.md`, PcbLib backlog).
 
 ## B. On-site Altium tooling
 

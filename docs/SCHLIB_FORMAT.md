@@ -19,12 +19,17 @@ SchLib files are OLE Compound Documents (CFB format, OLE v3) containing:
 └── {ComponentName}/        # One storage per symbol
     ├── Data                # Symbol records stream
     ├── PinFrac             # OPTIONAL: fractional pin coordinates (compressed storage)
-    └── PinSymbolLineWidth  # OPTIONAL: per-pin symbol line widths (compressed storage)
+    ├── PinSymbolLineWidth  # OPTIONAL: per-pin symbol line widths (compressed storage)
+    ├── PinWideText         # OPTIONAL: wide form of non-ASCII pin names
+    └── PinFunctionData     # OPTIONAL: written by newer Altium; carried verbatim, not read
 ```
 
-The two pin auxiliary streams are emitted only when at least one pin needs them (see
-[Pin auxiliary streams](#pin-auxiliary-streams)); a symbol with on-grid, default-width pins has
-only its `Data` stream, byte-identical to Altium's own output.
+The pin auxiliary streams are emitted only when at least one pin needs them (see
+[Pin auxiliary streams](#pin-auxiliary-streams)); a symbol with on-grid, default-width,
+ASCII-named pins has only its `Data` stream, byte-identical to Altium's own output. Any other
+stream a symbol's storage holds — a `PinFunctionData` from a newer Altium — is carried as read
+(`Symbol::extra_streams`, base64 in JSON) and written back beside the ones this crate does
+read, so nothing Altium stored is dropped for being unknown.
 
 ## Cross-Cutting Conventions
 
@@ -794,6 +799,11 @@ A parameter-record variant selected by `Name=Designator`. As written by this cra
   | `ModelDatafileEntity0` | string | Footprint entity (resolution key) |
   | `ModelDatafileKind0` | string | `PCBLib` |
   | `IsCurrent` | bool | `T` on the default footprint; omitted on every other (never `F`) |
+
+  The record is carried and replayed like every content record (`raw_params`, see
+  [Component Header Record](#component-header-record1)): a UI-authored link also carries
+  `IntegratedModel=T|DatabaseModel=T`, which this crate does not model, and omits `Description`
+  while it is empty, all of which come back as stored.
 
 - **RECORD=46 (MapDefinerList)** and **RECORD=48 (ImplementationParameters)** — written as empty
   children of each RECORD=45 (`|RECORD=46|OwnerIndex={45's index}` / `|RECORD=48|OwnerIndex=...`).

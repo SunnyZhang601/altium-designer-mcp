@@ -1053,6 +1053,10 @@ impl McpServer {
                     if let Some(layer) = parse_layer(layer_str) {
                         changes.push(json!({"property": "layer", "old": format!("{:?}", region.layer), "new": layer_str}));
                         region.layer = layer;
+                        // A replayed V7_LAYER token names the layer the region
+                        // was read on; moving it makes that stale, so the
+                        // writer derives the token from the new layer instead.
+                        region.v7_layer = None;
                     } else {
                         return ToolCallResult::error(format!("Invalid layer: {layer_str}"));
                     }
@@ -2202,6 +2206,40 @@ mod tests {
                 lib.get("RICH").unwrap().regions[0].layer,
                 Layer::BottomLayer
             );
+        }
+
+        /// A region carrying a replayed `V7_LAYER` override loses it when its
+        /// layer changes, so the saved token names the new layer — `None` on
+        /// re-read means the token agrees with the byte.
+        #[test]
+        fn update_primitive_region_layer_change_drops_stale_v7_token() {
+            use crate::altium::pcblib::{Footprint, Pad, Region};
+
+            let dir = test_temp_dir();
+            let server = create_test_server(dir.path());
+            let mut region = Region::rectangle(-1.0, -1.0, 1.0, 1.0, Layer::TopOverlay);
+            region.v7_layer = Some("MECHANICAL4".to_string());
+            let mut fp = Footprint::new("RGN");
+            fp.add_pad(Pad::smd("1", 0.0, 0.0, 0.6, 0.5));
+            fp.add_region(region);
+            let mut lib = PcbLib::new();
+            lib.add(fp);
+            let path = dir.path().join("RegionToken.PcbLib");
+            lib.save(&path).unwrap();
+
+            let result = server.call_update_primitive(&json!({
+                "filepath": path.to_string_lossy(),
+                "component_name": "RGN",
+                "primitive_type": "region",
+                "index": 0,
+                "updates": { "layer": "Bottom Overlay" },
+            }));
+            assert!(!result.is_error, "{}", get_result_text(&result));
+
+            let lib = PcbLib::open(&path).unwrap();
+            let moved = &lib.get("RGN").unwrap().regions[0];
+            assert_eq!(moved.layer, Layer::BottomOverlay);
+            assert_eq!(moved.v7_layer, None, "stale token not replayed");
         }
 
         #[test]

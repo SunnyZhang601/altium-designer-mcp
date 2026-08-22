@@ -248,6 +248,32 @@ pub fn fold_ansi_widened(text: &str) -> Option<String> {
 /// empty, since there is no storage name to derive from nothing.
 pub const OLE_NAME_FORBIDDEN: &[char] = &['/', '\\', ':', '!'];
 
+/// Whether two component names are the same name, regardless of case.
+///
+/// That is how the OLE directory compares the storage names they become
+/// (`RES_0402` and `res_0402` cannot both be stored) and how Altium resolves
+/// a component by name.
+#[must_use]
+pub fn same_name(a: &str, b: &str) -> bool {
+    a.chars()
+        .flat_map(char::to_uppercase)
+        .eq(b.chars().flat_map(char::to_uppercase))
+}
+
+/// A name's case-folded form, for sets that must hold names the way the OLE
+/// directory does (see [`same_name`]).
+#[must_use]
+pub fn folded_name(name: &str) -> String {
+    name.chars().flat_map(char::to_uppercase).collect()
+}
+
+/// Whether `candidate` is already taken in `used_names`, ignoring case — a
+/// storage name that differs only in case from one in use is the same
+/// storage to the OLE directory, and creating it fails.
+fn ole_name_taken<S: BuildHasher>(used_names: &HashSet<String, S>, candidate: &str) -> bool {
+    used_names.contains(candidate) || used_names.iter().any(|used| same_name(used, candidate))
+}
+
 #[must_use]
 pub fn generate_ole_name<S: BuildHasher>(name: &str, used_names: &HashSet<String, S>) -> String {
     // OLE/CFB storage names cannot contain `/`, `\`, `:` or `!`: the `cfb`
@@ -273,7 +299,7 @@ pub fn generate_ole_name<S: BuildHasher>(name: &str, used_names: &HashSet<String
     // The OLE/CFB limit is 31 UTF-16 code units — not bytes or chars. Measure
     // it correctly so supplementary-plane characters (2 units each) cannot slip
     // a name past the limit and make the whole save fail.
-    if utf16_len(name) <= MAX_OLE_NAME_LEN && !used_names.contains(name) {
+    if utf16_len(name) <= MAX_OLE_NAME_LEN && !ole_name_taken(used_names, name) {
         return name.to_string();
     }
 
@@ -283,7 +309,7 @@ pub fn generate_ole_name<S: BuildHasher>(name: &str, used_names: &HashSet<String
     // a wire name (one byte per char) truncating by UTF-16 unit is the same
     // cut, minus the ability to split a char in two.
     let plain = truncate_utf16(name, MAX_OLE_NAME_LEN);
-    if !used_names.contains(&plain) {
+    if !ole_name_taken(used_names, &plain) {
         return plain;
     }
 
@@ -293,7 +319,7 @@ pub fn generate_ole_name<S: BuildHasher>(name: &str, used_names: &HashSet<String
     let prefix = truncate_utf16(name, MAX_OLE_NAME_LEN - SUFFIX_LEN);
     for i in 1..1000 {
         let candidate = format!("{prefix}~{i:03}");
-        if !used_names.contains(&candidate) {
+        if !ole_name_taken(used_names, &candidate) {
             return candidate;
         }
     }
@@ -584,18 +610,45 @@ pub(crate) fn parse_pipe_params_ordered(text: &str) -> Vec<(String, String)> {
 /// Shared by both libraries' `reorder` methods, which differ only in their
 /// backing collection (`IndexMap` vs `Vec`).
 pub(crate) fn order_ranker<'a>(new_order: &[&'a str]) -> impl Fn(&str) -> usize + 'a {
-    let order_map: std::collections::HashMap<&'a str, usize> = new_order
+    // Names compare the way the library resolves them (see `same_name`).
+    let order_map: std::collections::HashMap<String, usize> = new_order
         .iter()
         .enumerate()
-        .map(|(i, name)| (*name, i))
+        .map(|(i, name)| (folded_name(name), i))
         .collect();
     let max_pos = new_order.len();
-    move |name: &str| order_map.get(name).copied().unwrap_or(max_pos)
+    move |name: &str| {
+        order_map
+            .get(&folded_name(name))
+            .copied()
+            .unwrap_or(max_pos)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn names_differing_only_in_case_are_one_storage_name() {
+        // The OLE directory compares storage names without regard to case,
+        // so the second of two such names gets a distinct storage name (the
+        // real name still travels in SectionKeys) instead of failing the
+        // whole save inside the directory.
+        assert!(same_name("RES_0402", "res_0402"));
+        assert!(same_name("Ω_MODULE", "ω_module"));
+        assert!(!same_name("RES_0402", "RES_0403"));
+        assert_eq!(folded_name("res_0402"), "RES_0402");
+
+        let names = generate_ole_names(["RES_0402", "res_0402", "Res_0402"]);
+        assert_eq!(names, ["RES_0402", "res_0402~001", "Res_0402~002"]);
+
+        // A ranker ranks a case variant with the name it stands for.
+        let rank = order_ranker(&["b", "A"]);
+        assert_eq!(rank("B"), 0);
+        assert_eq!(rank("a"), 1);
+        assert_eq!(rank("c"), 2);
+    }
 
     #[test]
     fn short_name_unchanged() {

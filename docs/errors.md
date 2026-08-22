@@ -198,6 +198,19 @@ likewise refused, never silently left out: the error names the kind and index
 (`Failed to parse region at index 2`, `Failed to parse footprint link at index 0`) in the
 structured context above, and nothing is written.
 
+### Component Names Are Case-Insensitive
+
+A component name is resolved regardless of case — `get_component` for `lm358` finds
+`LM358` — because that is how the file's own OLE directory compares the storage names a
+component becomes, and how Altium resolves one. Every tool that creates a name
+(`copy_component`, `rename_component`, `bulk_rename`, `write_*` append, `import_library`,
+`merge_libraries`, `update_component` with a new name) therefore treats a name differing
+from an existing one only in case as taken, and says so with the spelling on file:
+`Component 'res_0402' already exists in library as 'RES_0402' (component names are
+case-insensitive)`. Renaming a component to its own name in another case is allowed. Two
+such names within one `write_*` request are reported as a duplicate. A rename keeps the
+component's position in the library.
+
 ---
 
 ## Path Sanitisation

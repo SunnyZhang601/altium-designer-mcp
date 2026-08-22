@@ -382,11 +382,12 @@ impl McpServer {
             .filter_map(|fp| fp.get("name").and_then(Value::as_str))
             .collect();
 
-        // Check for duplicates within the new footprints
+        // Check for duplicates within the new footprints — regardless of
+        // case, which is how the library and the file's directory resolve them.
         {
             let mut seen = std::collections::HashSet::new();
             for name in &new_names {
-                if !seen.insert(*name) {
+                if !seen.insert(crate::altium::folded_name(name)) {
                     return ToolCallResult::error_with_context(
                         ErrorContext::new(
                             "write_pcblib",
@@ -450,12 +451,12 @@ impl McpServer {
 
         // Check for duplicates with existing footprints in append mode
         if append {
-            let existing_names: std::collections::HashSet<_> =
-                library.names().into_iter().collect();
             for name in &new_names {
-                if existing_names.contains(*name) {
-                    return ToolCallResult::error(format!(
-                        "Footprint '{name}' already exists in the library"
+                if let Some(existing) = library.get(name) {
+                    return ToolCallResult::error(Self::taken_name_error(
+                        format!("Footprint '{name}' already exists in the library"),
+                        name,
+                        &existing.name,
                     ));
                 }
             }
@@ -759,11 +760,12 @@ impl McpServer {
             .filter_map(|sym| sym.get("name").and_then(Value::as_str))
             .collect();
 
-        // Check for duplicates within the new symbols
+        // Check for duplicates within the new symbols — regardless of
+        // case, which is how the library and the file's directory resolve them.
         {
             let mut seen = std::collections::HashSet::new();
             for name in &new_names {
-                if !seen.insert(*name) {
+                if !seen.insert(crate::altium::folded_name(name)) {
                     return ToolCallResult::error_with_context(
                         ErrorContext::new(
                             "write_schlib",
@@ -815,9 +817,11 @@ impl McpServer {
         // Check for duplicates with existing symbols in append mode
         if append {
             for name in &new_names {
-                if library.get(name).is_some() {
-                    return ToolCallResult::error(format!(
-                        "Symbol '{name}' already exists in the library"
+                if let Some(existing) = library.get(name) {
+                    return ToolCallResult::error(Self::taken_name_error(
+                        format!("Symbol '{name}' already exists in the library"),
+                        name,
+                        &existing.name,
                     ));
                 }
             }
@@ -2153,6 +2157,69 @@ mod tests {
             let back = server.call_read_schlib(&json!({ "filepath": out.to_string_lossy() }));
             let symbol = parse_result_json(&back)["symbols"][0].clone();
             assert!(symbol.get("extra_streams").is_none(), "{symbol}");
+        }
+
+        /// Two names differing only in case are one storage to the OLE
+        /// directory: within one request that is a duplicate, and against an
+        /// existing library it is a clash, named after the spelling on file.
+        #[test]
+        fn write_tools_treat_a_case_variant_as_the_same_name() {
+            let dir = test_temp_dir();
+            let server = create_test_server(dir.path());
+            let out = dir.path().join("Case.PcbLib");
+            let pad = json!({ "designator": "1", "x": 0.0, "y": 0.0, "width": 0.6, "height": 0.5 });
+            let written = server.call_write_pcblib(&json!({
+                "filepath": out.to_string_lossy(),
+                "footprints": [
+                    { "name": "RES_0402", "pads": [pad] },
+                    { "name": "res_0402", "pads": [pad] },
+                ],
+            }));
+            assert!(written.is_error);
+            assert!(get_result_text(&written).contains("Duplicate footprint name: 'res_0402'"));
+
+            let written = server.call_write_pcblib(&json!({
+                "filepath": out.to_string_lossy(),
+                "footprints": [{ "name": "RES_0402", "pads": [pad] }],
+            }));
+            assert!(!written.is_error, "{}", get_result_text(&written));
+            let appended = server.call_write_pcblib(&json!({
+                "filepath": out.to_string_lossy(),
+                "append": true,
+                "footprints": [{ "name": "res_0402", "pads": [pad] }],
+            }));
+            assert!(appended.is_error);
+            assert!(
+                get_result_text(&appended).contains(
+                    "Footprint 'res_0402' already exists in the library as 'RES_0402' (component names are case-insensitive)"
+                ),
+                "{}",
+                get_result_text(&appended)
+            );
+
+            let out = dir.path().join("Case.SchLib");
+            let written = server.call_write_schlib(&json!({
+                "filepath": out.to_string_lossy(),
+                "symbols": [{ "name": "LM358" }, { "name": "lm358" }],
+            }));
+            assert!(written.is_error);
+            assert!(get_result_text(&written).contains("Duplicate symbol name: 'lm358'"));
+            let written = server.call_write_schlib(&json!({
+                "filepath": out.to_string_lossy(),
+                "symbols": [{ "name": "LM358" }],
+            }));
+            assert!(!written.is_error, "{}", get_result_text(&written));
+            let appended = server.call_write_schlib(&json!({
+                "filepath": out.to_string_lossy(),
+                "append": true,
+                "symbols": [{ "name": "lm358" }],
+            }));
+            assert!(appended.is_error);
+            assert!(
+                get_result_text(&appended).contains("as 'LM358'"),
+                "{}",
+                get_result_text(&appended)
+            );
         }
 
         /// The in-place twin: every golden footprint read through

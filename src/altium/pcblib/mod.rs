@@ -695,16 +695,32 @@ impl PcbLib {
         self.filepath.as_deref()
     }
 
-    /// Gets a footprint by name.
-    #[must_use]
-    pub fn get(&self, name: &str) -> Option<&Footprint> {
-        self.footprints.iter().find(|f| f.name == name)
+    /// The index of the footprint `name` resolves to: the exact name, else
+    /// the footprint whose name is the same regardless of case — the way the
+    /// file's own directory resolves it (see [`crate::altium::same_name`]).
+    fn position(&self, name: &str) -> Option<usize> {
+        self.footprints
+            .iter()
+            .position(|f| f.name == name)
+            .or_else(|| {
+                self.footprints
+                    .iter()
+                    .position(|f| crate::altium::same_name(&f.name, name))
+            })
     }
 
-    /// Gets a mutable reference to a footprint by name.
+    /// Gets a footprint by name — the exact name, else the one the name
+    /// resolves to regardless of case.
+    #[must_use]
+    pub fn get(&self, name: &str) -> Option<&Footprint> {
+        self.position(name).map(|i| &self.footprints[i])
+    }
+
+    /// Gets a mutable reference to a footprint by name (resolved as
+    /// [`Self::get`] resolves it).
     #[must_use]
     pub fn get_mut(&mut self, name: &str) -> Option<&mut Footprint> {
-        self.footprints.iter_mut().find(|f| f.name == name)
+        self.position(name).map(move |i| &mut self.footprints[i])
     }
 
     /// Adds a footprint to the library.
@@ -716,11 +732,7 @@ impl PcbLib {
     ///
     /// Returns the removed footprint if found, or `None` if no footprint with that name exists.
     pub fn remove(&mut self, name: &str) -> Option<Footprint> {
-        if let Some(idx) = self.footprints.iter().position(|f| f.name == name) {
-            Some(self.footprints.remove(idx))
-        } else {
-            None
-        }
+        self.position(name).map(|idx| self.footprints.remove(idx))
     }
 
     /// Updates a footprint in-place, preserving its position in the library.
@@ -730,11 +742,34 @@ impl PcbLib {
     ///
     /// Returns the old footprint if found, or `None` if no footprint with that name exists.
     pub fn update(&mut self, name: &str, replacement: Footprint) -> Option<Footprint> {
-        if let Some(idx) = self.footprints.iter().position(|f| f.name == name) {
-            Some(std::mem::replace(&mut self.footprints[idx], replacement))
-        } else {
-            None
+        self.position(name)
+            .map(|i| std::mem::replace(&mut self.footprints[i], replacement))
+    }
+
+    /// Renames a footprint in place, so it keeps its position in the
+    /// library and in the file. Returns whether `old_name` resolved to one.
+    pub fn rename(&mut self, old_name: &str, new_name: &str) -> bool {
+        self.rename_all(&[(old_name.to_string(), new_name.to_string())])
+            .is_empty()
+    }
+
+    /// Renames several footprints at once, each in place. Every `(old, new)`
+    /// pair resolves against the names as they were before the call, so a
+    /// chain such as `A -> B, B -> C` renames both rather than renaming the
+    /// new `B` twice. Returns the old names that resolved to nothing.
+    pub fn rename_all(&mut self, renames: &[(String, String)]) -> Vec<String> {
+        let mut missing = Vec::new();
+        let mut resolved: Vec<(usize, &str)> = Vec::with_capacity(renames.len());
+        for (old, new) in renames {
+            match self.position(old) {
+                Some(i) => resolved.push((i, new.as_str())),
+                None => missing.push(old.clone()),
+            }
         }
+        for (i, new) in resolved {
+            self.footprints[i].name = new.to_string();
+        }
+        missing
     }
 
     /// Reorders footprints according to the given name order.

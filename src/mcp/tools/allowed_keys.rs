@@ -120,7 +120,7 @@ impl SchLibKeys {
 }
 
 /// Spells out one `SchLib` graphic's key list: its own fields, the display
-/// flags, then its authoring-only extras.
+/// flags, the `raw_params` replay carrier, then its authoring-only extras.
 macro_rules! graphic_keys {
     ($(#[$doc:meta])* $name:ident = [$($key:literal),* $(,)?] $(+ [$($extra:literal),* $(,)?])?) => {
         $(#[$doc])*
@@ -130,6 +130,7 @@ macro_rules! graphic_keys {
             "disabled",
             "dimmed",
             "owner_part_display_mode",
+            "raw_params",
             $($($extra,)*)?
         ];
     };
@@ -358,6 +359,7 @@ pub const ELLIPTICAL_ARC: &[&str] = &[
     "fill_color",
     "owner_part_id",
     "unique_id",
+    "raw_params",
 ];
 
 /// A text annotation (record 3) carries no display flags; `hidden` is the
@@ -374,6 +376,7 @@ pub const TEXT: &[&str] = &[
     "rotation",
     "owner_part_id",
     "unique_id",
+    "raw_params",
     "hidden",
 ];
 

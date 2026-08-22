@@ -458,6 +458,25 @@ fn pcblib_golden_survives_a_round_trip() {
     );
 }
 
+/// Every binary (pin) record of a `SchLib` `Data` stream, bytes included,
+/// in stream order.
+fn binary_records(data: &[u8]) -> Vec<Vec<u8>> {
+    let mut records = Vec::new();
+    let mut offset = 0;
+    while offset + 4 <= data.len() {
+        let len = usize::from(data[offset])
+            | usize::from(data[offset + 1]) << 8
+            | usize::from(data[offset + 2]) << 16;
+        let flags = data[offset + 3];
+        let end = (offset + 4 + len).min(data.len());
+        if flags == 1 {
+            records.push(data[offset + 4..end].to_vec());
+        }
+        offset = end;
+    }
+    records
+}
+
 /// The kind of every record in a `SchLib` `Data` stream, in stream order.
 ///
 /// Framing is `[len: 3 bytes LE][flags: 1]` then the payload; `flags == 1`
@@ -535,6 +554,22 @@ fn schlib_golden_survives_a_round_trip() {
                 "{name}: record order changed\n  golden: {}\n  ours:   {}",
                 gk.join(" "),
                 ok.join(" ")
+            ));
+        }
+        // The binary pin records are not parameter blocks, so the passes
+        // above never see them: every one must come back byte for byte (a
+        // non-ASCII name is stored as UTF-8 bytes, not the code page).
+        let (gp, op) = (binary_records(&g), binary_records(&o));
+        if gp != op && !is_known(name) {
+            let first = gp
+                .iter()
+                .zip(op.iter())
+                .position(|(a, b)| a != b)
+                .map_or_else(|| "count".to_string(), |i| format!("pin {i}"));
+            failures.push(format!(
+                "{name}: binary pin records differ ({} golden, {} ours, first at {first})",
+                gp.len(),
+                op.len()
             ));
         }
     }

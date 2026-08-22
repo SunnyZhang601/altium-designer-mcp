@@ -1423,6 +1423,7 @@ fn test_schlib_rename_component() {
     sym.description = "Test symbol".to_string();
     sym.designator = "U".to_string();
     sym.rectangles.push(Rectangle {
+        raw_params: Vec::new(),
         x1: -40.0,
         y1: -40.0,
         x2: 40.0,
@@ -1653,6 +1654,7 @@ fn test_schlib_copy_cross_library() {
     sym.description = "Source symbol".to_string();
     sym.designator = "U".to_string();
     sym.rectangles.push(Rectangle {
+        raw_params: Vec::new(),
         x1: -40.0,
         y1: -40.0,
         x2: 40.0,
@@ -1805,6 +1807,7 @@ fn test_schlib_json_roundtrip() {
     sym.description = "Test symbol for round-trip".to_string();
     sym.designator = "U".to_string();
     sym.rectangles.push(Rectangle {
+        raw_params: Vec::new(),
         x1: -40.0,
         y1: -40.0,
         x2: 40.0,
@@ -2074,6 +2077,7 @@ fn test_schlib_merge_libraries() {
     sym1.description = "Symbol A".to_string();
     sym1.designator = "U".to_string();
     sym1.rectangles.push(Rectangle {
+        raw_params: Vec::new(),
         x1: -40.0,
         y1: -40.0,
         x2: 40.0,
@@ -2263,6 +2267,7 @@ fn test_schlib_search() {
     let mut lib = SchLib::new();
     let mut sym1 = Symbol::new("LM7805");
     sym1.rectangles.push(Rectangle {
+        raw_params: Vec::new(),
         x1: -40.0,
         y1: -20.0,
         x2: 40.0,
@@ -2281,6 +2286,7 @@ fn test_schlib_search() {
 
     let mut sym2 = Symbol::new("LM7812");
     sym2.rectangles.push(Rectangle {
+        raw_params: Vec::new(),
         x1: -40.0,
         y1: -20.0,
         x2: 40.0,
@@ -2299,6 +2305,7 @@ fn test_schlib_search() {
 
     let mut sym3 = Symbol::new("NE555");
     sym3.rectangles.push(Rectangle {
+        raw_params: Vec::new(),
         x1: -40.0,
         y1: -40.0,
         x2: 40.0,
@@ -2398,6 +2405,7 @@ fn test_schlib_get_component() {
     let mut sym1 = Symbol::new("LM7805");
     sym1.description = "5V Regulator".to_string();
     sym1.rectangles.push(Rectangle {
+        raw_params: Vec::new(),
         x1: -40.0,
         y1: -30.0,
         x2: 40.0,

@@ -912,6 +912,7 @@ mod tests {
 
         fn poly(owner_part_id: i32) -> Polyline {
             Polyline {
+                raw_params: Vec::new(),
                 points: vec![(-5.0, 0.0), (0.0, 8.0), (5.0, 0.0)],
                 line_width: 1,
                 color: 0,
@@ -929,6 +930,7 @@ mod tests {
 
         fn sch_arc(owner_part_id: i32) -> SchArc {
             SchArc {
+                raw_params: Vec::new(),
                 x: 0.0,
                 y: 0.0,
                 radius: 6.0,

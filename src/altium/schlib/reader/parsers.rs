@@ -156,6 +156,7 @@ pub(super) fn parse_rectangle(props: &HashMap<String, String>) -> Option<Rectang
     let transparent = props.get("transparent").is_some_and(|s| s == "T");
 
     Some(Rectangle {
+        raw_params: Vec::new(),
         x1,
         y1,
         x2,
@@ -203,6 +204,7 @@ pub(super) fn parse_line(props: &HashMap<String, String>) -> Option<Line> {
         .unwrap_or(1);
 
     Some(Line {
+        raw_params: Vec::new(),
         x1,
         y1,
         x2,
@@ -276,6 +278,7 @@ pub(super) fn parse_parameter(props: &HashMap<String, String>) -> Option<Paramet
         .unwrap_or(1);
 
     Some(Parameter {
+        raw_params: Vec::new(),
         name,
         value,
         x,
@@ -358,6 +361,7 @@ pub(super) fn parse_polyline(props: &HashMap<String, String>) -> Option<Polyline
         .unwrap_or(1);
 
     Some(Polyline {
+        raw_params: Vec::new(),
         points,
         line_width,
         color,
@@ -416,6 +420,7 @@ pub(super) fn parse_polygon(props: &HashMap<String, String>) -> Option<Polygon> 
         .unwrap_or(1);
 
     Some(Polygon {
+        raw_params: Vec::new(),
         points,
         line_width,
         line_color,
@@ -463,6 +468,7 @@ pub(super) fn parse_ellipse(props: &HashMap<String, String>) -> Option<Ellipse> 
         .unwrap_or(1);
 
     Some(Ellipse {
+        raw_params: Vec::new(),
         x,
         y,
         radius_x,
@@ -510,6 +516,7 @@ pub(super) fn parse_arc(props: &HashMap<String, String>) -> Option<Arc> {
         .unwrap_or(1);
 
     Some(Arc {
+        raw_params: Vec::new(),
         x,
         y,
         radius,
@@ -558,6 +565,7 @@ pub(super) fn parse_pie(props: &HashMap<String, String>) -> Option<Pie> {
         .unwrap_or(1);
 
     Some(Pie {
+        raw_params: Vec::new(),
         x,
         y,
         radius,
@@ -608,6 +616,7 @@ pub(super) fn parse_image(props: &HashMap<String, String>) -> Option<Image> {
         .unwrap_or(1);
 
     Some(Image {
+        raw_params: Vec::new(),
         x1,
         y1,
         x2,
@@ -686,6 +695,7 @@ pub(super) fn parse_text_frame(props: &HashMap<String, String>) -> Option<TextFr
         .unwrap_or(1);
 
     Some(TextFrame {
+        raw_params: Vec::new(),
         x1,
         y1,
         x2,
@@ -739,6 +749,7 @@ pub(super) fn parse_bezier(props: &HashMap<String, String>) -> Option<Bezier> {
         .unwrap_or(1);
 
     Some(Bezier {
+        raw_params: Vec::new(),
         x1,
         y1,
         x2,
@@ -789,6 +800,7 @@ pub(super) fn parse_round_rect(props: &HashMap<String, String>) -> Option<RoundR
         .unwrap_or(1);
 
     Some(RoundRect {
+        raw_params: Vec::new(),
         x1,
         y1,
         x2,
@@ -848,6 +860,7 @@ pub(super) fn parse_elliptical_arc(props: &HashMap<String, String>) -> Option<El
         .unwrap_or(1);
 
     Some(EllipticalArc {
+        raw_params: Vec::new(),
         x,
         y,
         radius,
@@ -890,6 +903,7 @@ pub(super) fn parse_label(props: &HashMap<String, String>) -> Option<Label> {
         .unwrap_or(1);
 
     Some(Label {
+        raw_params: Vec::new(),
         x,
         y,
         text,
@@ -933,6 +947,7 @@ pub(super) fn parse_text(props: &HashMap<String, String>) -> Option<Text> {
         .unwrap_or(1);
 
     Some(Text {
+        raw_params: Vec::new(),
         x,
         y,
         text,

@@ -76,6 +76,10 @@ long name goes `FileHeader` → `SectionKeys` → storage.
 
 ## PinWideText Stream
 
+A non-ASCII pin **name** is stored in the binary pin record as its **UTF-8 bytes** (every one
+of the golden's 52 such pins, `Résistance` included although Windows-1252 could hold it), with
+this stream carrying the wide form beside it; the pin's other strings are Windows-1252.
+
 Per-component, alongside `PinFrac` / `PinSymbolLineWidth`, in the shared compressed-storage
 framing (see the `/Storage` section): one zlib entry per pin whose name leaves ASCII, keyed by pin
 ordinal, payload a Unicode parameter block `[u32 LE byte_len][UTF-16LE "|NAME=<text>"]`.
@@ -499,6 +503,13 @@ The first record of each component's Data stream. Keys as written (in order):
 > A UI-typed Latin-1 description is stored as `%UTF8%ComponentDescription=<UTF-8 bytes>|||`
 > `ComponentDescription=<Windows-1252 bytes>` (twin first, two empty segments, code-page
 > plain key); a scripted one puts UTF-8 bytes in both keys.
+
+Every content record is carried the same way — `raw_params` on each record struct holds its
+segments as read — and replayed verbatim where the field behind a segment is unchanged: the
+UI omits `LineWidth=1` on a rectangle where a script writes it, stores a Latin-1 label as
+`%UTF8%Text=<UTF-8>|||Text=<Windows-1252>`, and may carry keys this crate does not model,
+all of which come back as stored; an edited field takes its canonical form, a cleared flag's
+key is dropped, and the positional `IndexInSheet` is always recomputed.
 
 The **system parameter** is Altium's own `Comment` record alone (with the Designator
 record): stored after the designator with `IndexInSheet=-1` and no counter slot. A user

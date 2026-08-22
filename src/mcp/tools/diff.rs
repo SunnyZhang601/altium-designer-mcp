@@ -625,6 +625,7 @@ mod tests {
 
         fn sch_arc() -> crate::altium::schlib::Arc {
             crate::altium::schlib::Arc {
+                raw_params: Vec::new(),
                 x: 0.0,
                 y: 0.0,
                 radius: 6.0,
@@ -642,6 +643,7 @@ mod tests {
 
         fn sch_poly() -> Polyline {
             Polyline {
+                raw_params: Vec::new(),
                 points: vec![(0.0, 0.0), (5.0, 5.0)],
                 line_width: 1,
                 color: 0,

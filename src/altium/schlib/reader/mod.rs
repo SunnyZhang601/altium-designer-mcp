@@ -122,6 +122,21 @@ fn contains_utf8_marker(data: &[u8]) -> bool {
         .any(|w| w.eq_ignore_ascii_case(MARKER))
 }
 
+/// A text record's segments exactly as stored: every `key=value` in order,
+/// an empty segment (the UI's `%UTF8%Key=…|||Key=…` form) as `("", "")`.
+fn record_segments(text: &str) -> Vec<(String, String)> {
+    text.trim_end_matches('\0')
+        .split('|')
+        .skip(1)
+        .map(|segment| {
+            segment.split_once('=').map_or_else(
+                || (segment.to_string(), String::new()),
+                |(key, value)| (key.to_string(), value.to_string()),
+            )
+        })
+        .collect()
+}
+
 /// [`parse_text_record_from_string`] for the writer's tests.
 #[cfg(test)]
 pub(crate) fn parse_text_record_from_string_for_test(symbol: &mut Symbol, text: &str) {
@@ -180,27 +195,19 @@ fn parse_text_record_from_string(symbol: &mut Symbol, text: &str) {
             // included, because the UI writes a `%UTF8%` twin as
             // `%UTF8%Key=…|||Key=…` — so the writer reproduces this header
             // rather than the canonical one.
-            symbol.header_params = text
-                .trim_end_matches('\0')
-                .split('|')
-                .skip(1)
-                .map(|segment| {
-                    segment.split_once('=').map_or_else(
-                        || (segment.to_string(), String::new()),
-                        |(key, value)| (key.to_string(), value.to_string()),
-                    )
-                })
-                .collect();
+            symbol.header_params = record_segments(text);
         }
         14 => {
             // Rectangle
-            if let Some(rect) = parse_rectangle(&props) {
+            if let Some(mut rect) = parse_rectangle(&props) {
+                rect.raw_params = record_segments(text);
                 symbol.add_rectangle(rect);
             }
         }
         13 => {
             // Line
-            if let Some(line) = parse_line(&props) {
+            if let Some(mut line) = parse_line(&props) {
+                line.raw_params = record_segments(text);
                 symbol.add_line(line);
             }
         }
@@ -219,7 +226,8 @@ fn parse_text_record_from_string(symbol: &mut Symbol, text: &str) {
         }
         41 => {
             // Parameter
-            if let Some(param) = parse_parameter(&props) {
+            if let Some(mut param) = parse_parameter(&props) {
+                param.raw_params = record_segments(text);
                 symbol.add_parameter(param);
             }
         }
@@ -244,73 +252,85 @@ fn parse_text_record_from_string(symbol: &mut Symbol, text: &str) {
         }
         6 => {
             // Polyline
-            if let Some(polyline) = parse_polyline(&props) {
+            if let Some(mut polyline) = parse_polyline(&props) {
+                polyline.raw_params = record_segments(text);
                 symbol.add_polyline(polyline);
             }
         }
         8 => {
             // Ellipse
-            if let Some(ellipse) = parse_ellipse(&props) {
+            if let Some(mut ellipse) = parse_ellipse(&props) {
+                ellipse.raw_params = record_segments(text);
                 symbol.add_ellipse(ellipse);
             }
         }
         9 => {
             // Pie (filled circular sector)
-            if let Some(pie) = parse_pie(&props) {
+            if let Some(mut pie) = parse_pie(&props) {
+                pie.raw_params = record_segments(text);
                 symbol.add_pie(pie);
             }
         }
         30 => {
             // Image (embedded/linked picture)
-            if let Some(image) = parse_image(&props) {
+            if let Some(mut image) = parse_image(&props) {
+                image.raw_params = record_segments(text);
                 symbol.add_image(image);
             }
         }
         28 => {
             // Text frame (bordered multi-line text box)
-            if let Some(text_frame) = parse_text_frame(&props) {
+            if let Some(mut text_frame) = parse_text_frame(&props) {
+                text_frame.raw_params = record_segments(text);
                 symbol.add_text_frame(text_frame);
             }
         }
         12 => {
             // Arc
-            if let Some(arc) = parse_arc(&props) {
+            if let Some(mut arc) = parse_arc(&props) {
+                arc.raw_params = record_segments(text);
                 symbol.add_arc(arc);
             }
         }
         3 => {
             // Text annotation
-            if let Some(text) = parse_text(&props) {
-                symbol.add_text(text);
+            if let Some(mut annotation) = parse_text(&props) {
+                annotation.raw_params = record_segments(text);
+                symbol.add_text(annotation);
             }
         }
         4 => {
             // Label
-            if let Some(label) = parse_label(&props) {
+            if let Some(mut label) = parse_label(&props) {
+                label.raw_params = record_segments(text);
                 symbol.add_label(label);
             }
         }
         5 => {
             // Bezier curve
-            if let Some(bezier) = parse_bezier(&props) {
+            if let Some(mut bezier) = parse_bezier(&props) {
+                bezier.raw_params = record_segments(text);
                 symbol.add_bezier(bezier);
             }
         }
         7 => {
             // Polygon
-            if let Some(polygon) = parse_polygon(&props) {
+            if let Some(mut polygon) = parse_polygon(&props) {
+                polygon.raw_params = record_segments(text);
                 symbol.add_polygon(polygon);
             }
         }
         10 => {
             // Rounded Rectangle
-            if let Some(round_rect) = parse_round_rect(&props) {
+            if let Some(mut round_rect) = parse_round_rect(&props) {
+                round_rect.raw_params = record_segments(text);
                 symbol.add_round_rect(round_rect);
             }
         }
         11 => {
             // Elliptical Arc
-            if let Some(elliptical_arc) = parse_elliptical_arc(&props) {
+            if let Some(mut elliptical_arc) = parse_elliptical_arc(&props) {
+                elliptical_arc.raw_params = record_segments(text);
                 symbol.add_elliptical_arc(elliptical_arc);
             }
         }
@@ -484,6 +504,7 @@ mod tests {
         // encode -> decode via the writer/reader keeps the four flags on a shape.
         use crate::altium::schlib::writer;
         let mut label = Label {
+            raw_params: Vec::new(),
             x: 0.0,
             y: 0.0,
             text: "L".to_string(),

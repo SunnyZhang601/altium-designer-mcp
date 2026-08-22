@@ -559,6 +559,15 @@ pub struct LibraryMetadata {
     /// Component descriptions by index from `CompDescr{N}` fields.
     pub component_descriptions: Vec<String>,
 
+    /// The library's own 8-character `UniqueId` from the `FileHeader`, kept
+    /// for the library's lifetime as Altium keeps it; a library built from
+    /// scratch is given one on its first save.
+    pub unique_id: Option<String>,
+
+    /// The `PADVIALIBRARY.LIBRARYID` of `/Library/PadViaLibrary`, likewise
+    /// kept across saves rather than minted afresh each time.
+    pub pad_via_library_id: Option<String>,
+
     /// The `/Library/Data` parameter block exactly as it was read, without its
     /// length prefix or trailing null.
     ///
@@ -639,13 +648,17 @@ impl PcbLib {
     /// Saves the library to a file.
     ///
     /// Uses atomic write: writes to a temporary file first, then renames on success.
-    /// This prevents data loss if the write fails partway through.
+    /// This prevents data loss if the write fails partway through. The library
+    /// then belongs to `path`: the `FILENAME` Altium stores in `/Library/Data`
+    /// is the file being written, not the one it was read from.
     ///
     /// # Errors
     ///
     /// Returns an error if the file cannot be written.
     pub fn save(&mut self, path: impl AsRef<std::path::Path>) -> AltiumResult<()> {
-        crate::altium::save_atomic(path.as_ref(), "pcblib.tmp", |file| self.write(file))
+        let path = path.as_ref();
+        self.filepath = Some(path.display().to_string());
+        crate::altium::save_atomic(path, "pcblib.tmp", |file| self.write(file))
     }
 
     /// Returns the number of footprints in the library.

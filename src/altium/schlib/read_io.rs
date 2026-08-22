@@ -22,6 +22,7 @@ impl SchLib {
 
         // Read FileHeader to get component list
         let header = read_file_header(&mut cfb)?;
+        lib.unique_id.clone_from(&header.unique_id);
 
         // Components are discovered by walking the storages that actually hold a
         // `Data` stream, with the FileHeader's LibRef list used only for ordering
@@ -181,6 +182,7 @@ fn apply_pin_aux_streams<R: Read + Seek>(
 struct FileHeader {
     component_names: Vec<String>,
     component_descriptions: HashMap<String, String>,
+    unique_id: Option<String>,
 }
 
 /// Reads the `FileHeader` stream.
@@ -278,6 +280,7 @@ fn read_file_header<R: Read + Seek>(cfb: &mut CompoundFile<R>) -> AltiumResult<F
     Ok(FileHeader {
         component_names,
         component_descriptions,
+        unique_id: props.get("uniqueid").cloned(),
     })
 }
 

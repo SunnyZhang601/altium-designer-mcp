@@ -107,6 +107,10 @@ pub struct SchLib {
     filepath: Option<String>,
     /// Symbols in the library, keyed by name (insertion order preserved).
     symbols: IndexMap<String, Symbol>,
+    /// The library's own `UniqueID` from its `FileHeader`, kept for the
+    /// library's lifetime as Altium keeps it; a library built from scratch
+    /// is given one on its first save.
+    unique_id: Option<String>,
 }
 
 impl SchLib {

@@ -465,8 +465,9 @@ fn is_modelled_record_key(key: &str) -> bool {
 /// its omitted default — see [`MODELLED_RECORD_KEYS`]) and replayed verbatim
 /// otherwise, as an Altium key this crate does not model. Canonical keys the
 /// record lacked are appended, except an [`IMPLICIT_DEFAULTS`] value the
-/// file left implicit. A record without raw segments — built from scratch —
-/// is the canonical form.
+/// file left implicit and a `UniqueID` the file never gave the record, which
+/// would be invented afresh on every save. A record without raw segments —
+/// built from scratch — is the canonical form.
 fn replay_record(canonical: &str, raw: &[(String, String)]) -> String {
     if raw.is_empty() {
         return canonical.to_string();
@@ -529,7 +530,11 @@ fn replay_record(canonical: &str, raw: &[(String, String)]) -> String {
         let implicit = IMPLICIT_DEFAULTS
             .iter()
             .any(|(k, v)| k.eq_ignore_ascii_case(key) && v == value);
-        if !placed[i] && !implicit {
+        // An identity the file never gave the record (Altium stores a pie
+        // without one) is not invented on its behalf: the canonical UniqueID
+        // here would be freshly generated, different on every save.
+        let invented_identity = key.eq_ignore_ascii_case("UniqueID");
+        if !placed[i] && !implicit && !invented_identity {
             parts.push(format!("{key}={value}"));
         }
     }
@@ -1753,13 +1758,14 @@ pub fn encode_data_stream(symbol: &Symbol) -> crate::altium::error::AltiumResult
 ///
 /// * `symbols` - The symbols to encode
 /// * `ole_names` - OLE-safe storage names for each symbol (≤31 chars, unique)
+/// * `unique_id` - The library's own identity, kept across saves
 #[must_use]
-pub fn encode_file_header(symbols: &[&Symbol], ole_names: &[String]) -> Vec<u8> {
+pub fn encode_file_header(symbols: &[&Symbol], ole_names: &[String], unique_id: &str) -> Vec<u8> {
     let mut parts = vec![
         "HEADER=Protel for Windows - Schematic Library Editor Binary File Version 5.0".to_string(),
         "Weight=47".to_string(),
         "MinorVersion=9".to_string(),
-        format!("UniqueID={}", generate_unique_id()),
+        format!("UniqueID={unique_id}"),
         "FontIdCount=1".to_string(),
         "Size1=10".to_string(),
         "FontName1=Times New Roman".to_string(),
@@ -2833,7 +2839,7 @@ mod tests {
         let symbols = vec![&symbol];
         let ole_names = vec!["TEST_SYMBOL".to_string()];
 
-        let data = encode_file_header(&symbols, &ole_names);
+        let data = encode_file_header(&symbols, &ole_names, "ABCDEFGH");
 
         // Should start with length
         assert!(data.len() > 4);
@@ -2858,7 +2864,7 @@ mod tests {
         let symbols = vec![&symbol];
         let ole_names = vec!["A".repeat(31)];
 
-        let data = encode_file_header(&symbols, &ole_names);
+        let data = encode_file_header(&symbols, &ole_names, "ABCDEFGH");
 
         let text = String::from_utf8_lossy(&data[4..]);
         assert!(

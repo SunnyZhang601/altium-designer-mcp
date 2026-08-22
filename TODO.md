@@ -12,14 +12,6 @@ record). The specialised worklists stay the single source of truth for their are
 
 Found while fixing something else; each needs its own verification or a fixture first.
 
-- [ ] **SchLib header `UniqueID` (RECORD=1) is dropped on write** — Altium stores one per
-      component (`|RECORD=1|...|UniqueID=PMHDDPDX`); `Symbol` has no field for it, so the
-      writer omits it and Altium presumably re-generates it. Excused today via
-      `VOLATILE_KEYS` in `tests/golden_fidelity.rs`. Carry it like `designator_unique_id`.
-- [ ] **Shapes the golden stores without a `UniqueID` (pies) get a fresh random one per
-      save** — `encode_pie` always emits `UniqueID=`, so two saves of the same library
-      differ. Either Altium accepts an absent key (omit when `None`, matching the golden)
-      or the fixture is an outlier; settle against Altium, then make saves deterministic.
 - [ ] **`EllipticalArc` and `Text` (RECORD=11 / RECORD=3) carry no display flags**
       (`graphically_locked`, `disabled`, `dimmed`, `owner_part_display_mode`) in the model,
       while the other 13 graphics do — almost certainly a gap, but no golden record exists

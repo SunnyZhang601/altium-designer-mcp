@@ -31,24 +31,28 @@ impl SchLib {
                 message: format!("symbol {i} has an empty name"),
             });
         }
+        // Storage names use the on-wire form — a name Windows-1252 cannot
+        // hold becomes its UTF-8 bytes one char per byte — which is the form
+        // the reader looks a header entry up by, so every symbol keeps its
+        // place in the library on a read-modify-write (an ASCII-keyed rule
+        // sent every Latin-1 name to the end of the list on the next read).
         let storage_names: Vec<String> = symbols
             .iter()
-            .map(|s| {
-                if s.name.is_ascii() {
-                    s.name.clone()
-                } else {
-                    crate::altium::encode_utf8_param_value(&s.name)
-                }
-            })
+            .map(|s| crate::altium::to_wire_text(&s.name))
             .collect();
         // OLE-safe storage names (handles long names + collisions).
         let ole_names = crate::altium::generate_ole_names(storage_names.iter().map(String::as_str));
 
-        // FileHeader stream.
+        // FileHeader stream. The library keeps the UniqueID it was read
+        // with; one built from scratch is given its first here.
+        let unique_id = self
+            .unique_id
+            .clone()
+            .unwrap_or_else(crate::util::generate_unique_id);
         crate::altium::write_stream(
             &mut cfb,
             "/FileHeader",
-            &writer::encode_file_header(&symbols, &ole_names),
+            &writer::encode_file_header(&symbols, &ole_names, &unique_id),
         )?;
 
         // Root SectionKeys stream: the LibRef -> storage-name map for every

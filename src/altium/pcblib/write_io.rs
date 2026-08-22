@@ -315,7 +315,13 @@ impl PcbLib {
         #[allow(clippy::cast_possible_truncation)]
         let len = version_string.len() as u32;
 
-        let unique_id = crate::util::generate_unique_id();
+        // The library keeps the UniqueId it was read with; one built from
+        // scratch is given its first here.
+        let unique_id = self
+            .metadata
+            .unique_id
+            .clone()
+            .unwrap_or_else(crate::util::generate_unique_id);
         let uid_bytes = unique_id.as_bytes();
         #[allow(clippy::cast_possible_truncation)]
         let uid_len = uid_bytes.len() as u32; // always 8
@@ -443,10 +449,15 @@ impl PcbLib {
         lkm.extend_from_slice(&0u32.to_le_bytes()); // entry count
         Self::write_meta_storage(cfb, "/Library/LayerKindMapping", 1, &lkm)?;
 
-        // PadViaLibrary: empty cache with a fresh library id.
-        let guid = Uuid::new_v4().to_string().to_uppercase();
+        // PadViaLibrary: empty cache under the library id it was read with
+        // (a fresh one for a library built from scratch).
+        let library_id = self
+            .metadata
+            .pad_via_library_id
+            .clone()
+            .unwrap_or_else(|| format!("{{{}}}", Uuid::new_v4().to_string().to_uppercase()));
         let pvl = Self::param_block(&format!(
-            "|PADVIALIBRARY.LIBRARYID={{{guid}}}|PADVIALIBRARY.LIBRARYNAME=<Local>|PADVIALIBRARY.DISPLAYUNITS=1"
+            "|PADVIALIBRARY.LIBRARYID={library_id}|PADVIALIBRARY.LIBRARYNAME=<Local>|PADVIALIBRARY.DISPLAYUNITS=1"
         ));
         Self::write_meta_storage(cfb, "/Library/PadViaLibrary", 0, &pvl)?;
 

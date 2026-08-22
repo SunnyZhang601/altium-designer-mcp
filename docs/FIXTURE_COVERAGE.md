@@ -133,10 +133,9 @@ its `ImplementationList`/`MapDefiner` children) — the `FootprintModel` replay 
 `unique_id`/`is_current` is unit-tested only.
 
 **PcbLib:** region net and the cavity/subpoly params, raw-outline precision for ComponentBody.
-A **non-embedded STEP reference** (`MODEL.EMBED=FALSE` + `MODEL.NAME`, and whatever
-`/Library/ModelsNoEmbed` holds for it) — `write_pcblib`'s `step_model.embed: false`
-now writes the MODEL group with a fresh MODELID, but the form is unverified against
-Altium. A **text beyond U+00FF** (Ω, CJK) so a golden pins `WideStrings` as UTF-16
+A **non-embedded STEP reference** in the *generated* golden — the form itself is settled
+by a UI-authored library (`MODELID=` empty, `MODEL.EMBED=FALSE`, `MODEL.NAME`, the full
+group; `/Library/ModelsNoEmbed` stays empty) and `write_pcblib` follows it. A **text beyond U+00FF** (Ω, CJK) so a golden pins `WideStrings` as UTF-16
 code units (today only AltiumSharp and the Latin-1 `10µF` of `TEXT_WIN1252` do).
 Pad thermal-relief / power-plane is
 🚫 **FINAL** on the scripting side (native crash on a fresh library pad in every sequence

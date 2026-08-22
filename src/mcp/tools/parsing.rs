@@ -753,23 +753,21 @@ impl McpServer {
                     });
                 } else {
                     // External reference only: a model-backed body whose file
-                    // stays outside the library. The writer emits the MODEL.*
-                    // group — MODEL.EMBED=FALSE and MODEL.NAME carrying the
-                    // full path, so organised subfolders resolve — only for a
-                    // body with a MODELID, so the reference gets a fresh one
-                    // here or the path would not reach the file at all. No
-                    // golden carries a non-embedded model; the form follows
-                    // the group Altium writes for embedded ones.
+                    // stays outside the library. Altium stores such a body with
+                    // an EMPTY MODELID and the MODEL.* group carrying
+                    // MODEL.EMBED=FALSE and MODEL.NAME (a UI-authored
+                    // `test_0805.step` reference), and the writer emits the
+                    // group for any body that names a file. The full path is
+                    // kept so organised subfolders resolve.
                     use crate::altium::pcblib::{ComponentBody, Layer};
-                    let model_id =
-                        format!("{{{}}}", uuid::Uuid::new_v4().to_string().to_uppercase());
                     footprint.add_component_body(ComponentBody {
-                        model_id,
+                        model_id: String::new(),
                         identifier: String::new(),
                         texture_center_x: None,
                         texture_center_y: None,
                         texture_size_x: None,
                         texture_size_y: None,
+                        texture_rotation: None,
                         raw_layer_id: None,
                         v7_layer: None,
                         model_name: model_path.to_string(), // Preserve full path
@@ -808,6 +806,7 @@ impl McpServer {
                         polygon_index: 0xFFFF,
                         component_index: -1,
                         additional_parameters: Vec::new(),
+                        param_key_order: Vec::new(),
                     });
                 }
             }
@@ -1653,6 +1652,7 @@ impl McpServer {
             texture_center_y: json_guidless_opt(body_json, "texture_center_y"),
             texture_size_x: json_guidless_opt(body_json, "texture_size_x"),
             texture_size_y: json_guidless_opt(body_json, "texture_size_y"),
+            texture_rotation: json_guidless_opt(body_json, "texture_rotation"),
             raw_layer_id: body_json
                 .get("raw_layer_id")
                 .and_then(Value::as_u64)
@@ -1744,6 +1744,7 @@ impl McpServer {
                 .and_then(|v| i32::try_from(v).ok())
                 .unwrap_or(-1),
             additional_parameters: Self::parse_additional_parameters(body_json),
+            param_key_order: Self::parse_key_order(body_json),
         }
     }
 

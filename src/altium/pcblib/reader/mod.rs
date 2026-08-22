@@ -435,7 +435,20 @@ fn read_flags(data: &[u8]) -> PcbFlags {
     if bits & ALT_FLAG_KEEPOUT != 0 {
         flags |= PcbFlags::KEEPOUT;
     }
+    // Bits nothing models are carried verbatim, not dropped.
+    for (disk_bit, carrier) in PcbFlags::DISK_BITS {
+        if bits & disk_bit != 0 {
+            flags |= carrier;
+        }
+    }
     flags
+}
+
+/// [`read_flags`] on a bare flag word, for the writer's round-trip test.
+#[cfg(test)]
+pub fn read_flags_for_test(word: u16) -> PcbFlags {
+    let [lo, hi] = word.to_le_bytes();
+    read_flags(&[0, lo, hi])
 }
 
 /// Converts Altium layer ID to our Layer enum.

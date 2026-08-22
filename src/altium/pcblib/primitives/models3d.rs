@@ -225,6 +225,11 @@ pub struct ComponentBody {
     /// The `TEXTURESIZEY` value, verbatim wire text (see `texture_center_x`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub texture_size_y: Option<String>,
+    /// The `TEXTUREROTATION` value, verbatim wire text (see `texture_center_x`);
+    /// a UI-authored body rotates its texture (`terminal_block_5mm_3way` carries
+    /// ` 9.00000000000000E+0001`), so it is carried rather than reset to zero.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub texture_rotation: Option<String>,
 
     /// The header layer byte exactly as read, kept only when `layer_from_id`
     /// hit its `MultiLayer` catch-all on an id it does not map — the byte
@@ -271,6 +276,13 @@ pub struct ComponentBody {
     /// the output stays byte-identical to the canonical form.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub additional_parameters: Vec<(String, String)>,
+    /// The keys of the parameter block in the order they were read, canonical
+    /// and unmodelled alike, so the writer emits them in Altium's order — a
+    /// UI-authored body stores `BODYOVERRIDECOLOR=TRUE` right after
+    /// `BODYOPACITY3D`, not appended. Empty for a from-scratch body, which
+    /// emits the canonical order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub param_key_order: Vec<String>,
 }
 
 const fn default_body_color() -> u32 {
@@ -343,12 +355,14 @@ impl ComponentBody {
             texture_center_y: None,
             texture_size_x: None,
             texture_size_y: None,
+            texture_rotation: None,
             raw_layer_id: None,
             v7_layer: None,
             net_index: default_net_index(),
             polygon_index: default_polygon_index(),
             component_index: default_component_index(),
             additional_parameters: Vec::new(),
+            param_key_order: Vec::new(),
         }
     }
 }

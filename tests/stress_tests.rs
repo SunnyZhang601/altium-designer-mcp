@@ -871,6 +871,7 @@ fn test_component_body_roundtrip() {
         texture_center_y: None,
         texture_size_x: None,
         texture_size_y: None,
+        texture_rotation: None,
         model_name: "RESC0603.step".to_string(),
         embedded: false, // External reference (not embedded in library)
         rotation_x: 0.0,
@@ -900,6 +901,7 @@ fn test_component_body_roundtrip() {
         polygon_index: 0xFFFF,
         component_index: -1,
         additional_parameters: Vec::new(),
+        param_key_order: Vec::new(),
     };
     fp.component_bodies.push(body);
 
@@ -941,6 +943,7 @@ fn test_component_body_with_rotation() {
         texture_center_y: None,
         texture_size_x: None,
         texture_size_y: None,
+        texture_rotation: None,
         model_name: "SOIC8.step".to_string(),
         embedded: false,
         rotation_x: 0.0,
@@ -970,6 +973,7 @@ fn test_component_body_with_rotation() {
         polygon_index: 0xFFFF,
         component_index: -1,
         additional_parameters: Vec::new(),
+        param_key_order: Vec::new(),
     };
     fp.component_bodies.push(body);
 
@@ -2781,6 +2785,7 @@ fn test_component_body_external_model_reference() {
         texture_center_y: None,
         texture_size_x: None,
         texture_size_y: None,
+        texture_rotation: None,
         model_name: "external_model.step".to_string(),
         embedded: false, // External reference
         rotation_x: 0.0,
@@ -2810,6 +2815,7 @@ fn test_component_body_external_model_reference() {
         polygon_index: 0xFFFF,
         component_index: -1,
         additional_parameters: Vec::new(),
+        param_key_order: Vec::new(),
     };
     fp.component_bodies.push(body);
 

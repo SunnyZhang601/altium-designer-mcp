@@ -864,19 +864,15 @@ impl McpServer {
                             .iter()
                             .map(|pad| {
                                 let mut pad_json = serde_json::to_value(pad).unwrap();
-                                // Remove per-layer data if stack_mode is Simple OR all values are uniform
-                                let should_strip = pad.stack_mode == PadStackMode::Simple
-                                    || Self::pad_has_uniform_per_layer_data(pad);
-                                if should_strip {
+                                // Only a Simple pad's per-layer arrays are redundant; a
+                                // stacked pad keeps them and its stack_mode even when
+                                // every layer matches (see read_pcblib's compact mode).
+                                if pad.stack_mode == PadStackMode::Simple {
                                     if let Value::Object(ref mut obj) = pad_json {
                                         obj.remove("per_layer_sizes");
                                         obj.remove("per_layer_shapes");
                                         obj.remove("per_layer_corner_radii");
                                         obj.remove("per_layer_offsets");
-                                        // Downgrade stack_mode to simple if we stripped uniform data
-                                        if pad.stack_mode != PadStackMode::Simple {
-                                            obj.insert("stack_mode".to_string(), json!("simple"));
-                                        }
                                     }
                                 }
                                 pad_json
@@ -1895,6 +1891,27 @@ mod tests {
         }));
         assert!(result.is_error);
         assert!(get_result_text(&result).contains("invalid base64"));
+
+        // A model entry without an id, or without data, is rejected by name.
+        for (entry, expected) in [
+            (json!({ "name": "x.step", "data": "AAEC" }), "has no 'id'"),
+            (json!({ "id": "{2}", "name": "x.step" }), "has no 'data'"),
+        ] {
+            let result = server.call_import_library(&json!({
+                "output_path": dir.path().join("Malformed.PcbLib").to_string_lossy(),
+                "json_data": {
+                    "file_type": "PcbLib",
+                    "footprints": [],
+                    "embedded_models": [entry],
+                },
+            }));
+            assert!(result.is_error, "{expected}");
+            assert!(
+                get_result_text(&result).contains(expected),
+                "{}",
+                get_result_text(&result)
+            );
+        }
     }
 
     /// Export → import is the backup/restore loop, so the footprint's kind-85
@@ -3245,13 +3262,12 @@ mod tests {
             assert!(!parsed["error"].as_str().unwrap().is_empty());
         }
 
-        // Compact export strips the per-layer arrays when every layer holds the
-        // same geometry — so it must also downgrade stack_mode to "simple".
-        // Left saying "full_stack", the payload describes a pad with
-        // independent per-layer geometry whose per-layer data is gone, and
-        // re-importing it loses the pad's real size.
+        // Compact export strips the per-layer arrays of a Simple pad only. A
+        // stacked pad keeps its arrays and its stack_mode even when every
+        // layer matches — so a re-import gets the pad back exactly, with the
+        // tapered stack's wider layer-0 land and the uniform stack's mode.
         #[test]
-        fn export_pcblib_compact_downgrades_uniform_full_stack_pads() {
+        fn export_pcblib_compact_keeps_stacked_pads_intact() {
             let dir = test_temp_dir();
             let server = create_test_server(dir.path());
 
@@ -3266,9 +3282,12 @@ mod tests {
             tapered_sizes[0] = (1.2, 0.5);
             tapered.per_layer_sizes = Some(tapered_sizes);
 
+            let simple = Pad::smd("3", 4.0, 0.0, 0.6, 0.5);
+
             let mut fp = Footprint::new("FULLSTACK");
             fp.add_pad(uniform);
             fp.add_pad(tapered);
+            fp.add_pad(simple);
             let mut lib = PcbLib::new();
             lib.add(fp);
             let path = dir.path().join("FullStack.PcbLib");
@@ -3279,49 +3298,30 @@ mod tests {
                 "format": "json",
                 "compact": true,
             })));
-            let exported = &parsed["footprints"][0]["pads"][0];
-            assert_eq!(
-                exported["stack_mode"], "simple",
-                "a stripped pad must not still claim a full stack: {exported}"
-            );
-            for stripped in [
-                "per_layer_sizes",
-                "per_layer_shapes",
-                "per_layer_corner_radii",
-                "per_layer_offsets",
-            ] {
-                assert!(
-                    exported.get(stripped).is_none(),
-                    "uniform {stripped} must be stripped: {exported}"
+            let pads = &parsed["footprints"][0]["pads"];
+            for (i, label) in [(0, "uniform"), (1, "tapered")] {
+                assert_eq!(
+                    pads[i]["stack_mode"], "full_stack",
+                    "{label} stack keeps its mode: {}",
+                    pads[i]
+                );
+                assert_eq!(
+                    pads[i]["per_layer_sizes"].as_array().map(Vec::len),
+                    Some(32),
+                    "{label} stack keeps its per-layer sizes: {}",
+                    pads[i]
                 );
             }
-            // The pad's real geometry has to survive the strip, or the compact
-            // form describes a pad of unknown size.
-            let width = exported["width"].as_f64().unwrap();
-            assert!((width - 0.6).abs() < 1e-3, "width lost: {exported}");
-
-            // The tapered pad's per-layer sizes are not redundant: stripping
-            // them would export a plain 0.6 mm pad and silently lose the wider
-            // layer-0 land the part actually needs.
-            let tapered = &parsed["footprints"][0]["pads"][1];
-            assert_eq!(
-                tapered["stack_mode"], "full_stack",
-                "a non-uniform stack must keep its mode: {tapered}"
-            );
-            let sizes = tapered["per_layer_sizes"]
-                .as_array()
-                .unwrap_or_else(|| panic!("per-layer sizes must be kept: {tapered}"));
+            let layer0 = &pads[1]["per_layer_sizes"][0];
+            assert!((layer0[0].as_f64().unwrap() - 1.2).abs() < 1e-3, "{layer0}");
+            assert_eq!(pads[2]["stack_mode"], "simple");
             assert!(
-                (sizes[0][0].as_f64().unwrap() - 1.2).abs() < 1e-3,
-                "the wider layer-0 size must survive: {tapered}"
+                pads[2].get("per_layer_sizes").is_none(),
+                "a Simple pad's arrays are stripped: {}",
+                pads[2]
             );
         }
 
-        // ---------- import_library ----------
-
-        // Import writes a file. Without the sandbox check it would be an
-        // arbitrary-file writer, which is the one thing the server must never
-        // become.
         #[test]
         fn import_library_rejects_path_outside_allowed_roots() {
             let allowed = test_temp_dir();
@@ -3683,7 +3683,7 @@ mod tests {
     mod degenerate_libraries {
         use crate::altium::pcblib::{Arc, Footprint, Layer, Pad, PcbLib, Track};
         use crate::mcp::tools::test_support::{
-            create_test_server, get_result_text, parse_result_json, test_temp_dir,
+            create_test_server, parse_result_json, test_temp_dir,
         };
         use serde_json::json;
 
@@ -3764,45 +3764,6 @@ mod tests {
                 .collect::<Vec<_>>()
                 .join("\n");
             assert!(issues.contains("no pads"), "{issues}");
-        }
-
-        #[test]
-        fn export_strips_a_uniform_stack_the_same_way_read_does() {
-            // export_library carries its own copy of the compact-pad logic, so
-            // a FullStack pad whose 32 layers all match reports as simple here
-            // too rather than dragging the redundant arrays into the JSON.
-            let dir = test_temp_dir();
-            let server = create_test_server(dir.path());
-            let path = dir.path().join("Stack.PcbLib");
-            let uniform: Vec<serde_json::Value> = (0..32)
-                .map(|_| json!({ "width": 1.0, "height": 1.0 }))
-                .collect();
-
-            let written = server.call_write_pcblib(&json!({
-                "filepath": path.to_string_lossy(),
-                "footprints": [{
-                    "name": "FP",
-                    "pads": [{
-                        "designator": "1", "x": 0.0, "y": 0.0, "width": 1.0, "height": 1.0,
-                        "stack_mode": "full_stack", "per_layer_sizes": uniform,
-                    }],
-                }],
-            }));
-            assert!(!written.is_error, "{}", get_result_text(&written));
-
-            let exported = server.call_export_library(&json!({
-                "filepath": path.to_string_lossy(),
-                "format": "json",
-                "compact": true,
-            }));
-            assert!(!exported.is_error, "{}", get_result_text(&exported));
-
-            let text = get_result_text(&exported);
-            assert!(text.contains("\"simple\""), "stack not downgraded: {text}");
-            assert!(
-                !text.contains("per_layer_sizes"),
-                "redundant stack arrays survived the export: {text}"
-            );
         }
     }
 }

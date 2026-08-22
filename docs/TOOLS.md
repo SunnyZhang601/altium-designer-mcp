@@ -593,7 +593,8 @@ sharing components between projects.
 ## `merge_libraries`
 
 Merge multiple Altium libraries into a single library. All source libraries must be the same type (all PcbLib or all SchLib). Components are copied from each source into
-the target library. Use dry_run=true to preview what would be merged.
+the target library, together with the embedded 3D models their bodies reference (a model shared by several footprints is copied once; a body whose model is missing from
+its source is merged as-is and reported in warnings). External STEP file references are carried unchanged. Use dry_run=true to preview what would be merged.
 
 **Example**
 

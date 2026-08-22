@@ -1370,7 +1370,8 @@ mod tests {
         let mut sym_json = serde_json::to_value(&symbol).expect("serialise symbol");
         sym_json["description"] = json!("after");
 
-        let result = McpServer::update_schlib_component(
+        let server = McpServer::new(vec![temp.path().to_path_buf()]);
+        let result = server.update_schlib_component(
             &lib_path.to_string_lossy(),
             "FAMILIES",
             &sym_json,

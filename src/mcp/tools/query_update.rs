@@ -47,7 +47,7 @@ impl McpServer {
                         "Missing required parameter: symbol (required for .SchLib files)",
                     );
                 };
-                Self::update_schlib_component(filepath, component_name, sym_json, dry_run)
+                self.update_schlib_component(filepath, component_name, sym_json, dry_run)
             }
             _ => ToolCallResult::error("Unknown file type. Expected .PcbLib or .SchLib extension."),
         }
@@ -256,12 +256,13 @@ impl McpServer {
     /// Updates a symbol in-place within a `SchLib` file.
     #[allow(clippy::too_many_lines)]
     pub(crate) fn update_schlib_component(
+        &self,
         filepath: &str,
         component_name: &str,
         sym_json: &Value,
         dry_run: bool,
     ) -> ToolCallResult {
-        use crate::altium::schlib::{SchLib, Symbol};
+        use crate::altium::schlib::SchLib;
 
         // Read the library
         let mut library = match SchLib::open(filepath) {
@@ -279,223 +280,21 @@ impl McpServer {
             ));
         }
 
-        // Parse the replacement symbol
-        let name = sym_json
-            .get("name")
-            .and_then(Value::as_str)
-            .unwrap_or(component_name);
-        let mut symbol = Symbol::new(name);
-
-        if let Some(desc) = sym_json.get("description").and_then(Value::as_str) {
-            symbol.description = desc.to_string();
-        }
-
-        if let Some(designator) = sym_json.get("designator").and_then(Value::as_str) {
-            symbol.designator = designator.to_string();
-        }
-
-        // Parse part_count and the other symbol header fields (mirrors the
-        // create path for part_count; the rest are returned by get_component,
-        // so a read-modify-write must not reset them to defaults — omitting
-        // part_count here silently collapsed a multi-part symbol to one part).
-        if let Some(part_count) = sym_json.get("part_count").and_then(Value::as_u64) {
-            #[allow(clippy::cast_possible_truncation)]
-            {
-                symbol.part_count = part_count.clamp(1, 255) as u32;
-            }
-        }
-        if let Some(v) = sym_json.get("display_mode_count").and_then(Value::as_u64) {
-            symbol.display_mode_count = u32::try_from(v).unwrap_or(symbol.display_mode_count);
-        }
-        if let Some(v) = sym_json.get("current_part_id").and_then(Value::as_u64) {
-            symbol.current_part_id = u32::try_from(v).unwrap_or(symbol.current_part_id);
-        }
-        if let Some(v) = sym_json.get("part_id_locked").and_then(Value::as_bool) {
-            symbol.part_id_locked = v;
-        }
-        if let Some(v) = sym_json.get("source_library_name").and_then(Value::as_str) {
-            symbol.source_library_name = v.to_string();
-        }
-        if let Some(v) = sym_json.get("target_file_name").and_then(Value::as_str) {
-            symbol.target_file_name = v.to_string();
-        }
-        // Designator position/identity and the interleaved record order,
-        // mirroring the create path: a get_component → update_component loop
-        // echoes them back, and dropping any of them moved the designator or
-        // regrouped the records.
-        if let Some(x) = sym_json.get("designator_x").and_then(Value::as_f64) {
-            symbol.designator_x = x;
-        }
-        if let Some(y) = sym_json.get("designator_y").and_then(Value::as_f64) {
-            symbol.designator_y = y;
-        }
-        if let Some(uid) = sym_json.get("designator_unique_id").and_then(Value::as_str) {
-            symbol.designator_unique_id = Some(uid.to_string());
-        }
-        if let Some(order) = sym_json.get("primitive_order") {
-            match serde_json::from_value(order.clone()) {
-                Ok(kinds) => symbol.primitive_order = kinds,
-                Err(e) => {
-                    tracing::debug!(error = %e, "invalid primitive_order; using default order");
-                }
-            }
-        }
-
-        // Parse pins
-        if let Some(pins) = sym_json.get("pins").and_then(Value::as_array) {
-            for pin_json in pins {
-                if let Some(pin) = Self::parse_schlib_pin(pin_json) {
-                    symbol.pins.push(pin);
-                }
-            }
-        }
-
-        // Parse rectangles
-        if let Some(rects) = sym_json.get("rectangles").and_then(Value::as_array) {
-            for rect_json in rects {
-                if let Some(rect) = Self::parse_schlib_rectangle(rect_json) {
-                    symbol.rectangles.push(rect);
-                }
-            }
-        }
-
-        // Parse lines
-        if let Some(lines) = sym_json.get("lines").and_then(Value::as_array) {
-            for line_json in lines {
-                if let Some(line) = Self::parse_schlib_line(line_json) {
-                    symbol.lines.push(line);
-                }
-            }
-        }
-
-        // Parse polylines
-        if let Some(polylines) = sym_json.get("polylines").and_then(Value::as_array) {
-            for polyline_json in polylines {
-                if let Some(polyline) = Self::parse_schlib_polyline(polyline_json) {
-                    symbol.polylines.push(polyline);
-                }
-            }
-        }
-
-        // Parse arcs
-        if let Some(arcs) = sym_json.get("arcs").and_then(Value::as_array) {
-            for arc_json in arcs {
-                if let Some(arc) = Self::parse_schlib_arc(arc_json) {
-                    symbol.arcs.push(arc);
-                }
-            }
-        }
-
-        // Parse ellipses
-        if let Some(ellipses) = sym_json.get("ellipses").and_then(Value::as_array) {
-            for ellipse_json in ellipses {
-                if let Some(ellipse) = Self::parse_schlib_ellipse(ellipse_json) {
-                    symbol.ellipses.push(ellipse);
-                }
-            }
-        }
-
-        // Parse parameters
-        if let Some(params) = sym_json.get("parameters").and_then(Value::as_array) {
-            for param_json in params {
-                if let Some(param) = Self::parse_schlib_parameter(param_json) {
-                    symbol.parameters.push(param);
-                }
-            }
-        }
-
-        // Parse round_rects, polygons, labels and text. The create path
-        // (call_write_schlib) handles all of these; this update path omitted them,
-        // so a read-modify-write of a symbol carrying any of them silently DROPPED
-        // it. Mirror the create path.
-        if let Some(round_rects) = sym_json.get("round_rects").and_then(Value::as_array) {
-            for rr_json in round_rects {
-                if let Some(rr) = Self::parse_schlib_round_rect(rr_json) {
-                    symbol.round_rects.push(rr);
-                }
-            }
-        }
-        if let Some(polygons) = sym_json.get("polygons").and_then(Value::as_array) {
-            for polygon_json in polygons {
-                if let Some(polygon) = Self::parse_schlib_polygon(polygon_json) {
-                    symbol.polygons.push(polygon);
-                }
-            }
-        }
-        if let Some(labels) = sym_json.get("labels").and_then(Value::as_array) {
-            for label_json in labels {
-                if let Some(label) = Self::parse_schlib_label(label_json) {
-                    symbol.labels.push(label);
-                }
-            }
-        }
-        if let Some(texts) = sym_json.get("text").and_then(Value::as_array) {
-            for text_json in texts {
-                if let Some(text) = Self::parse_schlib_text(text_json) {
-                    symbol.text.push(text);
-                }
-            }
-        }
-
-        // Parse pies and images (mirror the create path — both were added to
-        // call_write_schlib without this path, recreating exactly the
-        // dropped-primitive bug documented above).
-        if let Some(pies) = sym_json.get("pies").and_then(Value::as_array) {
-            for pie_json in pies {
-                if let Some(pie) = Self::parse_schlib_pie(pie_json) {
-                    symbol.pies.push(pie);
-                }
-            }
-        }
-        if let Some(images) = sym_json.get("images").and_then(Value::as_array) {
-            for image_json in images {
-                if let Some(image) = Self::parse_schlib_image(image_json) {
-                    symbol.images.push(image);
-                }
-            }
-        }
-        if let Some(text_frames) = sym_json.get("text_frames").and_then(Value::as_array) {
-            for frame_json in text_frames {
-                if let Some(text_frame) = Self::parse_schlib_text_frame(frame_json) {
-                    symbol.text_frames.push(text_frame);
-                }
-            }
-        }
-
-        // Beziers and elliptical arcs (mirror the create path, which authors
-        // them through the same parse helpers — the JSON keys equal the serde
-        // field names, so a get_component echo parses identically).
-        if let Some(beziers) = sym_json.get("beziers").and_then(Value::as_array) {
-            for bezier_json in beziers {
-                if let Some(bezier) = Self::parse_schlib_bezier(bezier_json) {
-                    symbol.beziers.push(bezier);
-                }
-            }
-        }
-        if let Some(ell_arcs) = sym_json.get("elliptical_arcs").and_then(Value::as_array) {
-            for ell_arc_json in ell_arcs {
-                if let Some(ell_arc) = Self::parse_schlib_elliptical_arc(ell_arc_json) {
-                    symbol.elliptical_arcs.push(ell_arc);
-                }
-            }
-        }
-
-        // Parse footprint references. serde shape (get_component echo) and the
-        // create-path shape ({name, description, library_path}) both
-        // deserialise, since every other FootprintModel field has a default.
-        if let Some(footprints) = sym_json.get("footprints").and_then(Value::as_array) {
-            for fp_json in footprints {
-                if let Ok(fp) = serde_json::from_value(fp_json.clone()) {
-                    symbol.footprints.push(fp);
-                }
-            }
-        }
-
-        // Reject out-of-range geometry before save (the create path validates
-        // here; this path skipped it entirely). Runs in dry-run too.
-        if let Err(e) = Self::validate_symbol_coordinates(&symbol) {
-            return ToolCallResult::error(e);
-        }
+        // Parse the replacement symbol — the same parser as write_schlib, so
+        // an update accepts exactly what a write does.
+        let keys = crate::mcp::tools::allowed_keys::SchLibKeys::new();
+        let symbol = match self.parse_symbol_json(
+            sym_json,
+            &keys,
+            "update_component",
+            filepath,
+            component_name,
+        ) {
+            Ok(symbol) => symbol,
+            Err(result) => return result,
+        };
+        let name = symbol.name.clone();
+        let name = name.as_str();
 
         // A replacement may carry a new name, which makes this a rename too —
         // and a rename onto a name another symbol already holds would leave

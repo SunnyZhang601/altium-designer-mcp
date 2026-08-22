@@ -8,12 +8,32 @@ record). The specialised worklists stay the single source of truth for their are
 | Golden-fixture enrichment | `docs/FIXTURE_COVERAGE.md` |
 | Format parity + verified negatives | `docs/COVERAGE_AUDIT.md` § Outstanding |
 
-## A. On-site Altium tooling
+## A. Findings deferred from the bug sweep
+
+Found while fixing something else; each needs its own verification or a fixture first.
+
+- [ ] **SchLib header `UniqueID` (RECORD=1) is dropped on write** — Altium stores one per
+      component (`|RECORD=1|...|UniqueID=PMHDDPDX`); `Symbol` has no field for it, so the
+      writer omits it and Altium presumably re-generates it. Excused today via
+      `VOLATILE_KEYS` in `tests/golden_fidelity.rs`. Carry it like `designator_unique_id`.
+- [ ] **Shapes the golden stores without a `UniqueID` (pies) get a fresh random one per
+      save** — `encode_pie` always emits `UniqueID=`, so two saves of the same library
+      differ. Either Altium accepts an absent key (omit when `None`, matching the golden)
+      or the fixture is an outlier; settle against Altium, then make saves deterministic.
+- [ ] **`EllipticalArc` and `Text` (RECORD=11 / RECORD=3) carry no display flags**
+      (`graphically_locked`, `disabled`, `dimmed`, `owner_part_display_mode`) in the model,
+      while the other 13 graphics do — almost certainly a gap, but no golden record exists
+      to verify the keys AD24 emits. Blocked on the fixture (see `docs/FIXTURE_COVERAGE.md`).
+- [ ] **Non-embedded STEP reference form is unverified** — `step_model.embed: false` now
+      writes `MODELID` + `MODEL.EMBED=FALSE` + `MODEL.NAME=<path>`; whether Altium also
+      expects an entry in `/Library/ModelsNoEmbed` is unknown. Blocked on the fixture.
+
+## B. On-site Altium tooling
 
 - [ ] *(Optional)* extend `Verify-Libraries.ps1` to assert primitive counts / specific
       properties, not just "opened".
 
-## B. Release & distribution
+## C. Release & distribution
 
 - [ ] **v1.0.0 is the real release**, gated on ALL features built (the 99% coverage
       gate — production metric, #381 — is already met). The climb happens calmly;

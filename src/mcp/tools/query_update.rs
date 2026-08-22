@@ -193,6 +193,15 @@ impl McpServer {
             return ToolCallResult::error(e);
         }
 
+        // A replacement may carry a new name, which makes this a rename too —
+        // and a rename onto a name another footprint already holds would leave
+        // two components answering to it. Refuse, as rename_component does.
+        if name != component_name && library.get(name).is_some() {
+            return ToolCallResult::error(format!(
+                "Cannot rename '{component_name}' to '{name}': a footprint with that name already exists"
+            ));
+        }
+
         // Get the old component for comparison
         let old = library.get(component_name).cloned();
 
@@ -578,6 +587,15 @@ impl McpServer {
         // here; this path skipped it entirely). Runs in dry-run too.
         if let Err(e) = Self::validate_symbol_coordinates(&symbol) {
             return ToolCallResult::error(e);
+        }
+
+        // A replacement may carry a new name, which makes this a rename too —
+        // and a rename onto a name another symbol already holds would leave
+        // two components answering to it. Refuse, as rename_component does.
+        if name != component_name && library.get(name).is_some() {
+            return ToolCallResult::error(format!(
+                "Cannot rename '{component_name}' to '{name}': a symbol with that name already exists"
+            ));
         }
 
         // Get the old component for comparison
@@ -1507,6 +1525,62 @@ mod tests {
             symbol.primitive_order,
             vec![SchPrimitiveKind::Line, SchPrimitiveKind::Pin]
         );
+    }
+
+    /// A replacement carrying another component's name is a collision, not a
+    /// rename — refused on both formats, in dry-run too, while renaming onto a
+    /// free name still works.
+    #[test]
+    fn update_component_refuses_to_rename_onto_an_existing_name() {
+        use crate::altium::{PcbLib, SchLib};
+
+        let dir = test_temp_dir();
+        let server = create_test_server(dir.path());
+
+        let pcb = dir.path().join("Collide.PcbLib");
+        create_test_pcblib(&pcb); // CHIP_0402 + CHIP_0603
+        for dry_run in [true, false] {
+            let result = server.call_update_component(&json!({
+                "filepath": pcb.to_string_lossy(),
+                "component_name": "CHIP_0402",
+                "dry_run": dry_run,
+                "footprint": {
+                    "name": "CHIP_0603",
+                    "pads": [{ "designator": "1", "x": 0.0, "y": 0.0, "width": 0.6, "height": 0.5 }],
+                },
+            }));
+            assert!(result.is_error, "dry_run={dry_run}");
+            assert!(get_result_text(&result).contains("already exists"));
+        }
+        let lib = PcbLib::open(&pcb).unwrap();
+        assert_eq!(lib.len(), 2, "nothing changed");
+        assert!(lib.get("CHIP_0402").is_some() && lib.get("CHIP_0603").is_some());
+
+        // Renaming onto a free name is still a rename.
+        let result = server.call_update_component(&json!({
+            "filepath": pcb.to_string_lossy(),
+            "component_name": "CHIP_0402",
+            "footprint": {
+                "name": "CHIP_0402_V2",
+                "pads": [{ "designator": "1", "x": 0.0, "y": 0.0, "width": 0.6, "height": 0.5 }],
+            },
+        }));
+        assert!(!result.is_error, "{}", get_result_text(&result));
+        assert_eq!(parse_result_json(&result)["renamed"], true);
+        let lib = PcbLib::open(&pcb).unwrap();
+        assert!(lib.get("CHIP_0402").is_none() && lib.get("CHIP_0402_V2").is_some());
+
+        let sch = dir.path().join("Collide.SchLib");
+        create_test_schlib(&sch); // RESISTOR + CAPACITOR
+        let result = server.call_update_component(&json!({
+            "filepath": sch.to_string_lossy(),
+            "component_name": "RESISTOR",
+            "symbol": { "name": "CAPACITOR", "pins": [] },
+        }));
+        assert!(result.is_error);
+        assert!(get_result_text(&result).contains("already exists"));
+        let lib = SchLib::open(&sch).unwrap();
+        assert_eq!(lib.len(), 2, "nothing changed");
     }
 
     #[test]

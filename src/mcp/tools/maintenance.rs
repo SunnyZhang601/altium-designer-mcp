@@ -528,6 +528,117 @@ impl McpServer {
 
     /// Updates specific properties of a pad in a `PcbLib` footprint.
     #[allow(clippy::too_many_lines)]
+    /// Carries a primary width / height / shape edit into a stacked pad's
+    /// per-layer tables: every layer whose value matched the old primary takes
+    /// the new one, a layer with its own value keeps it. Returns how many
+    /// per-layer entries changed.
+    fn propagate_pad_edit_to_stack(
+        pad: &mut crate::altium::pcblib::Pad,
+        old_width: f64,
+        old_height: f64,
+        old_shape: crate::altium::pcblib::PadShape,
+    ) -> usize {
+        let close = |a: f64, b: f64| (a - b).abs() < 1e-6;
+        let mut followed = 0;
+        if let Some(sizes) = pad.per_layer_sizes.as_mut() {
+            for size in sizes.iter_mut() {
+                let width_follows = !close(old_width, pad.width) && close(size.0, old_width);
+                let height_follows = !close(old_height, pad.height) && close(size.1, old_height);
+                if width_follows {
+                    size.0 = pad.width;
+                }
+                if height_follows {
+                    size.1 = pad.height;
+                }
+                followed += usize::from(width_follows || height_follows);
+            }
+        }
+        if old_shape != pad.shape {
+            if let Some(shapes) = pad.per_layer_shapes.as_mut() {
+                for shape in shapes.iter_mut().filter(|s| **s == old_shape) {
+                    *shape = pad.shape;
+                    followed += 1;
+                }
+            }
+        }
+        followed
+    }
+
+    /// Applies an `update_pad` request's `updates` object to `pad`, returning
+    /// the change records for the response (or the message for an invalid
+    /// value). A stacked pad's per-layer tables follow a primary edit — see
+    /// [`Self::propagate_pad_edit_to_stack`].
+    fn apply_pad_updates(
+        pad: &mut crate::altium::pcblib::Pad,
+        updates: &Value,
+    ) -> Result<Vec<Value>, String> {
+        let mut changes: Vec<Value> = Vec::new();
+        let (old_width, old_height, old_shape) = (pad.width, pad.height, pad.shape);
+
+        // Apply updates
+        if let Some(x) = updates.get("x").and_then(Value::as_f64) {
+            changes.push(json!({"property": "x", "old": pad.x, "new": x}));
+            pad.x = x;
+        }
+        if let Some(y) = updates.get("y").and_then(Value::as_f64) {
+            changes.push(json!({"property": "y", "old": pad.y, "new": y}));
+            pad.y = y;
+        }
+        if let Some(width) = updates.get("width").and_then(Value::as_f64) {
+            changes.push(json!({"property": "width", "old": pad.width, "new": width}));
+            pad.width = width;
+        }
+        if let Some(height) = updates.get("height").and_then(Value::as_f64) {
+            changes.push(json!({"property": "height", "old": pad.height, "new": height}));
+            pad.height = height;
+        }
+        if let Some(rotation) = updates.get("rotation").and_then(Value::as_f64) {
+            changes.push(json!({"property": "rotation", "old": pad.rotation, "new": rotation}));
+            pad.rotation = rotation;
+        }
+        if let Some(hole_size) = updates.get("hole_size").and_then(Value::as_f64) {
+            changes.push(json!({"property": "hole_size", "old": pad.hole_size, "new": hole_size}));
+            pad.hole_size = Some(hole_size);
+        }
+        if let Some(shape_str) = updates.get("shape").and_then(Value::as_str) {
+            let Some(new_shape) = Self::parse_pad_shape(shape_str) else {
+                return Err(format!(
+                    "Invalid shape '{shape_str}'. {}",
+                    crate::mcp::tools::parsing::PAD_SHAPE_HELP
+                ));
+            };
+            changes.push(
+                json!({"property": "shape", "old": format!("{:?}", pad.shape), "new": shape_str}),
+            );
+            pad.shape = new_shape;
+            // The format cannot say "Round with a corner radius" — shape id 1
+            // plus a radius under 100% IS a rounded rectangle — so leaving the
+            // old radius behind would silently re-round the pad on read.
+            if new_shape != crate::altium::pcblib::PadShape::RoundedRectangle {
+                pad.corner_radius_percent = None;
+                pad.per_layer_corner_radii = None;
+            }
+        }
+
+        // A stacked pad's per-layer tables are what the writer emits for each
+        // layer, so a primary size or shape edit that left them alone did not
+        // take in Altium. Layers that shared the old primary value follow the
+        // edit; a layer carrying its own deliberate value keeps it. The count
+        // is reported so a caller can see how much of the stack moved.
+        if pad.stack_mode != crate::altium::pcblib::PadStackMode::Simple {
+            let followed = Self::propagate_pad_edit_to_stack(pad, old_width, old_height, old_shape);
+            if followed > 0 {
+                changes.push(json!({
+                    "property": "per_layer_stack",
+                    "layers_followed": followed,
+                    "note": "layers that shared the old primary value now carry the new one; layers with their own value were left alone",
+                }));
+            }
+        }
+
+        Ok(changes)
+    }
+
     pub(crate) fn call_update_pad(&self, arguments: &Value) -> ToolCallResult {
         use crate::altium::PcbLib;
 
@@ -584,53 +695,10 @@ impl McpServer {
             ));
         };
 
-        // Track changes for reporting
-        let mut changes: Vec<Value> = Vec::new();
-
-        // Apply updates
-        if let Some(x) = updates.get("x").and_then(Value::as_f64) {
-            changes.push(json!({"property": "x", "old": pad.x, "new": x}));
-            pad.x = x;
-        }
-        if let Some(y) = updates.get("y").and_then(Value::as_f64) {
-            changes.push(json!({"property": "y", "old": pad.y, "new": y}));
-            pad.y = y;
-        }
-        if let Some(width) = updates.get("width").and_then(Value::as_f64) {
-            changes.push(json!({"property": "width", "old": pad.width, "new": width}));
-            pad.width = width;
-        }
-        if let Some(height) = updates.get("height").and_then(Value::as_f64) {
-            changes.push(json!({"property": "height", "old": pad.height, "new": height}));
-            pad.height = height;
-        }
-        if let Some(rotation) = updates.get("rotation").and_then(Value::as_f64) {
-            changes.push(json!({"property": "rotation", "old": pad.rotation, "new": rotation}));
-            pad.rotation = rotation;
-        }
-        if let Some(hole_size) = updates.get("hole_size").and_then(Value::as_f64) {
-            changes.push(json!({"property": "hole_size", "old": pad.hole_size, "new": hole_size}));
-            pad.hole_size = Some(hole_size);
-        }
-        if let Some(shape_str) = updates.get("shape").and_then(Value::as_str) {
-            let Some(new_shape) = Self::parse_pad_shape(shape_str) else {
-                return ToolCallResult::error(format!(
-                    "Invalid shape '{shape_str}'. {}",
-                    crate::mcp::tools::parsing::PAD_SHAPE_HELP
-                ));
-            };
-            changes.push(
-                json!({"property": "shape", "old": format!("{:?}", pad.shape), "new": shape_str}),
-            );
-            pad.shape = new_shape;
-            // The format cannot say "Round with a corner radius" — shape id 1
-            // plus a radius under 100% IS a rounded rectangle — so leaving the
-            // old radius behind would silently re-round the pad on read.
-            if new_shape != crate::altium::pcblib::PadShape::RoundedRectangle {
-                pad.corner_radius_percent = None;
-                pad.per_layer_corner_radii = None;
-            }
-        }
+        let changes = match Self::apply_pad_updates(pad, updates) {
+            Ok(changes) => changes,
+            Err(e) => return ToolCallResult::error(e),
+        };
 
         // Reject invalid geometry the create path enforces — update bypassed it,
         // and out-of-range values would silently saturate in from_mm() on save.
@@ -1449,6 +1517,89 @@ mod tests {
         assert!((pad.x - -0.6).abs() < 1e-4);
         assert!((pad.width - 0.7).abs() < 1e-4);
         assert_eq!(format!("{:?}", pad.shape), "Round");
+    }
+
+    /// On a stacked pad the per-layer tables are what the writer emits, so a
+    /// primary edit must reach them: layers that shared the old value follow,
+    /// a layer with its own deliberate value keeps it, and the response says
+    /// how many followed.
+    #[test]
+    fn update_pad_carries_an_edit_into_a_stacked_pad() {
+        use crate::altium::pcblib::{PadShape, PadStackMode};
+
+        let dir = test_temp_dir();
+        let server = create_test_server(dir.path());
+
+        // 32 layers at the primary size, except layer 5 which is deliberately
+        // wider; shapes all match the primary.
+        let mut pad = Pad::smd("1", 0.0, 0.0, 0.6, 0.5);
+        pad.stack_mode = PadStackMode::FullStack;
+        let mut sizes = vec![(0.6, 0.5); 32];
+        sizes[5] = (1.2, 0.5);
+        pad.per_layer_sizes = Some(sizes);
+        pad.per_layer_shapes = Some(vec![pad.shape; 32]);
+        let mut fp = Footprint::new("STACKED");
+        fp.add_pad(pad);
+        let mut lib = PcbLib::new();
+        lib.add(fp);
+        let path = dir.path().join("Stacked.PcbLib");
+        lib.save(&path).unwrap();
+
+        let result = server.call_update_pad(&json!({
+            "filepath": path.to_string_lossy(),
+            "component_name": "STACKED",
+            "designator": "1",
+            "updates": { "width": 0.8, "shape": "round" },
+        }));
+        assert!(!result.is_error, "{}", get_result_text(&result));
+        let parsed = parse_result_json(&result);
+        let stack_change = parsed["changes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["property"] == "per_layer_stack")
+            .expect("stack propagation reported");
+        // 31 layers followed the width and all 32 the shape.
+        assert_eq!(stack_change["layers_followed"], 31 + 32);
+
+        let reopened = PcbLib::open(&path).unwrap();
+        let pad = &reopened.get("STACKED").unwrap().pads[0];
+        assert_eq!(pad.stack_mode, PadStackMode::FullStack, "mode untouched");
+        let sizes = pad.per_layer_sizes.as_ref().unwrap();
+        assert!(
+            (sizes[0].0 - 0.8).abs() < 1e-4,
+            "a matching layer followed: {sizes:?}"
+        );
+        assert!(
+            (sizes[5].0 - 1.2).abs() < 1e-4,
+            "the deliberate layer kept its own width"
+        );
+        assert!(
+            sizes.iter().all(|s| (s.1 - 0.5).abs() < 1e-4),
+            "untouched height unchanged"
+        );
+        assert!(pad
+            .per_layer_shapes
+            .as_ref()
+            .unwrap()
+            .iter()
+            .all(|s| *s == PadShape::Round));
+
+        // A Simple pad reports no stack propagation at all.
+        let simple = dir.path().join("Simple.PcbLib");
+        create_test_pcblib(&simple);
+        let result = server.call_update_pad(&json!({
+            "filepath": simple.to_string_lossy(),
+            "component_name": "CHIP_0402",
+            "designator": "1",
+            "updates": { "width": 0.8 },
+        }));
+        assert!(!result.is_error, "{}", get_result_text(&result));
+        assert!(!parse_result_json(&result)["changes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|c| c["property"] == "per_layer_stack"));
     }
 
     #[test]

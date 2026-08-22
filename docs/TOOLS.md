@@ -1037,7 +1037,9 @@ Rename multiple components in a library using regex pattern matching. Supports c
 
 ## `update_pad`
 
-Update specific properties of a pad in a PcbLib footprint without replacing the entire component. Find pad by designator and apply only the specified updates.
+Update specific properties of a pad in a PcbLib footprint without replacing the entire component. Find pad by designator and apply only the specified updates. On a
+stacked pad (stack_mode other than simple) a width/height/shape change also reaches the per-layer tables: layers that shared the old primary value follow it, layers with
+their own value keep it, and the response reports how many followed.
 
 **Example**
 

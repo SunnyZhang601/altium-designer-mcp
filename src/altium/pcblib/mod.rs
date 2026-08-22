@@ -2397,6 +2397,7 @@ mod tests {
             texture_center_y: None,
             texture_size_x: None,
             texture_size_y: None,
+            texture_rotation: None,
             model_name: "TEST_MODEL.step".to_string(),
             embedded: true,
             rotation_x: 0.0,
@@ -2426,6 +2427,7 @@ mod tests {
             polygon_index: 0xFFFF,
             component_index: -1,
             additional_parameters: Vec::new(),
+            param_key_order: Vec::new(),
         };
         original.add_component_body(body);
 
@@ -2477,6 +2479,7 @@ mod tests {
                 texture_center_y: None,
                 texture_size_x: None,
                 texture_size_y: None,
+                texture_rotation: None,
                 model_name: format!("M{i}.step"),
                 embedded: true,
                 rotation_x: 0.0,
@@ -2506,6 +2509,7 @@ mod tests {
                 polygon_index: 0xFFFF,
                 component_index: -1,
                 additional_parameters: Vec::new(),
+                param_key_order: Vec::new(),
             });
         }
 

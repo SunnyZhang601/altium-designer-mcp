@@ -1457,7 +1457,7 @@ pub(super) fn parse_fill(data: &[u8], offset: usize) -> ParseResult<Fill> {
 /// scripted-body default.
 fn parse_body_identity_params(
     params: &std::collections::HashMap<String, String>,
-) -> (String, [Option<String>; 4]) {
+) -> (String, [Option<String>; 5]) {
     let identifier = params
         .get("IDENTIFIER")
         .map(|v| decode_identifier(v))
@@ -1470,6 +1470,7 @@ fn parse_body_identity_params(
             texture("TEXTURECENTERY"),
             texture("TEXTURESIZEX"),
             texture("TEXTURESIZEY"),
+            texture("TEXTUREROTATION"),
         ],
     )
 }
@@ -1529,6 +1530,14 @@ pub(super) fn parse_component_body(data: &[u8], offset: usize) -> ParseResult<Co
     // exactly those backed by a ComponentBody struct field.
     let additional_parameters = block_str.find("V7_LAYER").map_or_else(Vec::new, |start| {
         capture_additional_params(&block_str[start..], BODY_MODELLED_PARAM_KEYS)
+    });
+    // Every key in read order, so the writer can put the unmodelled ones
+    // back where Altium had them.
+    let param_key_order: Vec<String> = block_str.find("V7_LAYER").map_or_else(Vec::new, |start| {
+        crate::altium::parse_pipe_params_ordered(&block_str[start..])
+            .into_iter()
+            .map(|(key, _)| key)
+            .collect()
     });
 
     // Extract key values
@@ -1643,6 +1652,7 @@ pub(super) fn parse_component_body(data: &[u8], offset: usize) -> ParseResult<Co
         texture_center_y: textures[1].clone(),
         texture_size_x: textures[2].clone(),
         texture_size_y: textures[3].clone(),
+        texture_rotation: textures[4].clone(),
         model_id,
         model_name,
         embedded,
@@ -1675,6 +1685,7 @@ pub(super) fn parse_component_body(data: &[u8], offset: usize) -> ParseResult<Co
         polygon_index,
         component_index,
         additional_parameters,
+        param_key_order,
     };
 
     Ok((body, current))
@@ -1765,10 +1776,36 @@ pub(super) fn parse_component_body_outline(block0: &[u8]) -> Vec<(f64, f64)> {
 
 /// Parses key=value parameters from a `ComponentBody` block string.
 pub(super) fn parse_component_body_params(s: &str) -> std::collections::HashMap<String, String> {
-    // Parameters begin at the first `V7_LAYER=` key (after the binary header).
+    // Parameters begin at the first `V7_LAYER=` key (after the binary header)
+    // and end at the NUL terminator: the outline polygon follows it in the
+    // same block, and without the cut the last key's value (TEXTUREROTATION on
+    // an Altium-authored body) would carry the outline bytes.
     s.find("V7_LAYER")
-        .map(|start| crate::altium::parse_pipe_params_raw(&s[start..]))
+        .map(|start| {
+            let text = &s[start..];
+            let end = text.find('\0').unwrap_or(text.len());
+            crate::altium::parse_pipe_params_raw(&text[..end])
+        })
         .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod body_param_tests {
+    use super::parse_component_body_params;
+
+    /// The parameter text ends at its NUL; the outline bytes after it must
+    /// not leak into the last key's value.
+    #[test]
+    fn body_params_stop_at_the_nul_terminator() {
+        let block = "\u{1}\u{2}V7_LAYER=MECHANICAL13|NAME= |TEXTUREROTATION= 0.00000000000000E+0000\0\u{4}\0\0\0\u{80}binary";
+        let params = parse_component_body_params(block);
+        assert_eq!(
+            params.get("TEXTUREROTATION").map(String::as_str),
+            Some(" 0.00000000000000E+0000")
+        );
+        assert_eq!(params.get("NAME").map(String::as_str), Some(" "));
+        assert!(parse_component_body_params("no parameters here").is_empty());
+    }
 }
 
 /// Parses a value in mils (e.g., "15.748mil") to mm.

@@ -380,6 +380,7 @@ fill byte-identically.
 | `0x0080` | TestPointTop | Fabrication test point, top |
 | `0x0100` | TestPointBottom | Fabrication test point, bottom |
 | `0x0200` | Keepout | Keep-out primitive |
+| `0x0001`, `0x0002`, `0x0010`, `0x0400`–`0x8000` | — | Not modelled (AltiumSharp reads them as selection / display state). Hand-authored libraries do set them — every track of a pin-header footprint carries `0x001C` — so they are carried verbatim through a read-modify-write as `PcbFlags::DISK_BIT_n` |
 
 A normal saved primitive therefore carries `0x000C` (Saved + Unlocked), not `0x0000`; a keepout
 primitive carries `0x020C`.
@@ -811,8 +812,8 @@ snap-point or reserved blocks, and there is no `MODEL.SNAPCOUNT` parameter.
 | `BODYCOLOR3D` | 3D body colour | `8421504` |
 | `BODYOPACITY3D` | 3D body opacity | `1.000` |
 | `IDENTIFIER` | Body name as comma-separated decimal Unicode code points (`µΩ电` = `181,937,30005`; empty stays empty) | `` |
-| `TEXTURE`, `TEXTURECENTERX/Y`, `TEXTURESIZEX/Y`, `TEXTUREROTATION` | Texture fields (fixed defaults) | |
-| `MODELID` | Model GUID (model-backed bodies ONLY) | `{GUID}` |
+| `TEXTURE`, `TEXTURECENTERX/Y`, `TEXTURESIZEX/Y`, `TEXTUREROTATION` | Texture fields, round-tripped verbatim (a UI-authored body can carry `TEXTUREROTATION= 9.00000000000000E+0001`); from-scratch defaults `0mil` / ` 0.00000000000000E+0000` | |
+| `MODELID` | Model GUID; **empty** for a STEP reference the library does not embed (`MODELID=|MODEL.CHECKSUM=0|MODEL.EMBED=FALSE|MODEL.NAME=test_0805.step`, UI-authored) | `{GUID}` |
 | `MODEL.CHECKSUM` | Model integrity checksum (round-tripped verbatim, see below) | `0` |
 | `MODEL.EMBED` | `TRUE` / `FALSE` | |
 | `MODEL.NAME` | Model filename | `RESC1005X04L.step` |
@@ -824,7 +825,7 @@ snap-point or reserved blocks, and there is no `MODEL.SNAPCOUNT` parameter.
 | `MODEL.MODELSOURCE` | Model source | `Undefined` |
 
 **Extruded vs model-backed — and the MODEL group's presence:** the group is present exactly
-when the body carries a `MODELID`, which depends on the authoring route. A *script-authored*
+when the body carries a `MODELID` or names a model file, which depends on the authoring route. A *script-authored*
 extruded body (the golden's `BODY3D`, `PRIMPROPS`) has none and ends at `TEXTUREROTATION`; a
 *UI-authored* extruded body (`manual/identifier.PcbLib`) carries a stable `MODELID` and the
 full group with `MODEL.MODELTYPE=0`, `MODEL.EXTRUDED.MINZ/MAXZ` (standoff..overall), real
@@ -833,8 +834,10 @@ scripted route writes `0mil` (both round-trip verbatim). A model-backed body (`E
 `MODEL.MODELTYPE=1` plus `MODEL.MODELSOURCE=Undefined` and no `EXTRUDED` range. `ISSHAPEBASED`
 stays `FALSE` throughout.
 
-Unmodelled keys captured on read are re-emitted verbatim after the canonical set (with canonical
-duplicates dropped) so read-modify-write round-trips.
+Unmodelled keys captured on read are re-emitted verbatim **at their read position** — the key
+order is carried as `param_key_order`, as for regions, because Altium interleaves them
+(`BODYOVERRIDECOLOR=TRUE` sits right after `BODYOPACITY3D` in a UI-authored body) and writes
+`ARCRESOLUTION` twice; a from-scratch body emits the canonical set and appends any extras.
 
 > **Note:** Height values can be in "mil" or "mm" units on read. The tool parses both formats;
 > mil values are converted using 1 mil = 0.0254 mm.

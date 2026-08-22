@@ -548,3 +548,122 @@ fn schlib_golden_survives_a_round_trip() {
         failures.join("\n")
     );
 }
+
+/// Sweeps every library under `ALTIUM_CORPUS_DIR` — real, hand-authored
+/// Altium libraries the scripted golden cannot stand in for — through a
+/// read/write cycle and reports what changed: streams dropped, parameter
+/// blocks that diverge, records reordered, and for a `PcbLib` every `Data` and
+/// `WideStrings` stream that is not byte-identical. Ignored unless the
+/// variable is set; never writes into the corpus.
+///
+/// ```text
+/// ALTIUM_CORPUS_DIR=../my-libraries cargo test --test golden_fidelity corpus -- --ignored --nocapture
+/// ```
+#[test]
+#[ignore = "needs ALTIUM_CORPUS_DIR"]
+#[allow(clippy::too_many_lines)] // one straight-line sweep, reported per library
+fn corpus_survives_a_round_trip() {
+    let Some(corpus) = std::env::var_os("ALTIUM_CORPUS_DIR") else {
+        eprintln!("ALTIUM_CORPUS_DIR not set; nothing to sweep");
+        return;
+    };
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut libraries: Vec<PathBuf> = std::fs::read_dir(&corpus)
+        .expect("read corpus dir")
+        .filter_map(Result::ok)
+        .map(|e| e.path())
+        .filter(|p| {
+            p.extension().and_then(|e| e.to_str()).is_some_and(|e| {
+                e.eq_ignore_ascii_case("pcblib") || e.eq_ignore_ascii_case("schlib")
+            })
+        })
+        .collect();
+    libraries.sort();
+    assert!(
+        !libraries.is_empty(),
+        "no libraries under {}",
+        corpus.to_string_lossy()
+    );
+
+    let mut report: Vec<String> = Vec::new();
+    for src in &libraries {
+        let file = src.file_name().unwrap().to_string_lossy().into_owned();
+        let is_pcb = file.to_ascii_lowercase().ends_with(".pcblib");
+        let out = dir.path().join(&file);
+        let opened = if is_pcb {
+            PcbLib::open(src).map(|mut lib| lib.save(&out))
+        } else {
+            SchLib::open(src).map(|lib| lib.save(&out))
+        };
+        match opened {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => {
+                report.push(format!("{file}: save failed: {e}"));
+                continue;
+            }
+            Err(e) => {
+                report.push(format!("{file}: open failed: {e}"));
+                continue;
+            }
+        }
+        let (before, after) = (stream_map(src), stream_map(&out));
+        let mut lines = Vec::new();
+        for missing in before.keys().filter(|k| !after.contains_key(*k)) {
+            if !is_known(missing) {
+                lines.push(format!("stream dropped: {missing}"));
+            }
+        }
+        for (canonical, g_path) in &before {
+            let Some(o_path) = after.get(canonical) else {
+                continue;
+            };
+            let (Some(g), Some(o)) = (stream_bytes(src, g_path), stream_bytes(&out, o_path)) else {
+                continue;
+            };
+            let component = canonical.split('/').next().unwrap_or("");
+            if component == "library" || is_known(canonical) {
+                continue;
+            }
+            if canonical.ends_with("/data") && !canonical.contains("primitiveguids") {
+                if is_pcb && !canonical.contains("uniqueidprimitiveinformation") && g != o {
+                    let first = g
+                        .iter()
+                        .zip(o.iter())
+                        .position(|(a, b)| a != b)
+                        .unwrap_or_else(|| g.len().min(o.len()));
+                    lines.push(format!(
+                        "{canonical}: not byte-identical (lens {}/{}, first divergence at {first:#x})",
+                        g.len(),
+                        o.len()
+                    ));
+                }
+                lines.extend(block_divergences(&g, &o, canonical));
+                if !is_pcb {
+                    let (gk, ok) = (record_kinds(&g), record_kinds(&o));
+                    if gk != ok {
+                        lines.push(format!("{canonical}: record order changed"));
+                    }
+                }
+            } else if canonical.ends_with("/widestrings") && g != o {
+                lines.push(format!(
+                    "{canonical}: WideStrings differ: {:?} vs {:?}",
+                    String::from_utf8_lossy(&g),
+                    String::from_utf8_lossy(&o)
+                ));
+            }
+        }
+        let n = lines.len();
+        lines.sort();
+        lines.dedup();
+        if lines.is_empty() {
+            eprintln!("OK   {file}");
+        } else {
+            eprintln!("DIFF {file}: {n} divergence(s)");
+            for line in &lines {
+                eprintln!("     {line}");
+            }
+            report.push(format!("{file}: {n} divergence(s)"));
+        }
+    }
+    assert!(report.is_empty(), "corpus sweep:\n{}", report.join("\n"));
+}

@@ -254,6 +254,15 @@ const fn encode_altium_flags(flags: PcbFlags) -> u16 {
         f |= ALT_FLAG_TESTPOINT_BOTTOM;
         f &= !ALT_FLAG_UNLOCKED;
     }
+    // The bits read verbatim go back where they came from.
+    let mut i = 0;
+    while i < PcbFlags::DISK_BITS.len() {
+        let (disk_bit, carrier) = PcbFlags::DISK_BITS[i];
+        if flags.contains(carrier) {
+            f |= disk_bit;
+        }
+        i += 1;
+    }
     f
 }
 
@@ -1842,19 +1851,26 @@ fn build_component_body_params(body: &ComponentBody) -> String {
         "TEXTURESIZEY={}",
         texture(&body.texture_size_y, "0mil")
     ));
-    params.push("TEXTUREROTATION= 0.00000000000000E+0000".to_string());
+    params.push(format!(
+        "TEXTUREROTATION={}",
+        texture(&body.texture_rotation, " 0.00000000000000E+0000")
+    ));
 
-    // Model reference — present exactly when the body HAS a model identity.
-    // Both authoring routes are golden-pinned: a script-authored extruded body
-    // (BODY3D, PRIMPROPS) has no MODELID and ends at TEXTUREROTATION with no
-    // MODEL keys at all, while a UI-authored extruded body
-    // (manual/identifier.PcbLib) carries a MODELID and the full group with
-    // MODEL.MODELTYPE=0 plus the EXTRUDED Z range (standoff..overall) and no
-    // MODELSOURCE. A model-backed body (EMBSTEP) uses MODELTYPE=1 plus
-    // MODEL.MODELSOURCE=Undefined and no EXTRUDED range. Inventing a MODELID
-    // for a body that has none is what #377 removed; a body that has one
-    // keeps its group whatever its type.
-    if !body.model_id.is_empty() {
+    // Model reference — present exactly when the body HAS a model identity
+    // or a model file. Both authoring routes are golden-pinned: a
+    // script-authored extruded body (BODY3D, PRIMPROPS) has no MODELID and
+    // ends at TEXTUREROTATION with no MODEL keys at all, while a UI-authored
+    // extruded body (manual/identifier.PcbLib) carries a MODELID and the full
+    // group with MODEL.MODELTYPE=0 plus the EXTRUDED Z range
+    // (standoff..overall) and no MODELSOURCE. A model-backed body (EMBSTEP)
+    // uses MODELTYPE=1 plus MODEL.MODELSOURCE=Undefined and no EXTRUDED
+    // range. A body that references a STEP file it does not embed carries the
+    // same group under an EMPTY MODELID (`MODELID=|MODEL.CHECKSUM=0|
+    // MODEL.EMBED=FALSE|MODEL.NAME=test_0805.step`, a UI-authored library), so
+    // the group is keyed on the file name too, or the reference is lost.
+    // Inventing a MODELID for a body that has none is what #377 removed; a
+    // body that has one keeps its group whatever its type.
+    if !body.model_id.is_empty() || !body.model_name.is_empty() || body.embedded {
         params.push(format!("MODELID={}", body.model_id));
         // Round-trip the stored checksum verbatim.
         params.push(format!("MODEL.CHECKSUM={}", body.model_checksum));
@@ -1900,14 +1916,72 @@ fn build_component_body_params(body: &ComponentBody) -> String {
         .iter()
         .filter_map(|p| p.split_once('=').map(|(k, _)| k.to_string()))
         .collect();
-    for (key, value) in &body.additional_parameters {
-        if emitted.contains(key) {
-            continue;
-        }
-        params.push(format!("{key}={value}"));
-    }
+    let additional: Vec<&(String, String)> = body
+        .additional_parameters
+        .iter()
+        .filter(|(key, _)| !emitted.contains(key))
+        .collect();
 
-    params.join("|")
+    replay_body_key_order(&params, &additional, &body.param_key_order)
+}
+
+/// Emits a body's canonical `KEY=VALUE` tokens and the unmodelled ones it
+/// carried in the order they were read.
+///
+/// A body read from a file replays its own key order: Altium interleaves
+/// unmodelled keys with the canonical set (`BODYOVERRIDECOLOR=TRUE` sits right
+/// after `BODYOPACITY3D`), so each canonical key goes at its read position and
+/// the unmodelled ones fill theirs in read order. Canonical keys the original
+/// lacked — a typed edit, or a model group the body gained — are appended; a
+/// from-scratch body has no order and emits the canonical set followed by the
+/// unmodelled keys. A canonical key can repeat (Altium writes ARCRESOLUTION
+/// twice), so each key holds a queue of its values in emission order.
+fn replay_body_key_order(
+    params: &[String],
+    additional: &[&(String, String)],
+    order: &[String],
+) -> String {
+    if order.is_empty() {
+        let mut all: Vec<String> = params.to_vec();
+        all.extend(
+            additional
+                .iter()
+                .map(|(key, value)| format!("{key}={value}")),
+        );
+        return all.join("|");
+    }
+    let mut canonical: std::collections::HashMap<&str, std::collections::VecDeque<&str>> =
+        std::collections::HashMap::new();
+    for p in params {
+        if let Some((key, value)) = p.split_once('=') {
+            canonical.entry(key).or_default().push_back(value);
+        }
+    }
+    let mut ordered: Vec<String> = Vec::with_capacity(params.len() + additional.len());
+    let mut extra = additional.iter();
+    for key in order {
+        if let Some(value) = canonical
+            .get_mut(key.as_str())
+            .and_then(std::collections::VecDeque::pop_front)
+        {
+            ordered.push(format!("{key}={value}"));
+        } else if let Some((k, v)) = extra.next() {
+            ordered.push(format!("{k}={v}"));
+        }
+    }
+    for p in params {
+        if let Some((key, _)) = p.split_once('=') {
+            if canonical
+                .get_mut(key)
+                .and_then(std::collections::VecDeque::pop_front)
+                .is_some()
+            {
+                ordered.push(p.clone());
+            }
+        }
+    }
+    ordered.extend(extra.map(|(key, value)| format!("{key}={value}")));
+    ordered.join("|")
 }
 
 /// Appends `additional` `KEY=VALUE` pairs to an already-built `|`-joined parameter
@@ -3678,6 +3752,100 @@ mod tests {
         assert_eq!(data, data2, "unmapped-layer body is byte-stable");
     }
 
+    /// A STEP reference the library does not embed is stored by Altium with
+    /// an EMPTY `MODELID` and the full `MODEL.*` group (`test_0805.step` in a
+    /// UI-authored library); the group is keyed on the file name, so the
+    /// reference survives a write and a read.
+    #[test]
+    fn external_model_reference_keeps_its_model_group_under_an_empty_model_id() {
+        use super::super::reader;
+
+        let mut body = ComponentBody::new("", "models/test_0805.step");
+        body.embedded = false;
+        let params = build_component_body_params(&body);
+        assert!(
+            params.contains(
+                "|MODELID=|MODEL.CHECKSUM=0|MODEL.EMBED=FALSE|MODEL.NAME=models/test_0805.step|"
+            ),
+            "{params}"
+        );
+        assert!(
+            params.ends_with("|MODEL.MODELTYPE=1|MODEL.MODELSOURCE=Undefined"),
+            "{params}"
+        );
+
+        let mut fp = Footprint::new("EXT");
+        fp.add_component_body(body);
+        let data = encode_data_stream(&fp).expect("encode");
+        let mut decoded = Footprint::new("EXT");
+        reader::parse_data_stream(&mut decoded, &data, None);
+        let back = &decoded.component_bodies[0];
+        assert_eq!(back.model_name, "models/test_0805.step");
+        assert!(!back.embedded && back.model_id.is_empty());
+        assert_eq!(encode_data_stream(&decoded).unwrap(), data, "byte-stable");
+
+        // An extruded body — no file, not embedded — still carries no group.
+        let mut extruded = ComponentBody::new("", "");
+        extruded.embedded = false;
+        assert!(!build_component_body_params(&extruded).contains("MODELID"));
+    }
+
+    /// `TEXTUREROTATION` is carried verbatim (a UI-authored terminal block
+    /// rotates its texture by 90°); a from-scratch body emits the zero form.
+    #[test]
+    fn texture_rotation_round_trips_verbatim() {
+        let mut body = ComponentBody::new("", "");
+        assert!(
+            build_component_body_params(&body).contains("|TEXTUREROTATION= 0.00000000000000E+0000")
+        );
+        body.texture_rotation = Some(" 9.00000000000000E+0001".to_string());
+        assert!(
+            build_component_body_params(&body).contains("|TEXTUREROTATION= 9.00000000000000E+0001")
+        );
+    }
+
+    /// A body read from a file replays its key order — an unmodelled key
+    /// goes back between the canonical ones it sat between, and a canonical
+    /// key Altium writes twice (ARCRESOLUTION) keeps both positions.
+    #[test]
+    fn body_params_replay_the_read_key_order() {
+        let mut body = ComponentBody::new("", "");
+        body.additional_parameters = vec![("BODYOVERRIDECOLOR".to_string(), "TRUE".to_string())];
+        let canonical = build_component_body_params(&body);
+        let appended_last = canonical.ends_with("|BODYOVERRIDECOLOR=TRUE");
+        assert!(
+            appended_last,
+            "without an order the unmodelled key is appended: {canonical}"
+        );
+
+        // The order Altium wrote: the override colour right after the opacity.
+        let mut order: Vec<String> = canonical
+            .split('|')
+            .filter_map(|kv| kv.split_once('=').map(|(k, _)| k.to_string()))
+            .filter(|k| k != "BODYOVERRIDECOLOR")
+            .collect();
+        let at = order.iter().position(|k| k == "BODYOPACITY3D").unwrap() + 1;
+        order.insert(at, "BODYOVERRIDECOLOR".to_string());
+        assert_eq!(order.iter().filter(|k| *k == "ARCRESOLUTION").count(), 2);
+        body.param_key_order = order;
+
+        let replayed = build_component_body_params(&body);
+        assert!(
+            replayed.contains("|BODYOPACITY3D=1.000|BODYOVERRIDECOLOR=TRUE|IDENTIFIER="),
+            "{replayed}"
+        );
+        assert_eq!(replayed.matches("ARCRESOLUTION=").count(), 2, "{replayed}");
+        assert_eq!(
+            replayed.len(),
+            canonical.len(),
+            "same tokens, different order"
+        );
+
+        // A canonical key the order lacks (a typed edit) is still emitted.
+        body.param_key_order.retain(|k| k != "BODYCOLOR3D");
+        assert!(build_component_body_params(&body).contains("|BODYCOLOR3D="));
+    }
+
     /// Retargeting such a body to a real layer discards the stale pair and
     /// emits the canonical byte + token for the new layer.
     #[test]
@@ -4019,6 +4187,29 @@ mod tests {
         let mut short = Vec::new();
         encode_via(&mut short, &partial);
         assert_eq!(short.len(), stacked.len());
+    }
+
+    /// A flag word with bits nothing models — a hand-authored pin header's
+    /// tracks carry `0x001C` — comes back exactly, and so does every word
+    /// Altium can write: all sixteen bits, modelled or not.
+    #[test]
+    fn unmodelled_flag_bits_round_trip_verbatim() {
+        use crate::altium::pcblib::reader::read_flags_for_test;
+        assert_eq!(encode_altium_flags(read_flags_for_test(0x001C)), 0x001C);
+        // Every saved word (bit 3 set) whose unlocked/test-point combination
+        // Altium itself writes round-trips bit for bit.
+        for word in 0u16..=0xFFFF {
+            let saved = word & ALT_FLAG_SAVED != 0;
+            let testpoint = word & (ALT_FLAG_TESTPOINT_TOP | ALT_FLAG_TESTPOINT_BOTTOM) != 0;
+            let unlocked = word & ALT_FLAG_UNLOCKED != 0;
+            if saved && !(testpoint && unlocked) {
+                assert_eq!(
+                    encode_altium_flags(read_flags_for_test(word)),
+                    word,
+                    "{word:#06x}"
+                );
+            }
+        }
     }
 
     /// On disk a rounded rectangle is shape id 1 plus a radius in 1..=99, so

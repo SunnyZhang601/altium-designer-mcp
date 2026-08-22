@@ -24,9 +24,6 @@ Found while fixing something else; each needs its own verification or a fixture 
       (`graphically_locked`, `disabled`, `dimmed`, `owner_part_display_mode`) in the model,
       while the other 13 graphics do — almost certainly a gap, but no golden record exists
       to verify the keys AD24 emits. Blocked on the fixture (see `docs/FIXTURE_COVERAGE.md`).
-- [ ] **Non-embedded STEP reference form is unverified** — `step_model.embed: false` now
-      writes `MODELID` + `MODEL.EMBED=FALSE` + `MODEL.NAME=<path>`; whether Altium also
-      expects an entry in `/Library/ModelsNoEmbed` is unknown. Blocked on the fixture.
 
 ## B. On-site Altium tooling
 

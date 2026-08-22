@@ -176,6 +176,7 @@ impl PcbLib {
                 texture_center_y: None,
                 texture_size_x: None,
                 texture_size_y: None,
+                texture_rotation: None,
                 raw_layer_id: None,
                 v7_layer: None,
                 model_name: filename,
@@ -207,6 +208,7 @@ impl PcbLib {
                 polygon_index: 0xFFFF,
                 component_index: -1,
                 additional_parameters: Vec::new(),
+                param_key_order: Vec::new(),
             });
 
             tracing::debug!(

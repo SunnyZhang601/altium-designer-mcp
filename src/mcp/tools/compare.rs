@@ -2340,6 +2340,7 @@ mod tests {
                 texture_center_y: None,
                 texture_size_x: None,
                 texture_size_y: None,
+                texture_rotation: None,
                 model_name: String::new(),
                 embedded: false,
                 rotation_x: 0.0,
@@ -2369,6 +2370,7 @@ mod tests {
                 polygon_index: 0xFFFF,
                 component_index: -1,
                 additional_parameters: Vec::new(),
+                param_key_order: Vec::new(),
             }
         }
 

@@ -85,9 +85,10 @@ intermediate failure messages likewise surface only the sanitised file name.
 
 ### Backups with bounded retention (`create_backup` / `MAX_BACKUPS`)
 
-Before a destructive operation, `create_backup` (`src/mcp/server.rs`) copies the
-existing file to a timestamped `filepath.YYYYMMDD_HHMMSS.bak`. New-file creation is a
-no-op. Retention is bounded: `MAX_BACKUPS = 5` (`src/mcp/server.rs`) and
+Before a destructive operation — including `restore_backup`, which snapshots the
+current file before the chosen backup replaces it — `create_backup` (`src/mcp/server.rs`)
+copies the existing file to a timestamped `filepath.YYYYMMDD_HHMMSS.bak`. New-file
+creation is a no-op. Retention is bounded: `MAX_BACKUPS = 5` (`src/mcp/server.rs`) and
 `cleanup_old_backups` (`src/mcp/server.rs`) prunes the oldest backups so the safety
 net cannot itself become an unbounded-disk-usage DoS.
 
@@ -111,7 +112,7 @@ component (falling back to `<file>`). This is deliberately important for writes:
 atomic-write temporary path (for example `…/MyLib.pcblib.tmp`) is never surfaced to the
 client. The full path is retained in the structured error field for `tracing` at debug
 level only. Regression tests assert that neither read nor write errors leak their
-directory (`src/altium/error.rs`, `src/altium/error.rs`).
+directory (`src/altium/error.rs`).
 
 **Central sanitiser choke-point.** Beyond the per-variant `Display` sanitisation above,
 every client-facing error funnels through one egress point: `ToolCallResult::error` and

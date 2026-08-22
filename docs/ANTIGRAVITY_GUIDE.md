@@ -55,11 +55,12 @@ Antigravity reads MCP servers from:
 ~/.gemini/config/mcp_config.json
 ```
 
-(Windows: `%USERPROFILE%\.gemini\config\mcp_config.json`)
+(Windows: `%USERPROFILE%\.gemini\config\mcp_config.json`) — or, for one project only,
+from `.agents/mcp_config.json` in the workspace root.
 
 It uses the standard `mcpServers` schema (`command` / `args` / `env`, plus an optional
 `disabled` flag), so the server entry mirrors any other MCP client. The Antigravity IDE and
-CLI share this same file.
+CLI share these same files.
 
 ### Option A — Edit the raw config (recommended)
 

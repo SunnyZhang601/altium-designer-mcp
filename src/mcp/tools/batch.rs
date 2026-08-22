@@ -381,6 +381,9 @@ impl McpServer {
                 if region.layer == from_layer {
                     if !dry_run {
                         region.layer = to_layer;
+                        // The replayed V7_LAYER token named the old layer; let
+                        // the writer derive it from the new one.
+                        region.v7_layer = None;
                     }
                     fp_changes["regions"] = json!(fp_changes["regions"].as_u64().unwrap_or(0) + 1);
                     fp_total += 1;
@@ -956,6 +959,46 @@ mod tests {
             .filter(|t| t.layer == Layer::TopOverlay)
             .count();
         assert_eq!(on_top, 0, "all Top Overlay tracks were moved");
+    }
+
+    /// A region read with a `V7_LAYER` token that disagreed with its layer byte
+    /// carries the token as an override; moving the region drops it, so the
+    /// saved token names the new layer rather than the old one.
+    #[test]
+    fn batch_rename_layer_drops_a_region_stale_v7_token() {
+        use crate::altium::pcblib::{Footprint, Region};
+
+        let dir = test_temp_dir();
+        let server = create_test_server(dir.path());
+        let mut region = Region::rectangle(-1.0, -1.0, 1.0, 1.0, Layer::TopOverlay);
+        region.v7_layer = Some("MECHANICAL4".to_string()); // disagrees with Top Overlay
+        let mut fp = Footprint::new("RGN");
+        fp.add_pad(Pad::smd("1", 0.0, 0.0, 0.6, 0.5));
+        fp.add_region(region);
+        let mut lib = PcbLib::new();
+        lib.add(fp);
+        let path = dir.path().join("RegionToken.PcbLib");
+        lib.save(&path).unwrap();
+        // The override round-trips as long as nothing moves the region.
+        let before = PcbLib::open(&path).unwrap();
+        assert_eq!(
+            before.get("RGN").unwrap().regions[0].v7_layer.as_deref(),
+            Some("MECHANICAL4")
+        );
+
+        let r = server.call_batch_update(&json!({
+            "filepath": path.to_string_lossy(),
+            "operation": "rename_layer",
+            "parameters": { "from_layer": "Top Overlay", "to_layer": "Bottom Overlay" },
+        }));
+        assert!(!r.is_error, "{}", get_result_text(&r));
+
+        let after = PcbLib::open(&path).unwrap();
+        let moved = &after.get("RGN").unwrap().regions[0];
+        assert_eq!(moved.layer, Layer::BottomOverlay);
+        // The reader keeps a token only when it disagrees with the byte, so
+        // `None` here means the saved token is Bottom Overlay's own.
+        assert_eq!(moved.v7_layer, None, "stale token not replayed");
     }
 
     #[test]

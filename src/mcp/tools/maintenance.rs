@@ -2050,6 +2050,7 @@ mod tests {
             fp.add_region(Region::rectangle(-1.0, -1.0, 1.0, 1.0, Layer::TopLayer));
             fp.add_via(Via::new(0.6, 0.6, 0.6, 0.3));
             fp.add_text(Text {
+                raw_layer_id: None,
                 barcode_full_width: None,
                 barcode_full_height: None,
                 barcode_x_margin: None,

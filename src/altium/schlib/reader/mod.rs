@@ -235,6 +235,7 @@ fn parse_text_record_from_string(symbol: &mut Symbol, text: &str) {
             // Model (footprint reference)
             if let Some(name) = props.get("modelname") {
                 let mut fp = FootprintModel::new(name);
+                fp.raw_params = record_segments(text);
                 if let Some(desc) = props.get("description") {
                     fp.description.clone_from(desc);
                 }

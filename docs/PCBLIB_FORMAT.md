@@ -298,7 +298,19 @@ Every sub-block is length-prefixed:
 | 56 | Keep-Out Layer |
 | 57-72 | Mechanical 1-16 |
 | 73 | Drill Drawing |
-| 186-201 | Mechanical 17-32 (Altium Designer 18+) |
+| 186-201 | Mechanical 17-32 — read only; see below |
+
+Mechanical 17-32 have no header byte of their own. Altium stores a primitive on one of them
+under byte **72** (Mechanical 16, the last the byte can hold) and names the real layer in the
+[V7 layer id](#v7-layer-ids) — a hand-authored `Mechanical 20` track is `72` + `0x01020014` —
+or, for a region or body, in the `V7_LAYER` token (`MECHANICAL20`). The reader lets a V7 id or
+token past sixteen decide for a mechanical byte, and the writer stores such a layer the same
+way. Bytes 186-201 are accepted on read for files earlier versions of this crate wrote; they are
+never written.
+
+A header byte the table does not map reads as Multi-Layer and is carried as the primitive's
+`raw_layer_id`, so a rewrite stores the byte as read rather than `74`; moving the primitive to a
+layer the model can name discards it.
 
 ### Component Layer Pairs
 
@@ -345,6 +357,7 @@ Several primitives carry a derived 32-bit "v7 saved layer id" alongside the laye
 | 32 (bottom) | `0x0100FFFF` |
 | 39-54 (internal plane n) | `0x01010000 + n` |
 | 57-72 (mechanical n) | `0x01020000 + n` |
+| Mechanical 17-32 (byte 72) | `0x01020011`-`0x01020020` |
 | 33 / 34 (overlay) | `0x01030006` / `0x01030007` |
 | 35 / 36 (paste) | `0x01030008` / `0x01030009` |
 | 37 / 38 (solder) | `0x0103000A` / `0x0103000B` |
@@ -357,7 +370,7 @@ All primitives start with a common header:
 
 | Offset | Size | Field |
 |--------|------|-------|
-| 0 | 1 | Layer ID |
+| 0 | 1 | Layer ID (byte 72 for Mechanical 17-32 — see [Layer IDs](#layer-ids)) |
 | 1-2 | 2 | Flags word (u16, see below) |
 | 3-4 | 2 | NetIndex (u16; `0xFFFF` when unconnected) |
 | 5-6 | 2 | PolygonIndex (u16; `0xFFFF` = none) |
@@ -886,16 +899,17 @@ constant regions are replayed verbatim.
 | 75-202 | 128 | Per-layer diameters (32 × i32; a Simple via repeats its diameter) | yes |
 | 242-245 | 4 | Solder mask expansion, back/bottom face (i32; mirrors the front when unset) | yes |
 | 258 | 1 | Solder-mask expansion measured from the hole edge (bool) | yes |
-| 312 | 1 | Drill-pair classification (0=Through, 1=BlindBuriedStart, 2=Mid, 3=End) | yes |
-| 258 | 1 | Solder-mask-from-hole-edge flag | unmodelled (template) |
-| 259-274 | 16 | Identity GUID A (fresh per via on write) | write-only |
-| 275-290 | 16 | Identity GUID B (fresh per via on write) | write-only |
+| 259-274 | 16 | Identity GUID A — zeros in every AD-authored library via; replayed from the read block, zeroed from scratch | replay |
+| 275-290 | 16 | Identity GUID B — as GUID A | replay |
 | 291-294 | 4 | Hole positive tolerance (i32; `0x7FFFFFFF` = unset) | yes |
 | 295-298 | 4 | Hole negative tolerance (i32; `0x7FFFFFFF` = unset) | yes |
-| 312 | 1 | Drill layer-pair type (0=Through, 1/2/3 = blind/buried) | unmodelled (template) |
+| 312 | 1 | Drill-pair classification (0=Through, 1=BlindBuriedStart, 2=Mid, 3=End) | yes |
 | 320 | 1 | Trailing constant (`0x01`) | template |
 
-The reader accepts any block ≥ 31 bytes and defaults every absent field.
+The reader accepts any block ≥ 31 bytes and defaults every absent field. The whole block as
+read is the via's `raw_block` and the write base, **length included**: an older library stores
+351-byte vias, and the thirty bytes past the template go back verbatim. A read block shorter
+than the template cannot take the overlays, so the template is the base instead.
 
 ### 3D Model Storage
 

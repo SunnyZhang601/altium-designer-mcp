@@ -541,6 +541,7 @@ fn test_text_special_strings() {
 
     // Standard designator reference
     let text1 = Text {
+        raw_layer_id: None,
         barcode_full_width: None,
         barcode_full_height: None,
         barcode_x_margin: None,
@@ -583,6 +584,7 @@ fn test_text_special_strings() {
 
     // Comment reference
     let text2 = Text {
+        raw_layer_id: None,
         barcode_full_width: None,
         barcode_full_height: None,
         barcode_x_margin: None,

@@ -268,8 +268,37 @@ const fn encode_altium_flags(flags: PcbFlags) -> u16 {
 
 /// Writes the common 13-byte header for primitives.
 fn write_common_header(data: &mut Vec<u8>, layer: Layer, flags: PcbFlags) {
+    write_common_header_with_byte(data, disk_layer_byte(layer), flags);
+}
+
+/// The header layer byte Altium stores for a layer. Mechanical 17-32 have
+/// no byte of their own: Altium writes 72 (Mechanical 16, the last the byte
+/// can hold) and names the real layer in the V7 layer id or `V7_LAYER`
+/// token — an AD-authored `Mechanical 20` track is `72` + `0x0102_0014` —
+/// so that is what a from-scratch primitive gets too. Every other layer is
+/// its [`layer_to_id`] byte.
+pub(super) const fn disk_layer_byte(layer: Layer) -> u8 {
+    match layer_to_id(layer) {
+        186..=201 => 72,
+        id => id,
+    }
+}
+
+/// The layer byte a read primitive goes back out with: the byte as read
+/// while the primitive still sits on the `MultiLayer` catch-all an unmapped
+/// byte decodes to (see `raw_layer_id` on every layered primitive), else
+/// the byte Altium stores for the layer it now has.
+fn layer_byte(raw: Option<u8>, layer: Layer) -> u8 {
+    match raw {
+        Some(byte) if layer == Layer::MultiLayer => byte,
+        _ => disk_layer_byte(layer),
+    }
+}
+
+/// [`write_common_header`] with an explicit layer byte.
+fn write_common_header_with_byte(data: &mut Vec<u8>, layer_byte: u8, flags: PcbFlags) {
     // Byte 0: Layer ID
-    data.push(layer_to_id(layer));
+    data.push(layer_byte);
     // Bytes 1-2: Altium flag word (saved/unlocked/tenting/keepout)
     data.extend_from_slice(&encode_altium_flags(flags).to_le_bytes());
     // Bytes 3-12: net index / polygon index / component index / reserved, all
@@ -759,7 +788,11 @@ fn encode_pad_geometry(pad: &Pad) -> Vec<u8> {
     let mut block = Vec::with_capacity(PAD_MAIN_BLOCK_LEN);
 
     // Common header (13 bytes) - offsets 0-12 + connectivity indices @3-8.
-    write_common_header(&mut block, pad.layer, pad.flags);
+    write_common_header_with_byte(
+        &mut block,
+        layer_byte(pad.raw_layer_id, pad.layer),
+        pad.flags,
+    );
     write_common_indices(
         &mut block,
         pad.net_index,
@@ -882,20 +915,24 @@ const VIA_SR1_TEMPLATE: [u8; 321] = [
 /// [`VIA_SR1_TEMPLATE`]. Our previous 6-block layout (copied from the pad
 /// encoder) was misread by Altium; this matches `PcbLibWriter.WriteVia` (#113).
 fn encode_via(data: &mut Vec<u8>, via: &Via) {
-    // Base = the block as read (when its length matches the template layout
-    // the overlays below assume), so unmodelled bytes round-trip; else the
-    // template with its identity-GUID slots zeroed — AD24 writes zeros there
-    // for every library via (the golden), and the old fresh-GUIDs-per-save
-    // behaviour meant the record changed on every write.
-    let mut block = via
+    // Base = the block as read whenever it is at least as long as the
+    // template the overlays below assume — length included, so a library's
+    // 351-byte vias keep the thirty bytes past the template this crate does
+    // not model and every other unmodelled byte round-trips; else the
+    // template with its identity-GUID slots zeroed, which is what AD24 writes
+    // there for every library via (the golden).
+    let mut block: Vec<u8> = via
         .raw_block
         .as_deref()
-        .and_then(|raw| <[u8; VIA_SR1_TEMPLATE.len()]>::try_from(raw).ok())
-        .unwrap_or_else(|| {
-            let mut b = VIA_SR1_TEMPLATE;
-            b[259..291].fill(0);
-            b
-        });
+        .filter(|raw| raw.len() >= VIA_SR1_TEMPLATE.len())
+        .map_or_else(
+            || {
+                let mut b = VIA_SR1_TEMPLATE;
+                b[259..291].fill(0);
+                b.to_vec()
+            },
+            <[u8]>::to_vec,
+        );
 
     // Common header (offsets 0-12): MultiLayer + the via's flag word
     // (locked/keepout/tenting top+bottom).
@@ -1075,7 +1112,11 @@ fn encode_track(data: &mut Vec<u8>, track: &Track) {
     let mut block = Vec::with_capacity(64);
 
     // Common header (13 bytes) + connectivity indices @3-8 (net/polygon/component).
-    write_common_header(&mut block, track.layer, track.flags);
+    write_common_header_with_byte(
+        &mut block,
+        layer_byte(track.raw_layer_id, track.layer),
+        track.flags,
+    );
     write_common_indices(
         &mut block,
         track.net_index,
@@ -1114,7 +1155,11 @@ fn encode_arc(data: &mut Vec<u8>, arc: &Arc) {
     let mut block = Vec::with_capacity(64);
 
     // Common header (13 bytes) + connectivity indices @3-8 (net/polygon/component).
-    write_common_header(&mut block, arc.layer, arc.flags);
+    write_common_header_with_byte(
+        &mut block,
+        layer_byte(arc.raw_layer_id, arc.layer),
+        arc.flags,
+    );
     write_common_indices(
         &mut block,
         arc.net_index,
@@ -1226,7 +1271,11 @@ pub fn encode_text_geometry(text: &Text, wide_index: Option<u32>) -> Vec<u8> {
 
     // Common header (offsets 0-12): layer + Altium flag word + 0xFF net/poly/comp.
     let mut header = Vec::with_capacity(13);
-    write_common_header(&mut header, text.layer, text.flags);
+    write_common_header_with_byte(
+        &mut header,
+        layer_byte(text.raw_layer_id, text.layer),
+        text.flags,
+    );
     block[..13].copy_from_slice(&header);
 
     // Connectivity indices @3-8 (net/polygon/component). Overlays the header's
@@ -1606,7 +1655,11 @@ fn encode_fill_block(fill: &Fill) -> Vec<u8> {
     let mut block = Vec::with_capacity(50);
 
     // Common header (13 bytes) + connectivity indices @3-8 (net/polygon/component).
-    write_common_header(&mut block, fill.layer, fill.flags);
+    write_common_header_with_byte(
+        &mut block,
+        layer_byte(fill.raw_layer_id, fill.layer),
+        fill.flags,
+    );
     write_common_indices(
         &mut block,
         fill.net_index,
@@ -1668,12 +1721,8 @@ fn encode_component_body_block(body: &ComponentBody, outline: &[(f64, f64)]) -> 
     // Layer ID (1 byte). An unmapped byte the reader could not decode is
     // replayed verbatim while the body still sits on the `MultiLayer`
     // catch-all its decode produced (#391); a retargeted body gets the
-    // canonical id for its new layer.
-    let layer_id = match body.raw_layer_id {
-        Some(id) if body.layer == Layer::MultiLayer => id,
-        _ => layer_to_id(body.layer),
-    };
-    block.push(layer_id);
+    // byte Altium stores for its new layer.
+    block.push(layer_byte(body.raw_layer_id, body.layer));
 
     // Record type marker (2 bytes): 0x0C 0x00
     block.push(0x0C);
@@ -2462,6 +2511,7 @@ mod tests {
         // IsComment@40 / IsDesignator@41 overlay the template's 0x00 bytes
         // (offsets verified against AltiumSharp b[40]/b[41]).
         let text = Text {
+            raw_layer_id: None,
             barcode_full_width: None,
             barcode_full_height: None,
             barcode_x_margin: None,
@@ -2555,6 +2605,7 @@ mod tests {
         use crate::altium::TextJustification;
         // A default Text's geometry block keeps the template's 0xFF header bytes @3-8.
         let text = Text {
+            raw_layer_id: None,
             barcode_full_width: None,
             barcode_full_height: None,
             barcode_x_margin: None,
@@ -2629,6 +2680,7 @@ mod tests {
         use crate::altium::TextJustification;
         // A framed inverted text overlays every descriptor field at its offset.
         let text = Text {
+            raw_layer_id: None,
             barcode_full_width: None,
             barcode_full_height: None,
             barcode_x_margin: None,
@@ -4035,6 +4087,7 @@ mod tests {
     fn wide_strings_nonempty_has_no_trailing_pipe() {
         use crate::altium::TextJustification;
         let mk = |s: &str| Text {
+            raw_layer_id: None,
             barcode_full_width: None,
             barcode_full_height: None,
             barcode_x_margin: None,
@@ -4243,5 +4296,71 @@ mod tests {
         assert_eq!(encode_pad_per_layer_data(&pad)[288 + 3], 50);
         pad.per_layer_corner_radii = Some(vec![7; 32]);
         assert_eq!(&encode_pad_per_layer_data(&pad)[288..292], &[7, 7, 7, 7]);
+    }
+
+    #[test]
+    fn a_via_block_longer_than_the_template_keeps_its_length() {
+        // An older library stores 351-byte vias: thirty bytes past the
+        // 321-byte template, unmodelled here, that a rewrite must not cut off.
+        let mut raw = vec![0_u8; 351];
+        raw[..VIA_SR1_TEMPLATE.len()].copy_from_slice(&VIA_SR1_TEMPLATE);
+        for (i, byte) in raw[VIA_SR1_TEMPLATE.len()..].iter_mut().enumerate() {
+            *byte = u8::try_from(0xA0 + i).expect("fits");
+        }
+        let mut via = Via::new(0.0, 0.0, 0.6, 0.3);
+        via.raw_block = Some(raw.clone());
+
+        let mut data = Vec::new();
+        encode_via(&mut data, &via);
+        let len = u32::from_le_bytes(data[..4].try_into().expect("prefix")) as usize;
+        assert_eq!(len, raw.len(), "the read length is the written length");
+        assert_eq!(
+            &data[4 + VIA_SR1_TEMPLATE.len()..],
+            &raw[VIA_SR1_TEMPLATE.len()..],
+            "the bytes past the template go back verbatim"
+        );
+
+        // A block shorter than the template cannot take the overlays: the
+        // template is the base instead.
+        via.raw_block = Some(raw[..300].to_vec());
+        let mut data = Vec::new();
+        encode_via(&mut data, &via);
+        let len = u32::from_le_bytes(data[..4].try_into().expect("prefix")) as usize;
+        assert_eq!(len, VIA_SR1_TEMPLATE.len());
+    }
+
+    #[test]
+    fn a_mechanical_layer_past_sixteen_is_stored_the_way_altium_stores_it() {
+        // Altium keeps a Mechanical 20 track under legacy byte 72 with the
+        // real layer in the V7 id at @41; a track placed there from scratch
+        // gets the same pair, and so does one read from such a file.
+        let mut track = Track::new(0.0, 0.0, 1.0, 0.0, 0.2, Layer::Mechanical20);
+        let mut data = Vec::new();
+        encode_track(&mut data, &track);
+        assert_eq!(data[4], 72, "the legacy byte Altium writes");
+        assert_eq!(&data[4 + 41..4 + 45], &0x0102_0014_u32.to_le_bytes());
+        for layer in [
+            Layer::Mechanical17,
+            Layer::Mechanical32,
+            Layer::Mechanical16,
+        ] {
+            assert_eq!(disk_layer_byte(layer), 72, "{layer:?}");
+        }
+        assert_eq!(disk_layer_byte(Layer::Mechanical15), 71);
+        assert_eq!(disk_layer_byte(Layer::TopOverlay), 33);
+
+        // A byte outside every documented range reads as Multi-Layer and, the
+        // primitive unmoved, goes back as the byte it was rather than as 74;
+        // moved to a layer the model can name, it gets that layer's byte.
+        track.layer = Layer::MultiLayer;
+        track.raw_layer_id = Some(100);
+        let mut data = Vec::new();
+        encode_track(&mut data, &track);
+        assert_eq!(data[4], 100);
+        track.layer = Layer::TopOverlay;
+        let mut data = Vec::new();
+        encode_track(&mut data, &track);
+        assert_eq!(data[4], 33);
+        assert_eq!(layer_byte(None, Layer::MultiLayer), 74);
     }
 }

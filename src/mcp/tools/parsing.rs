@@ -186,6 +186,27 @@ fn json_guid(json: &Value) -> Option<String> {
     json.get("guid").and_then(Value::as_str).map(str::to_string)
 }
 
+/// The streams a symbol carries verbatim (`extra_streams`), in the
+/// `[[name, base64], …]` form `read_schlib` emits; anything else is no
+/// streams, like every other carrier this parser reads leniently.
+fn json_extra_streams(json: &Value) -> Vec<(String, Vec<u8>)> {
+    #[derive(serde::Deserialize)]
+    struct Streams(#[serde(with = "crate::altium::base64_opt::named")] Vec<(String, Vec<u8>)>);
+    json.get("extra_streams")
+        .cloned()
+        .and_then(|v| serde_json::from_value::<Streams>(v).ok())
+        .map_or_else(Vec::new, |streams| streams.0)
+}
+
+/// A read primitive's header layer byte (`raw_layer_id`), carried so the
+/// rewrite keeps an unmapped byte while the primitive still sits on the
+/// Multi-Layer catch-all it decoded to.
+fn json_raw_layer_id(json: &Value) -> Option<u8> {
+    json.get("raw_layer_id")
+        .and_then(Value::as_u64)
+        .and_then(|v| u8::try_from(v).ok())
+}
+
 /// Reads a base64-encoded byte field: the raw replay bases `read_pcblib`
 /// emits (a pad's `raw_tail`, a via's `raw_block`, a text's `raw_geometry`)
 /// and embedded image bytes. Passing one back through the tool layer keeps
@@ -527,11 +548,14 @@ impl McpServer {
                         .get("unique_id")
                         .and_then(Value::as_str)
                         .map(str::to_string);
+                    fp.raw_params = json_raw_params(fp_json);
                     symbol.add_footprint(fp);
                 }
             }
         }
 
+        // The streams this crate does not read, carried verbatim.
+        symbol.extra_streams = json_extra_streams(sym_json);
         // The header exactly as read — key order, unmodelled keys and the
         // stale AllPinCount — so a read-modify-write reproduces it.
         if let Some(params) = sym_json.get("header_params") {
@@ -1175,6 +1199,7 @@ impl McpServer {
             });
 
         Ok(Pad {
+            raw_layer_id: json_raw_layer_id(json),
             designator: designator.to_string(),
             x,
             y,
@@ -1268,6 +1293,7 @@ impl McpServer {
         track.keepout_restrictions = json_keepout(json);
         track.unique_id = json_unique_id(json);
         track.guid = json_guid(json);
+        track.raw_layer_id = json_raw_layer_id(json);
         Ok(track)
     }
 
@@ -1312,6 +1338,7 @@ impl McpServer {
         };
 
         Ok(Arc {
+            raw_layer_id: json_raw_layer_id(json),
             x,
             y,
             radius,
@@ -1571,6 +1598,7 @@ impl McpServer {
             .and_then(Value::as_f64);
 
         Some(Text {
+            raw_layer_id: json_raw_layer_id(json),
             x,
             y,
             text: text.to_string(),
@@ -1671,10 +1699,7 @@ impl McpServer {
             texture_size_x: json_guidless_opt(body_json, "texture_size_x"),
             texture_size_y: json_guidless_opt(body_json, "texture_size_y"),
             texture_rotation: json_guidless_opt(body_json, "texture_rotation"),
-            raw_layer_id: body_json
-                .get("raw_layer_id")
-                .and_then(Value::as_u64)
-                .and_then(|v| u8::try_from(v).ok()),
+            raw_layer_id: json_raw_layer_id(body_json),
             v7_layer: json_guidless_opt(body_json, "v7_layer"),
             model_id: str_or("model_id", ""),
             model_name: str_or("model_name", ""),
@@ -2000,6 +2025,7 @@ impl McpServer {
         fill.keepout_restrictions = json_keepout(json);
         fill.unique_id = json_unique_id(json);
         fill.guid = json_guid(json);
+        fill.raw_layer_id = json_raw_layer_id(json);
 
         Ok(fill)
     }
@@ -3787,6 +3813,55 @@ mod tests {
         }))
         .expect("fill should parse");
         assert_eq!(fill.guid.as_deref(), Some(guid));
+    }
+
+    #[test]
+    fn every_layered_primitive_carries_its_read_layer_byte() {
+        // An unmapped header byte read onto the Multi-Layer catch-all
+        // survives the JSON boundary on each of the five kinds that carry one.
+        let with = |fields: serde_json::Value| {
+            let mut json = fields;
+            json["layer"] = json!("Multi-Layer");
+            json["raw_layer_id"] = json!(100);
+            json
+        };
+        let pad = McpServer::parse_pad(&with(json!({
+            "designator": "1", "x": 0.0, "y": 0.0, "width": 1.0, "height": 1.0,
+        })))
+        .expect("pad");
+        let track = McpServer::parse_track(&with(json!({
+            "x1": 0.0, "y1": 0.0, "x2": 1.0, "y2": 0.0, "width": 0.2,
+        })))
+        .expect("track");
+        let arc = McpServer::parse_arc(&with(json!({
+            "x": 0.0, "y": 0.0, "radius": 1.0, "start_angle": 0.0, "end_angle": 90.0, "width": 0.2,
+        })))
+        .expect("arc");
+        let text = McpServer::parse_text(&with(json!({
+            "x": 0.0, "y": 0.0, "text": "T", "height": 1.0,
+        })))
+        .expect("text");
+        let fill = McpServer::parse_fill(&with(json!({
+            "x1": 0.0, "y1": 0.0, "x2": 1.0, "y2": 1.0,
+        })))
+        .expect("fill");
+        assert_eq!(
+            [
+                pad.raw_layer_id,
+                track.raw_layer_id,
+                arc.raw_layer_id,
+                text.raw_layer_id,
+                fill.raw_layer_id,
+            ],
+            [Some(100); 5]
+        );
+        assert_eq!(track.layer, crate::altium::pcblib::Layer::MultiLayer);
+        // An out-of-range value is not a byte.
+        let plain = McpServer::parse_fill(&json!({
+            "x1": 0.0, "y1": 0.0, "x2": 1.0, "y2": 1.0, "layer": "Top Layer", "raw_layer_id": 300,
+        }))
+        .expect("fill");
+        assert_eq!(plain.raw_layer_id, None);
     }
 
     #[test]

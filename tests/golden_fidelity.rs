@@ -712,6 +712,12 @@ fn schlib_golden_survives_a_round_trip() {
 /// elsewhere at build time (a compile-time constant, not a runtime path);
 /// ignored by default and never writes into the corpus.
 ///
+/// A library Altium did not author is normalised rather than reproduced —
+/// the sibling corpus's `test_component.*` pair (a third-party writer's
+/// explicit defaults, trailing pipes and an `OwnerIndex=0` footprint link)
+/// is reported as a divergence by design, so a clean sweep is "every
+/// Altium-authored library OK", not an empty report.
+///
 /// ```text
 /// ALTIUM_CORPUS_DIR=../my-libraries cargo test --test golden_fidelity corpus -- --ignored --nocapture
 /// ```

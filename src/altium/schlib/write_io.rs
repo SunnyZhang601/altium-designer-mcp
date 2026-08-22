@@ -96,6 +96,10 @@ impl SchLib {
             if let Some(wide) = pin_aux::encode_pin_wide_text(&symbol.pins)? {
                 crate::altium::write_stream(&mut cfb, &format!("/{ole_name}/PinWideText"), &wide)?;
             }
+            // Streams read but not understood go back as they were.
+            for (name, bytes) in &symbol.extra_streams {
+                crate::altium::write_stream(&mut cfb, &format!("/{ole_name}/{name}"), bytes)?;
+            }
         }
 
         // Root Storage stream (Altium's icon storage). Always present. EVERY

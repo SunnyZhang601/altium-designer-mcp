@@ -130,9 +130,18 @@ structs, not to Altium: an elliptical arc (RECORD=11; also the reason `Elliptica
 carries no display flags in the model — nothing to verify them against), a text
 annotation (RECORD=3; same for `Text`), and a footprint model link (RECORD=45, with
 its `ImplementationList`/`MapDefiner` children) — the `FootprintModel` replay of
-`unique_id`/`is_current` is unit-tested only.
+`unique_id`/`is_current`/`raw_params` is unit-tested only, and its UI-authored form
+(`IntegratedModel=T|DatabaseModel=T`, no empty `Description`) is known from a hand-authored
+library, not a golden.
 
 **PcbLib:** region net and the cavity/subpoly params, raw-outline precision for ComponentBody.
+A **primitive of every kind on Mechanical 17-32** (`eMechanical20` or
+`LayerUtils.MechanicalLayer(20)` if the AD24 API names it): the header byte 72 + V7 id
+`0x01020014` pair is settled by hand-authored tracks, but the same pair on a pad, arc,
+text, fill, region and body — and the `MECHANICAL20` token on the last two — is inferred
+from the track, not seen. A **via block longer than the 321-byte template** (an older
+Altium's 351-byte vias are known only from a hand-authored library) so the golden pins
+that the extra bytes go back verbatim.
 A **non-embedded STEP reference** in the *generated* golden — the form itself is settled
 by a UI-authored library (`MODELID=` empty, `MODEL.EMBED=FALSE`, `MODEL.NAME`, the full
 group; `/Library/ModelsNoEmbed` stays empty) and `write_pcblib` follows it. A **text beyond U+00FF** (Ω, CJK) so a golden pins `WideStrings` as UTF-16

@@ -99,6 +99,13 @@ pub struct Text {
     /// Text height in mm.
     #[serde(serialize_with = "crate::altium::serde_round::serialize")]
     pub height: f64,
+    /// The header layer byte exactly as read, kept only when the layer table
+    /// does not map it — the primitive then sits on the `MultiLayer`
+    /// catch-all, and without the byte a rewrite would store `74` in its
+    /// place. Replayed while the primitive still sits there; moving it to a
+    /// layer the model can name discards the byte for that layer's own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub raw_layer_id: Option<u8>,
     /// Layer the text is on.
     pub layer: Layer,
     /// Rotation angle in degrees.
@@ -308,6 +315,13 @@ pub struct Fill {
     /// Second corner Y position in mm.
     #[serde(serialize_with = "crate::altium::serde_round::serialize")]
     pub y2: f64,
+    /// The header layer byte exactly as read, kept only when the layer table
+    /// does not map it — the primitive then sits on the `MultiLayer`
+    /// catch-all, and without the byte a rewrite would store `74` in its
+    /// place. Replayed while the primitive still sits there; moving it to a
+    /// layer the model can name discards the byte for that layer's own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub raw_layer_id: Option<u8>,
     /// Layer the fill is on.
     pub layer: Layer,
     /// Rotation angle in degrees.
@@ -357,6 +371,7 @@ impl Fill {
     #[must_use]
     pub const fn new(x1: f64, y1: f64, x2: f64, y2: f64, layer: Layer) -> Self {
         Self {
+            raw_layer_id: None,
             x1,
             y1,
             x2,
@@ -380,6 +395,7 @@ impl Fill {
         let half_w = width / 2.0;
         let half_h = height / 2.0;
         Self {
+            raw_layer_id: None,
             x1: x - half_w,
             y1: y - half_h,
             x2: x + half_w,

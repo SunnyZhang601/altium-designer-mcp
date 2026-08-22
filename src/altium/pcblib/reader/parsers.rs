@@ -115,7 +115,7 @@ pub(super) fn parse_pad(data: &[u8], offset: usize) -> ParseResult<Pad> {
     let layer_id = *geometry
         .first()
         .ok_or_else(|| AltiumError::parse_error(offset, "failed to read Pad layer"))?;
-    let layer = layer_from_id(layer_id);
+    let (layer, raw_layer_id) = resolve_layer(layer_id, geometry, 114);
     let flags = read_flags(geometry);
     // Common-header connectivity indices @3-8 (net/polygon/component).
     let (net_index, polygon_index, component_index) = read_common_indices(geometry);
@@ -323,6 +323,7 @@ pub(super) fn parse_pad(data: &[u8], offset: usize) -> ParseResult<Pad> {
         height,
         shape: adjusted_shape,
         layer,
+        raw_layer_id,
         hole_size,
         is_plated,
         jumper_id,
@@ -659,7 +660,7 @@ pub(super) fn parse_track(data: &[u8], offset: usize) -> ParseResult<Track> {
     let layer_id = *block
         .first()
         .ok_or_else(|| AltiumError::parse_error(offset, "failed to read Track layer"))?;
-    let layer = layer_from_id(layer_id);
+    let (layer, raw_layer_id) = resolve_layer(layer_id, block, 41);
     let flags = read_flags(block);
     // Common-header connectivity indices @3-8 (net/polygon/component).
     let (net_index, polygon_index, component_index) = read_common_indices(block);
@@ -699,6 +700,7 @@ pub(super) fn parse_track(data: &[u8], offset: usize) -> ParseResult<Track> {
         y2,
         width,
         layer,
+        raw_layer_id,
         flags,
         net_index,
         polygon_index,
@@ -724,7 +726,7 @@ pub(super) fn parse_arc(data: &[u8], offset: usize) -> ParseResult<Arc> {
     let layer_id = *block
         .first()
         .ok_or_else(|| AltiumError::parse_error(offset, "failed to read Arc layer"))?;
-    let layer = layer_from_id(layer_id);
+    let (layer, raw_layer_id) = resolve_layer(layer_id, block, 52);
     let flags = read_flags(block);
     // Common-header connectivity indices @3-8 (net/polygon/component).
     let (net_index, polygon_index, component_index) = read_common_indices(block);
@@ -767,6 +769,7 @@ pub(super) fn parse_arc(data: &[u8], offset: usize) -> ParseResult<Arc> {
         end_angle,
         width,
         layer,
+        raw_layer_id,
         flags,
         net_index,
         polygon_index,
@@ -818,7 +821,7 @@ pub(super) fn parse_text(
     let layer_id = *geometry_block
         .first()
         .ok_or_else(|| AltiumError::parse_error(offset, "failed to read Text layer"))?;
-    let layer = layer_from_id(layer_id);
+    let (layer, raw_layer_id) = resolve_layer(layer_id, geometry_block, 226);
     // Decode the lock/tenting/keepout flag word like every other primitive does,
     // rather than discarding it (the write side already encodes these correctly).
     let flags = read_flags(geometry_block);
@@ -989,6 +992,7 @@ pub(super) fn parse_text(
         text: text_content,
         height,
         layer,
+        raw_layer_id,
         rotation,
         kind,
         stroke_font,
@@ -1213,7 +1217,6 @@ pub(super) fn parse_region(data: &[u8], offset: usize) -> ParseResult<Region> {
     let layer_id = *props_block
         .first()
         .ok_or_else(|| AltiumError::parse_error(offset, "failed to read Region layer"))?;
-    let layer = layer_from_id(layer_id);
     let flags = read_flags(props_block);
     let (net_index, polygon_index, component_index) = read_common_indices(props_block);
 
@@ -1239,6 +1242,11 @@ pub(super) fn parse_region(data: &[u8], offset: usize) -> ParseResult<Region> {
     }
     let params_str = crate::altium::decode_windows1252(&props_block[22..param_end]);
     let params = crate::altium::parse_pipe_params_raw(&params_str);
+
+    // The header byte names the layer, except that a mechanical byte defers
+    // to a `V7_LAYER` token past the sixteen it can hold (see `resolve_layer`).
+    let layer = mechanical_past_sixteen(layer_id, v7_token_mechanical(params.get("V7_LAYER")))
+        .unwrap_or_else(|| layer_from_id(layer_id));
 
     // Capture every key the typed model does NOT consume, in read order, so a
     // read-modify-write round-trips the board-region keys (LAYER, KEEPOUT, ...)
@@ -1367,6 +1375,48 @@ fn capture_additional_params(params_str: &str, modelled: &[&str]) -> Vec<(String
         .collect()
 }
 
+/// Resolves a record's layer from its header byte and the V7 layer id at
+/// `v7_at`, and returns the byte to carry when the layer cannot reproduce it.
+///
+/// The header byte holds sixteen mechanical layers; Altium stores a
+/// primitive on Mechanical 17-32 under byte 72 (the last the byte can hold)
+/// and names the real layer in the V7 id (`0x0102_0014` is Mechanical 20),
+/// so a mechanical byte defers to a V7 id past sixteen. A byte the table does
+/// not map lands on the `MultiLayer` catch-all and is carried as is, so the
+/// rewrite puts the byte back rather than `74` (see `raw_layer_id`).
+fn resolve_layer(byte: u8, block: &[u8], v7_at: usize) -> (Layer, Option<u8>) {
+    let v7_mechanical = read_u32(block, v7_at)
+        .filter(|v7| v7 >> 16 == 0x0102)
+        .map(|v7| v7 & 0xFFFF);
+    let layer = mechanical_past_sixteen(byte, v7_mechanical).unwrap_or_else(|| layer_from_id(byte));
+    (layer, unmapped_layer_byte(byte, layer))
+}
+
+/// The layer a mechanical header byte and a V7 mechanical index past
+/// sixteen name together, when they do.
+fn mechanical_past_sixteen(byte: u8, v7_mechanical: Option<u32>) -> Option<Layer> {
+    let index = v7_mechanical.filter(|index| (17..=32).contains(index))?;
+    (57..=72).contains(&byte).then(|| {
+        // Mechanical 17-32 sit at 186-201 in the layer table.
+        #[allow(clippy::cast_possible_truncation)]
+        let id = (169 + index) as u8;
+        layer_from_id(id)
+    })
+}
+
+/// The V7 mechanical index a `V7_LAYER` token names (`MECHANICAL20` is 20).
+fn v7_token_mechanical(token: Option<&String>) -> Option<u32> {
+    token?.strip_prefix("MECHANICAL")?.parse().ok()
+}
+
+/// The header byte to carry: the byte as read when the table does not map
+/// it and the primitive therefore sits on the `MultiLayer` catch-all (#391);
+/// nothing for a byte the layer reproduces, `74` included.
+fn unmapped_layer_byte(byte: u8, layer: Layer) -> Option<u8> {
+    (layer == Layer::MultiLayer && byte != crate::altium::pcblib::writer::layer_to_id(layer))
+        .then_some(byte)
+}
+
 /// Parses a Fill primitive (filled rectangle).
 /// Returns the parsed `Fill` and the new offset on success.
 ///
@@ -1393,7 +1443,7 @@ pub(super) fn parse_fill(data: &[u8], offset: usize) -> ParseResult<Fill> {
     let layer_id = *block
         .first()
         .ok_or_else(|| AltiumError::parse_error(offset, "failed to read Fill layer"))?;
-    let layer = layer_from_id(layer_id);
+    let (layer, raw_layer_id) = resolve_layer(layer_id, block, 42);
     let flags = read_flags(block);
     // Common-header connectivity indices @3-8 (net/polygon/component).
     let (net_index, polygon_index, component_index) = read_common_indices(block);
@@ -1427,6 +1477,7 @@ pub(super) fn parse_fill(data: &[u8], offset: usize) -> ParseResult<Fill> {
         x2,
         y2,
         layer,
+        raw_layer_id,
         rotation,
         flags,
         net_index,
@@ -1571,21 +1622,19 @@ pub(super) fn parse_component_body(data: &[u8], offset: usize) -> ParseResult<Co
 
     // The body's layer is the CommonPrimitiveData layer byte at block offset 0 — the
     // authoritative source, exactly as AltiumSharp does (`result.Layer = layer`,
-    // PcbLibReader.ReadComponentBody). Decoding only the `V7_LAYER` parameter
-    // string and falling back to `Top3DBody` silently collapses every mechanical
-    // layer that fallback does not cover (e.g. MECHANICAL13 / id 69) to the top
-    // 3D-body layer on read. The header byte
-    // covers the full Mechanical1-32 range through `layer_from_id`, so a body authored
-    // on any layer now reads back on its true layer. The writer already emits the
-    // matching header byte and `V7_LAYER` token, so this is a read-only fix.
+    // PcbLibReader.ReadComponentBody) — except that a mechanical byte defers to
+    // a `V7_LAYER` token past the sixteen it can hold (see `resolve_layer`).
+    // Decoding only the `V7_LAYER` parameter string and falling back to
+    // `Top3DBody` would collapse every mechanical layer that fallback does not
+    // cover (e.g. MECHANICAL13 / id 69) to the top 3D-body layer on read.
     //
     // There is deliberately no `V7_LAYER` fallback for a missing header byte:
     // `params` is decoded from this same block, so the only block that lacks the
-    // byte — an empty one — has no parameter string to fall back to either. The
-    // fallback that used to sit here could not run for any input.
-    let layer = block0
-        .first()
-        .map_or(Layer::Top3DBody, |&id| layer_from_id(id));
+    // byte — an empty one — has no parameter string to fall back to either.
+    let layer = block0.first().map_or(Layer::Top3DBody, |&id| {
+        mechanical_past_sixteen(id, v7_token_mechanical(params.get("V7_LAYER")))
+            .unwrap_or_else(|| layer_from_id(id))
+    });
 
     // #391's one-byte replay base: when the byte is an id `layer_from_id`
     // does not map, the decode above collapses it to the `MultiLayer`
@@ -1593,9 +1642,9 @@ pub(super) fn parse_component_body(data: &[u8], offset: usize) -> ParseResult<Co
     // the byte (and, below, its `V7_LAYER` token) verbatim so the pair
     // round-trips; a genuine `MultiLayer` body (the canonical id itself)
     // keeps `None`.
-    let raw_layer_id = block0.first().copied().filter(|&id| {
-        layer == Layer::MultiLayer && id != crate::altium::pcblib::writer::layer_to_id(layer)
-    });
+    let raw_layer_id = block0
+        .first()
+        .and_then(|&id| unmapped_layer_byte(id, layer));
     let v7_layer = params
         .get("V7_LAYER")
         .filter(|token| **token != crate::altium::pcblib::writer::v7_layer_token(layer))
@@ -3077,5 +3126,73 @@ mod tests {
         assert!((parse_mil_value(Some(" 100 mil")) - expected).abs() < 1e-9);
         assert!(parse_mil_value(None).abs() < EPS);
         assert!(parse_mil_value(Some("not-a-number")).abs() < EPS);
+    }
+
+    #[test]
+    fn the_v7_layer_id_names_a_mechanical_layer_past_the_legacy_sixteen() {
+        // Byte 72 is Mechanical 16, the last the header byte can hold; a
+        // track on Mechanical 20 carries 72 there and `0x0102_0014` in the
+        // V7 id at @41, which decides. Nothing is carried: the writer stores
+        // Mechanical 20 the same way.
+        let mut b = vec![0_u8; 46];
+        write_common_header(&mut b, 72);
+        b[29..33].copy_from_slice(&50_000_i32.to_le_bytes());
+        b[41..45].copy_from_slice(&0x0102_0014_u32.to_le_bytes());
+        let (track, _) = parse_track(&block(&b), 0).expect("a whole track");
+        assert_eq!(track.layer, Layer::Mechanical20);
+        assert_eq!(track.raw_layer_id, None);
+
+        // A V7 id within the sixteen leaves the byte in charge.
+        b[41..45].copy_from_slice(&0x0102_0010_u32.to_le_bytes());
+        let (track, _) = parse_track(&block(&b), 0).expect("a whole track");
+        assert_eq!(track.layer, Layer::Mechanical16);
+
+        // A legacy-only record (no V7 id) is its byte.
+        let (track, _) = parse_track(&block(&b[..33]), 0).expect("a whole track");
+        assert_eq!(track.layer, Layer::Mechanical16);
+
+        // The deferral is for mechanical bytes only: a copper byte with a
+        // stray mechanical V7 id stays copper.
+        write_common_header(&mut b, 1);
+        b[41..45].copy_from_slice(&0x0102_0014_u32.to_le_bytes());
+        let (track, _) = parse_track(&block(&b), 0).expect("a whole track");
+        assert_eq!(track.layer, Layer::TopLayer);
+
+        // A byte the table does not map is carried for the rewrite; the
+        // Multi-Layer byte itself is not.
+        for (byte, carried) in [(100, Some(100)), (74, None)] {
+            write_common_header(&mut b, byte);
+            let (track, _) = parse_track(&block(&b), 0).expect("a whole track");
+            assert_eq!(track.layer, Layer::MultiLayer);
+            assert_eq!(track.raw_layer_id, carried, "byte {byte}");
+        }
+    }
+
+    #[test]
+    fn a_v7_layer_token_names_a_region_or_body_layer_past_the_legacy_sixteen() {
+        // Regions and bodies carry the layer as a `V7_LAYER` token instead of
+        // an id; under byte 72 a `MECHANICAL20` token is the layer, and the
+        // token is then derived, not carried.
+        let mut b = vec![0_u8; 22];
+        write_common_header(&mut b, 72);
+        let params = b"V7_LAYER=MECHANICAL20|NAME=\0";
+        b[18..22].copy_from_slice(&u32::try_from(params.len()).expect("len").to_le_bytes());
+        b.extend_from_slice(params);
+        b.extend_from_slice(&0_u32.to_le_bytes()); // no vertices
+        let (region, _) = parse_region(&block(&b), 0).expect("a whole region");
+        assert_eq!(region.layer, Layer::Mechanical20);
+        assert_eq!(region.v7_layer, None, "the token follows from the layer");
+
+        let mut props = b"V7_LAYER=MECHANICAL20|NAME=body\0".to_vec();
+        let mut block0 = vec![72_u8, 0x0C, 0x00];
+        block0.extend_from_slice(&[0xFF; 10]);
+        block0.extend_from_slice(&[0; 5]);
+        block0.extend_from_slice(&u32::try_from(props.len()).expect("len").to_le_bytes());
+        block0.append(&mut props);
+        block0.extend_from_slice(&0_u32.to_le_bytes());
+        let (body, _) = parse_component_body(&block(&block0), 0).expect("a whole body");
+        assert_eq!(body.layer, Layer::Mechanical20);
+        assert_eq!(body.v7_layer, None);
+        assert_eq!(body.raw_layer_id, None);
     }
 }

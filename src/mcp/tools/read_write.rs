@@ -293,61 +293,34 @@ impl McpServer {
                     .skip(offset)
                     .take(limit.unwrap_or(usize::MAX))
                     .map(|fp| {
-                        // If compact mode, strip per-layer data when it's redundant
-                        let pads: Vec<Value> = if compact {
-                            fp.pads
-                                .iter()
-                                .map(|pad| {
-                                    let mut pad_json = serde_json::to_value(pad).unwrap();
-                                    // A Simple pad's per-layer arrays carry nothing the
-                                    // main size/shape do not, so they go. A stacked pad
-                                    // keeps them — and its stack_mode — even when every
-                                    // layer happens to match: the mode is a stored
-                                    // property Altium shows, and rewriting it to
-                                    // "simple" here silently changed the pad on the next
-                                    // write.
+                        // The struct's own serde shape — the one write_pcblib
+                        // and update_component accept in full, and the one
+                        // get_component and export_library emit — so every
+                        // fidelity carrier (identities, raw blocks, record
+                        // order) reaches the caller without a hand-kept list.
+                        let mut fp_json = serde_json::to_value(fp).unwrap_or(Value::Null);
+                        // Compact mode: a Simple pad's per-layer arrays carry
+                        // nothing the main size/shape do not, so they go. A
+                        // stacked pad keeps them — and its stack_mode — even
+                        // when every layer happens to match: the mode is a
+                        // stored property Altium shows, and rewriting it to
+                        // "simple" here silently changed the pad on the next
+                        // write.
+                        if compact {
+                            if let Some(pads) =
+                                fp_json.get_mut("pads").and_then(Value::as_array_mut)
+                            {
+                                for (pad, pad_json) in fp.pads.iter().zip(pads.iter_mut()) {
                                     if pad.stack_mode == PadStackMode::Simple {
-                                        if let Value::Object(ref mut obj) = pad_json {
+                                        if let Value::Object(obj) = pad_json {
                                             obj.remove("per_layer_sizes");
                                             obj.remove("per_layer_shapes");
                                             obj.remove("per_layer_corner_radii");
                                             obj.remove("per_layer_offsets");
                                         }
                                     }
-                                    pad_json
-                                })
-                                .collect()
-                        } else {
-                            fp.pads
-                                .iter()
-                                .map(|p| serde_json::to_value(p).unwrap())
-                                .collect()
-                        };
-
-                        let mut fp_json = json!({
-                            "name": fp.name,
-                            "description": fp.description,
-                            "pads": pads,
-                            "vias": fp.vias,
-                            "tracks": fp.tracks,
-                            "arcs": fp.arcs,
-                            "regions": fp.regions,
-                            "fills": fp.fills,
-                            "text": fp.text,
-                            "model_3d": fp.model_3d,
-                            "component_bodies": fp.component_bodies,
-                        });
-                        // Footprint-level fidelity fields, mirroring the
-                        // struct's own serde shape (get_component serialises
-                        // the whole struct): present only when carried, and
-                        // replayed by write_pcblib so a read-modify-write
-                        // keeps the kind-85 identity and the interleaved
-                        // stream order.
-                        if let Some(guid) = &fp.guid {
-                            fp_json["guid"] = json!(guid);
-                        }
-                        if !fp.primitive_order.is_empty() {
-                            fp_json["primitive_order"] = json!(fp.primitive_order);
+                                }
+                            }
                         }
                         fp_json
                     })
@@ -725,51 +698,8 @@ impl McpServer {
                     .skip(offset)
                     .take(limit.unwrap_or(usize::MAX))
                     .map(|symbol| {
-                        let mut sym_json = json!({
-                            "name": symbol.name,
-                            "description": symbol.description,
-                            "designator": symbol.designator,
-                            "designator_x": symbol.designator_x,
-                            "designator_y": symbol.designator_y,
-                            "designator_unique_id": symbol.designator_unique_id,
-                            "part_count": symbol.part_count,
-                            "display_mode_count": symbol.display_mode_count,
-                            "current_part_id": symbol.current_part_id,
-                            "part_id_locked": symbol.part_id_locked,
-                            "source_library_name": symbol.source_library_name,
-                            "target_file_name": symbol.target_file_name,
-                            "pins": symbol.pins,
-                            "rectangles": symbol.rectangles,
-                            "round_rects": symbol.round_rects,
-                            "lines": symbol.lines,
-                            "polylines": symbol.polylines,
-                            "polygons": symbol.polygons,
-                            "arcs": symbol.arcs,
-                            "pies": symbol.pies,
-                            "images": symbol.images,
-                            "text_frames": symbol.text_frames,
-                            "beziers": symbol.beziers,
-                            "ellipses": symbol.ellipses,
-                            "elliptical_arcs": symbol.elliptical_arcs,
-                            "labels": symbol.labels,
-                            "text": symbol.text,
-                            "parameters": symbol.parameters,
-                            "footprints": symbol.footprints,
-                        });
-                        // The interleaved record order, mirroring the struct's
-                        // serde shape (present only when carried) and replayed
-                        // by write_schlib so a read-modify-write keeps the
-                        // source's record order.
-                        if !symbol.primitive_order.is_empty() {
-                            sym_json["primitive_order"] = json!(symbol.primitive_order);
-                        }
-                        if !symbol.header_params.is_empty() {
-                            sym_json["header_params"] = json!(symbol.header_params);
-                        }
-                        if let Some(count) = symbol.all_pin_count {
-                            sym_json["all_pin_count"] = json!(count);
-                        }
-                        sym_json
+                        // The struct's own serde shape (see read_pcblib).
+                        serde_json::to_value(symbol).unwrap_or(Value::Null)
                     })
                     .collect();
 

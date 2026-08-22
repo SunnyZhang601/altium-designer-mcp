@@ -310,6 +310,59 @@ mod tests {
         );
     }
 
+    /// Guards the hand-written tool index in `README.md` and every "N tools"
+    /// count in the docs against `tool_definitions.rs`: the index links
+    /// exactly the tools that exist, and each stated count is the real one.
+    /// Neither is generated, so this is what keeps them honest.
+    #[test]
+    fn readme_tool_index_and_tool_counts_in_sync() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let tools: std::collections::BTreeSet<String> = McpServer::get_tool_definitions()
+            .into_iter()
+            .map(|t| t.name)
+            .collect();
+
+        let readme = std::fs::read_to_string(root.join("README.md")).expect("read README.md");
+        let linked: std::collections::BTreeSet<String> = readme
+            .match_indices("](docs/TOOLS.md#")
+            .map(|(i, _)| {
+                let rest = &readme[i + "](docs/TOOLS.md#".len()..];
+                rest[..rest.find(')').expect("closing paren")].to_string()
+            })
+            .collect();
+        assert_eq!(
+            linked, tools,
+            "README.md's tool index must link exactly the tools that exist"
+        );
+
+        for doc in [
+            "README.md",
+            "docs/CLIENT_SETUP.md",
+            "docs/USAGE.md",
+            "docs/TOOLS.md",
+            ".github/release-assets/README.md",
+        ] {
+            let text = std::fs::read_to_string(root.join(doc)).expect(doc);
+            for (i, _) in text.match_indices(" tools") {
+                let before: String = text[..i]
+                    .chars()
+                    .rev()
+                    .take_while(char::is_ascii_digit)
+                    .collect();
+                if before.is_empty() {
+                    continue;
+                }
+                let stated: usize = before.chars().rev().collect::<String>().parse().unwrap();
+                // Cursor's cap across all servers, quoted in CLIENT_SETUP.md,
+                // is the one count that is not ours.
+                if stated == 100 {
+                    continue;
+                }
+                assert_eq!(stated, tools.len(), "{doc} states {stated} tools");
+            }
+        }
+    }
+
     /// Guards `docs/TOOLS.md` against drift from `tool_definitions.rs`. If a
     /// tool's schema, description, or example changes and the doc isn't
     /// regenerated, this fails. Regenerate with:

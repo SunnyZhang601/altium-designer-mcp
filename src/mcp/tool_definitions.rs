@@ -41,6 +41,9 @@ impl McpServer {
                      param_key_order and primitive_order are fidelity carriers: pass them back \
                      unchanged to write_pcblib or update_component and the rewrite is \
                      byte-identical to the source; omit them when authoring from scratch. \
+                     Each footprint is the same JSON shape get_component, export_library and \
+                     write_pcblib use; a list with no entries and an optional field with no \
+                     value are omitted rather than empty/null. \
                      For large libraries, use component_name to fetch specific footprints, \
                      or use limit/offset for pagination."
                         .to_string(),
@@ -84,7 +87,10 @@ impl McpServer {
                      Fields such as unique_id and primitive_order are fidelity carriers: pass \
                      them back unchanged to write_schlib or update_component to keep the \
                      source's record identities and order; omit them when authoring from \
-                     scratch. For large libraries, use component_name to fetch specific \
+                     scratch. Each symbol is the same JSON shape get_component, \
+                     export_library and write_schlib use; a list with no entries and an \
+                     optional field with no value are omitted rather than empty/null. \
+                     For large libraries, use component_name to fetch specific \
                      symbols, or use limit/offset for pagination."
                         .to_string(),
                 ),

@@ -187,9 +187,11 @@ impl McpServer {
                      fills, arcs, regions, text and component_bodies. The AI is responsible for \
                      calculating correct positions and sizes based on IPC-7351B or other standards. \
                      All coordinates and dimensions must be in millimetres (mm). A footprint \
-                     given no '.Designator' text receives one on the Top Overlay automatically, \
-                     just above its topmost pad, so every placed part shows its reference \
-                     designator; supply your own to control its placement. \
+                     authored without a '.Designator' text receives one on the Top Overlay \
+                     automatically, just above its topmost pad, so every placed part shows its \
+                     reference designator: supply your own to control its placement, or set \
+                     'auto_designator': false to omit it; a footprint echoed back from a read \
+                     (carrying primitive_order) is never touched. \
                      The response 'bodies' array echoes each footprint's 3D body height and source; \
                      a footprint with no STEP model and no component body reports source 'none'. \
                      Set 'auto_3d_body': true to have an extruded placeholder body (default height \
@@ -569,6 +571,10 @@ impl McpServer {
                         "auto_3d_body": {
                             "type": "boolean",
                             "description": "If true, footprints with pads but no STEP model and no component body get a placeholder extruded 3D body (1.0 mm tall, flagged assumed_height). Default false: nothing is added unless you ask, since many footprints (fiducials, test points, mounting holes) legitimately have no body. Prefer supplying real heights via component_bodies."
+                        },
+                        "auto_designator": {
+                            "type": "boolean",
+                            "description": "If true (default), a footprint authored without a '.Designator' text gets one on the Top Overlay just above its topmost pad, so the placed part shows its reference designator. Never applied to a footprint echoed back from read_pcblib/get_component (one carrying primitive_order): Altium's own library footprints carry no designator text, and a read-modify-write must not add primitives. Set false to author a footprint without one."
                         }
                     },
                     "required": ["filepath", "footprints"]

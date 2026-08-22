@@ -25,16 +25,18 @@ to generate library files that you then open in Altium Designer on Windows.
 
 ### Prerequisites
 
-- [Rust 1.75+](https://rustup.rs/) (to build from source)
 - [Google Antigravity](https://antigravity.google) installed
+- [Rust 1.75+](https://rustup.rs/) only if you build from source
 
-### Step 1: Build the server
+### Step 1: Get the server binary
 
-See [CONTRIBUTING.md § Development Setup](../CONTRIBUTING.md#development-setup) for build
-instructions. After building, the binary is at:
+**Download** the archive for your platform from the
+[Releases page](https://github.com/embedded-society/altium-designer-mcp/releases), unpack it,
+and move the binary somewhere permanent — the bundled `README.md` walks through it. Or
+**build from source** per [CONTRIBUTING.md § Development Setup](../CONTRIBUTING.md#development-setup);
+the binary then lands at `target/release/altium-designer-mcp` (`.exe` on Windows).
 
-- **Windows:** `target\release\altium-designer-mcp.exe`
-- **Linux/macOS:** `target/release/altium-designer-mcp`
+Note the binary's absolute path — Step 3 needs it.
 
 ### Step 2: Create the server config file
 
@@ -71,7 +73,7 @@ binary and the server `config.json` (replace the example paths with yours):
 {
     "mcpServers": {
         "altium": {
-            "command": "C:\\path\\to\\altium-designer-mcp\\target\\release\\altium-designer-mcp.exe",
+            "command": "C:\\Users\\you\\AppData\\Local\\Programs\\altium-designer-mcp\\altium-designer-mcp.exe",
             "args": ["C:\\Users\\you\\.altium-designer-mcp\\config.json"]
         }
     }
@@ -84,7 +86,7 @@ binary and the server `config.json` (replace the example paths with yours):
 {
     "mcpServers": {
         "altium": {
-            "command": "/path/to/altium-designer-mcp/target/release/altium-designer-mcp",
+            "command": "/usr/local/bin/altium-designer-mcp",
             "args": ["/home/you/.altium-designer-mcp/config.json"]
         }
     }
@@ -97,7 +99,7 @@ binary and the server `config.json` (replace the example paths with yours):
 {
     "mcpServers": {
         "altium": {
-            "command": "/path/to/altium-designer-mcp/target/release/altium-designer-mcp",
+            "command": "/usr/local/bin/altium-designer-mcp",
             "args": ["/Users/you/.altium-designer-mcp/config.json"]
         }
     }
@@ -153,7 +155,11 @@ What silkscreen style does it use?
   file is valid JSON (no trailing commas, no comments).
 - Use absolute paths; on Windows the `.exe` extension is required and backslashes must be
   escaped (`\\`).
+- Run the binary by hand once (`altium-designer-mcp --version`): on the very first run
+  Windows SmartScreen or macOS Gatekeeper may block an unsigned binary — **More info → Run
+  anyway** on Windows, right-click → **Open** on macOS.
 - Reload Antigravity after editing the file.
+- [CLIENT_SETUP.md § Troubleshooting](CLIENT_SETUP.md#troubleshooting) has the full checklist.
 
 ### "Access denied" error
 
@@ -162,8 +168,10 @@ The target path is outside the server's `allowed_paths`. Add the directory to yo
 
 ### Library won't open in Altium
 
-Use Altium Designer 19+ and open via **File → Open**. The file format is binary-compatible
-across platforms, so libraries generated on Linux/macOS open on Windows.
+The files are verified against Altium Designer 24 (the project's golden fixtures are
+AD24-authored); older versions that read the same library format should work but are
+untested. The format is binary-compatible across platforms, so libraries generated on
+Linux/macOS open on Windows. Ask the agent to run `validate_library` on a file that misbehaves.
 
 For anything not covered here, the behaviour is identical to other MCP clients — see the
 [Claude Code guide](CLAUDE_CODE_GUIDE.md#troubleshooting).
@@ -173,6 +181,8 @@ For anything not covered here, the behaviour is identical to other MCP clients �
 ## Next Steps
 
 - [docs/TOOLS.md](TOOLS.md) — full tool reference
-- [AI_WORKFLOW.md](AI_WORKFLOW.md) — IPC-7351B reference
+- [AGENT_GUIDE.md](AGENT_GUIDE.md) — the unit and pin-geometry conventions; worth pasting into a project brief
+- [AI_WORKFLOW.md](AI_WORKFLOW.md) — IPC-7351B workflow and symbol conventions
+- [CLIENT_SETUP.md](CLIENT_SETUP.md) — every other MCP client
 - [ARCHITECTURE.md](ARCHITECTURE.md) — technical details
 - [Antigravity MCP docs](https://antigravity.google/docs/mcp) — authoritative, version-current setup

@@ -24,17 +24,18 @@ platform to generate library files that can then be opened in Altium Designer on
 
 ### Prerequisites
 
-- [Rust 1.75+](https://rustup.rs/) (for building from source)
-- [Claude Code](https://docs.anthropic.com/en/docs/claude-code) CLI installed
+- [Claude Code](https://code.claude.com/docs) CLI installed
+- [Rust 1.75+](https://rustup.rs/) only if you build from source
 
-### Step 1: Clone and Build
+### Step 1: Get the Binary
 
-See [CONTRIBUTING.md § Development Setup](../CONTRIBUTING.md#development-setup) for build instructions.
+**Download** the archive for your platform from the
+[Releases page](https://github.com/embedded-society/altium-designer-mcp/releases), unpack it,
+and move the binary somewhere permanent — the bundled `README.md` walks through it. Or
+**build from source** per [CONTRIBUTING.md § Development Setup](../CONTRIBUTING.md#development-setup);
+the binary then lands at `target/release/altium-designer-mcp` (`.exe` on Windows).
 
-**Binary location after build:**
-
-- **Windows:** `target\release\altium-designer-mcp.exe`
-- **Linux/macOS:** `target/release/altium-designer-mcp`
+Either way, note the binary's absolute path — every configuration step below needs it.
 
 ### Step 2: Create Configuration File
 
@@ -65,7 +66,9 @@ Claude Code uses a `.mcp.json` file in your project root to configure MCP server
 
 #### Option A: Project-Level Configuration (Recommended)
 
-Create a `.mcp.json` file in your Altium project's root directory:
+Create a `.mcp.json` file in your Altium project's root directory. It can be committed, so a
+team shares one setup; Claude Code asks each person to approve the server the first time it
+loads the file.
 
 #### Windows
 
@@ -73,16 +76,15 @@ Create a `.mcp.json` file in your Altium project's root directory:
 {
     "mcpServers": {
         "altium": {
-            "command": "C:\\path\\to\\altium-designer-mcp\\target\\release\\altium-designer-mcp.exe",
-            "args": ["%USERPROFILE%\\.altium-designer-mcp\\config.json"]
+            "command": "C:\\Users\\yourname\\AppData\\Local\\Programs\\altium-designer-mcp\\altium-designer-mcp.exe",
+            "args": ["C:\\Users\\yourname\\.altium-designer-mcp\\config.json"]
         }
     }
 }
 ```
 
-> **Note:** the JSON `args` are passed to the server verbatim — they are **not** shell-expanded,
-> so `%USERPROFILE%` only works if the client expands it for you. An absolute path
-> (for example `C:\\Users\\yourname\\.altium-designer-mcp\\config.json`) is safest.
+> Use **absolute paths** with every backslash doubled. JSON `args` reach the server verbatim —
+> nothing expands `%USERPROFILE%` or `~` for you.
 
 #### Linux
 
@@ -90,7 +92,7 @@ Create a `.mcp.json` file in your Altium project's root directory:
 {
     "mcpServers": {
         "altium": {
-            "command": "/path/to/altium-designer-mcp/target/release/altium-designer-mcp",
+            "command": "/usr/local/bin/altium-designer-mcp",
             "args": ["/home/yourname/.altium-designer-mcp/config.json"]
         }
     }
@@ -103,34 +105,38 @@ Create a `.mcp.json` file in your Altium project's root directory:
 {
     "mcpServers": {
         "altium": {
-            "command": "/path/to/altium-designer-mcp/target/release/altium-designer-mcp",
+            "command": "/usr/local/bin/altium-designer-mcp",
             "args": ["/Users/yourname/.altium-designer-mcp/config.json"]
         }
     }
 }
 ```
 
-#### Option B: Global Configuration via CLI
+#### Option B: Configuration via CLI
 
-You can also add the MCP server globally using the Claude Code CLI:
+`claude mcp add` writes the entry for you. Everything after `--` is the command that starts
+the server. With `--scope user` it is available in every project on this machine; without it,
+only in the current project (local scope).
 
 **Windows (PowerShell):**
 
 ```powershell
-claude mcp add altium -- C:\path\to\altium-designer-mcp\target\release\altium-designer-mcp.exe $env:USERPROFILE\.altium-designer-mcp\config.json
+claude mcp add --scope user altium -- "$env:LOCALAPPDATA\Programs\altium-designer-mcp\altium-designer-mcp.exe" "$env:USERPROFILE\.altium-designer-mcp\config.json"
 ```
 
 **Linux / macOS:**
 
 ```bash
-claude mcp add altium -- /path/to/altium-designer-mcp/target/release/altium-designer-mcp ~/.altium-designer-mcp/config.json
+claude mcp add --scope user altium -- /usr/local/bin/altium-designer-mcp ~/.altium-designer-mcp/config.json
 ```
 
-To verify it was added:
+To verify it was added and connects:
 
 ```bash
 claude mcp list
 ```
+
+`altium` should show `✔ Connected`.
 
 ---
 
@@ -333,18 +339,22 @@ Add an 0402 resistor footprint to the existing ./Passives.PcbLib (append mode)
 The file path is outside `allowed_paths`. Update your config.json to include the
 directory where you want to create libraries.
 
-### MCP Server Not Found
+### MCP Server Not Found / Failed to Connect
 
-Verify the path in your Claude Code configuration points to the correct binary:
-
-- Windows: `.exe` extension required
-- Check the path exists and is executable
+- The configured path must point at the binary itself (`.exe` on Windows) and be absolute.
+- Run it by hand first: `altium-designer-mcp --version`. On the very first run Windows
+  SmartScreen or macOS Gatekeeper may block an unsigned binary — **More info → Run anyway**
+  on Windows, right-click → **Open** on macOS.
+- `claude mcp list` shows the connection state;
+  [CLIENT_SETUP.md § Troubleshooting](CLIENT_SETUP.md#troubleshooting) has the full checklist.
 
 ### Library Won't Open in Altium
 
-- Ensure you're using a recent version of Altium Designer (19+)
-- Check that the file was created successfully (non-zero file size)
-- Try opening with File > Open rather than drag-and-drop
+- The files are verified against Altium Designer 24 (the project's golden fixtures are
+  AD24-authored). Older versions that read the same library format should work but are
+  untested.
+- Check that the file was created successfully (non-zero file size), and ask Claude Code to
+  run `validate_library` on it.
 
 ### Style Extraction Shows Unexpected Values
 
@@ -369,7 +379,6 @@ Generate libraries on Linux and transfer to Windows for use in Altium:
 
 - Use a shared folder, cloud sync, or version control
 - File format is binary-compatible across platforms
-- Consider using Wine with Altium Designer (community-supported)
 
 ### macOS
 
@@ -393,6 +402,10 @@ to allow library operations.
 
 ## Next Steps
 
-- Read [AI_WORKFLOW.md](AI_WORKFLOW.md) for detailed IPC-7351B reference
-- See [ARCHITECTURE.md](ARCHITECTURE.md) for technical details
-- Check sample files in `scripts/` folder for examples
+- Read [AI_WORKFLOW.md](AI_WORKFLOW.md) for the IPC-7351B workflow and symbol conventions
+- Paste [AGENT_GUIDE.md](AGENT_GUIDE.md) into a project brief so Claude knows the unit and
+  pin-geometry conventions
+- Using a different assistant as well? [CLIENT_SETUP.md](CLIENT_SETUP.md) covers every other
+  MCP client
+- See [ARCHITECTURE.md](ARCHITECTURE.md) for technical details and `scripts/samples/` for
+  Altium-authored example libraries

@@ -549,24 +549,28 @@ fn schlib_golden_survives_a_round_trip() {
     );
 }
 
-/// Sweeps every library under `ALTIUM_CORPUS_DIR` — real, hand-authored
-/// Altium libraries the scripted golden cannot stand in for — through a
-/// read/write cycle and reports what changed: streams dropped, parameter
-/// blocks that diverge, records reordered, and for a `PcbLib` every `Data` and
-/// `WideStrings` stream that is not byte-identical. Ignored unless the
-/// variable is set; never writes into the corpus.
+/// Sweeps every library of a corpus — real, hand-authored Altium libraries
+/// the scripted golden cannot stand in for — through a read/write cycle and
+/// reports what changed: streams dropped, parameter blocks that diverge,
+/// records reordered, and for a `PcbLib` every `Data` and `WideStrings`
+/// stream that is not byte-identical. The corpus is the sibling
+/// `altium-designer-pcb-libraries` checkout unless `ALTIUM_CORPUS_DIR` points
+/// elsewhere at build time (a compile-time constant, not a runtime path);
+/// ignored by default and never writes into the corpus.
 ///
 /// ```text
 /// ALTIUM_CORPUS_DIR=../my-libraries cargo test --test golden_fidelity corpus -- --ignored --nocapture
 /// ```
 #[test]
-#[ignore = "needs ALTIUM_CORPUS_DIR"]
+#[ignore = "sweeps a corpus outside the repository"]
 #[allow(clippy::too_many_lines)] // one straight-line sweep, reported per library
 fn corpus_survives_a_round_trip() {
-    let Some(corpus) = std::env::var_os("ALTIUM_CORPUS_DIR") else {
-        eprintln!("ALTIUM_CORPUS_DIR not set; nothing to sweep");
+    const DEFAULT_CORPUS: &str = "../altium-designer-pcb-libraries";
+    let corpus = PathBuf::from(option_env!("ALTIUM_CORPUS_DIR").unwrap_or(DEFAULT_CORPUS));
+    if !corpus.is_dir() {
+        eprintln!("no corpus at {}; nothing to sweep", corpus.display());
         return;
-    };
+    }
     let dir = tempfile::tempdir().expect("tempdir");
     let mut libraries: Vec<PathBuf> = std::fs::read_dir(&corpus)
         .expect("read corpus dir")
@@ -582,7 +586,7 @@ fn corpus_survives_a_round_trip() {
     assert!(
         !libraries.is_empty(),
         "no libraries under {}",
-        corpus.to_string_lossy()
+        corpus.display()
     );
 
     let mut report: Vec<String> = Vec::new();

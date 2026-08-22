@@ -5,7 +5,7 @@
 
 **Let an AI build your Altium libraries — it does the engineering, this tool writes the files.**
 
-An MCP server that gives AI assistants (Claude Code, Claude Desktop, Google Antigravity, VSCode Copilot) file I/O
+An MCP server that gives AI assistants (Claude Code, Claude Desktop, Cursor, Antigravity, VS Code Copilot — any MCP client) file I/O
 and primitive-placement tools for Altium Designer `.PcbLib` (footprint) and `.SchLib` (symbol)
 libraries — so the AI can create and maintain *any* component, not just pre-programmed packages.
 
@@ -54,7 +54,7 @@ read and write the actual `.PcbLib` / `.SchLib` files.
 
 | If you… | Then… |
 |---------|-------|
-| Use Claude Code, Claude Desktop, Google Antigravity, or VSCode + Copilot and design in Altium | ✅ This is for you |
+| Use Claude Code, Claude Desktop, Cursor, Antigravity, VS Code + Copilot — [any MCP client](docs/CLIENT_SETUP.md) — and design in Altium | ✅ This is for you |
 | Want pre-baked generators for a fixed set of packages | ❌ Not this — the point is *any* component |
 | Don't use Altium | ❌ Not applicable |
 
@@ -71,6 +71,14 @@ read and write the actual `.PcbLib` / `.SchLib` files.
 
 > **[Google Antigravity Setup Guide](docs/ANTIGRAVITY_GUIDE.md)** — Step-by-step instructions
 > for using this MCP server with Google Antigravity (IDE and CLI) on **Windows**, **Linux**, and **macOS**.
+
+---
+
+## Quick Start with any other AI client
+
+> **[Client Setup](docs/CLIENT_SETUP.md)** — verified configuration for Claude Desktop, Cursor,
+> VS Code, GitHub Copilot CLI, Windsurf, Cline, Roo Code, Kiro, JetBrains, Zed, Gemini CLI,
+> Codex CLI, Continue, Goose, OpenCode and any other stdio MCP client, plus troubleshooting.
 
 ---
 
@@ -97,7 +105,7 @@ read and write the actual `.PcbLib` / `.SchLib` files.
 │    │                         │  write_schlib(symbol)        │ .SchLib files │
 │    │                         ├─────────────────────────────►│               │
 │    │                         │◄─────────────────────────────┤               │
-│    │                         │  { success: true }           │               │
+│    │                         │  { status: "success" }       │               │
 │    │                         │                              │               │
 │    │  "Done! Footprint       │                              │               │
 │    │   and symbol created"   │                              │               │

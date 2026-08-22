@@ -18,8 +18,12 @@ record). The specialised worklists stay the single source of truth for their are
 - [ ] **v1.0.0 is the real release**, gated on ALL features built (the 99% coverage
       gate — production metric, #381 — is already met). The climb happens calmly;
       [`docs/RELEASING.md`](docs/RELEASING.md) is the proven runbook.
-- [ ] Consider a `.dxt` Claude Desktop extension for one-click install (pattern from
-      coffeenmusic/altium-mcp).
+- [ ] **Streamable HTTP transport** alongside stdio, so web-only assistants (claude.ai in
+      the browser, ChatGPT) can connect as a remote server — today they cannot
+      (`docs/CLIENT_SETUP.md` § Web-only assistants).
+- [ ] **`.mcpb` Claude Desktop extension** for one-click install — the format that
+      superseded `.dxt`; Claude Desktop now steers users to extensions over hand-edited
+      JSON (pattern from coffeenmusic/altium-mcp).
 
 ## C. Docs / AI workflow
 

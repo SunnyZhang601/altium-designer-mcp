@@ -117,13 +117,13 @@ You can also add the MCP server globally using the Claude Code CLI:
 **Windows (PowerShell):**
 
 ```powershell
-claude mcp add altium C:\path\to\altium-designer-mcp\target\release\altium-designer-mcp.exe -- $env:USERPROFILE\.altium-designer-mcp\config.json
+claude mcp add altium -- C:\path\to\altium-designer-mcp\target\release\altium-designer-mcp.exe $env:USERPROFILE\.altium-designer-mcp\config.json
 ```
 
 **Linux / macOS:**
 
 ```bash
-claude mcp add altium /path/to/altium-designer-mcp/target/release/altium-designer-mcp -- ~/.altium-designer-mcp/config.json
+claude mcp add altium -- /path/to/altium-designer-mcp/target/release/altium-designer-mcp ~/.altium-designer-mcp/config.json
 ```
 
 To verify it was added:

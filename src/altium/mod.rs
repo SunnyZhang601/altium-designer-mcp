@@ -243,14 +243,31 @@ pub fn fold_ansi_widened(text: &str) -> Option<String> {
 /// # Returns
 ///
 /// A safe OLE name (≤31 units) that doesn't collide with existing names.
+/// Characters an OLE/CFB storage name cannot contain. `generate_ole_name`
+/// maps each to `_`; a library refuses to save a component whose name is
+/// empty, since there is no storage name to derive from nothing.
+pub const OLE_NAME_FORBIDDEN: &[char] = &['/', '\\', ':', '!'];
+
 #[must_use]
 pub fn generate_ole_name<S: BuildHasher>(name: &str, used_names: &HashSet<String, S>) -> String {
-    // OLE/CFB storage names cannot contain the path separator '/'; a component
-    // named e.g. "A/B" would otherwise make the storage-creation call fail.
-    // Altium sanitises it to '_' before creating the component storage, so a
-    // component whose name carries a slash still saves. Apply it up front so
-    // both the short-name and truncated paths use the sanitised form.
-    let sanitized = name.replace('/', "_");
+    // OLE/CFB storage names cannot contain `/`, `\`, `:` or `!`: the `cfb`
+    // crate reads `/` and `\` as path separators (the storage-creation call
+    // fails) and asserts on `:` (the whole save would panic). Altium sanitises
+    // a slash to `_` before creating the component storage, so a component
+    // whose name carries one still saves; the other three get the same
+    // treatment. Apply it up front so both the short-name and truncated paths
+    // use the sanitised form; `SectionKeys` still maps the storage name back
+    // to the real one.
+    let sanitized: String = name
+        .chars()
+        .map(|c| {
+            if OLE_NAME_FORBIDDEN.contains(&c) {
+                '_'
+            } else {
+                c
+            }
+        })
+        .collect();
     let name = sanitized.as_str();
 
     // The OLE/CFB limit is 31 UTF-16 code units — not bytes or chars. Measure

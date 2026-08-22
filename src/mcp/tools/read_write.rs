@@ -479,20 +479,12 @@ impl McpServer {
             }
         }
 
-        // Validate footprint names
-        // Note: OLE storage names are limited to 31 characters, but the library layer
-        // handles this by truncating storage names while preserving full names in PATTERN.
-        #[allow(clippy::items_after_statements)]
-        const INVALID_CHARS: &[char] = &['/', '\\', ':', '*', '?', '"', '<', '>', '|'];
+        // Validate footprint names (OLE storage names are limited to 31 units,
+        // but the library layer handles that by truncating the storage name
+        // while PATTERN keeps the full one).
         for name in &new_names {
-            if name.is_empty() {
-                return ToolCallResult::error("Footprint name cannot be empty");
-            }
-            if let Some(c) = name.chars().find(|c| INVALID_CHARS.contains(c)) {
-                return ToolCallResult::error(format!(
-                    "Footprint name '{name}' contains invalid character '{c}'. \
-                     Names cannot contain: / \\ : * ? \" < > |",
-                ));
+            if let Err(e) = Self::validate_ole_name(name) {
+                return ToolCallResult::error(e);
             }
         }
 
@@ -1238,20 +1230,12 @@ impl McpServer {
             }
         }
 
-        // Validate symbol names
-        // Note: OLE storage names are limited to 31 characters, but the library layer
-        // handles this by truncating storage names while preserving full names in LIBREFERENCE.
-        #[allow(clippy::items_after_statements)]
-        const INVALID_CHARS: &[char] = &['/', '\\', ':', '*', '?', '"', '<', '>', '|'];
+        // Validate symbol names (OLE storage names are limited to 31 units,
+        // but the library layer handles that by truncating the storage name
+        // while LIBREFERENCE keeps the full one).
         for name in &new_names {
-            if name.is_empty() {
-                return ToolCallResult::error("Symbol name cannot be empty");
-            }
-            if let Some(c) = name.chars().find(|c| INVALID_CHARS.contains(c)) {
-                return ToolCallResult::error(format!(
-                    "Symbol name '{name}' contains invalid character '{c}'. \
-                     Names cannot contain: / \\ : * ? \" < > |",
-                ));
+            if let Err(e) = Self::validate_ole_name(name) {
+                return ToolCallResult::error(e);
             }
         }
 

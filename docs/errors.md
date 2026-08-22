@@ -171,6 +171,17 @@ The structured document inside `text` always carries these keys:
 - **`component`** — the component being processed, or `null` if not applicable.
 - **`details`** — additional context about what was happening, or `null`.
 
+### Unknown-Field Rejection
+
+`write_pcblib` and `write_schlib` refuse any JSON object key they do not know —
+`Unknown field 'widht'. Allowed fields are: [...]` — rather than ignoring it, because an
+ignored typo is a pad of the wrong shape or a track on the wrong layer, found only in Altium.
+Every object is checked: footprints and symbols, each primitive kind, 3D-model and
+component-body objects, footprint links. The accepted keys are the fields the read tools
+emit for that object plus its authoring-only spellings (`step_model`, `vertices`, `hidden`,
+`designator_prefix`, …), so anything a read returned can be passed straight back
+(`src/mcp/tools/allowed_keys.rs`).
+
 ---
 
 ## Path Sanitisation

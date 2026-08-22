@@ -3,6 +3,7 @@
 use serde_json::{json, Value};
 
 use crate::mcp::server::{ErrorContext, McpServer, ToolCallResult};
+use crate::mcp::tools::allowed_keys;
 
 /// Maps a free-text component type to its reference-designator class letter,
 /// following the conventions of IEEE 315 / ASME Y14.44 (commercial usage).
@@ -548,26 +549,9 @@ impl McpServer {
         // height that was written and whether one was auto-created.
         let mut bodies_echo: Vec<Value> = Vec::new();
 
+        let keys = allowed_keys::PcbLibKeys::new();
         for fp_json in footprints_json {
-            check_keys!(
-                fp_json,
-                &[
-                    "name",
-                    "description",
-                    "pads",
-                    "tracks",
-                    "arcs",
-                    "regions",
-                    "text",
-                    "vias",
-                    "fills",
-                    "step_model",
-                    "model_3d",
-                    "component_bodies",
-                    "guid",
-                    "primitive_order"
-                ]
-            );
+            check_keys!(fp_json, &keys.footprint);
             let name = fp_json
                 .get("name")
                 .and_then(Value::as_str)
@@ -581,6 +565,7 @@ impl McpServer {
             // Parse pads
             if let Some(pads) = fp_json.get("pads").and_then(Value::as_array) {
                 for (i, pad_json) in pads.iter().enumerate() {
+                    check_keys!(pad_json, &keys.pad);
                     match Self::parse_pad(pad_json) {
                         Ok(pad) => footprint.add_pad(pad),
                         Err(e) => {
@@ -598,6 +583,7 @@ impl McpServer {
             // Parse tracks
             if let Some(tracks) = fp_json.get("tracks").and_then(Value::as_array) {
                 for (i, track_json) in tracks.iter().enumerate() {
+                    check_keys!(track_json, &keys.track);
                     match Self::parse_track(track_json) {
                         Ok(track) => footprint.add_track(track),
                         Err(e) => {
@@ -615,6 +601,7 @@ impl McpServer {
             // Parse vias
             if let Some(vias) = fp_json.get("vias").and_then(Value::as_array) {
                 for (i, via_json) in vias.iter().enumerate() {
+                    check_keys!(via_json, &keys.via);
                     match Self::parse_via(via_json) {
                         Ok(via) => footprint.add_via(via),
                         Err(e) => {
@@ -632,6 +619,7 @@ impl McpServer {
             // Parse fills
             if let Some(fills) = fp_json.get("fills").and_then(Value::as_array) {
                 for (i, fill_json) in fills.iter().enumerate() {
+                    check_keys!(fill_json, &keys.fill);
                     match Self::parse_fill(fill_json) {
                         Ok(fill) => footprint.add_fill(fill),
                         Err(e) => {
@@ -649,6 +637,7 @@ impl McpServer {
             // Parse arcs
             if let Some(arcs) = fp_json.get("arcs").and_then(Value::as_array) {
                 for (i, arc_json) in arcs.iter().enumerate() {
+                    check_keys!(arc_json, &keys.arc);
                     match Self::parse_arc(arc_json) {
                         Ok(arc) => footprint.add_arc(arc),
                         Err(e) => {
@@ -666,30 +655,7 @@ impl McpServer {
             // Parse regions
             if let Some(regions) = fp_json.get("regions").and_then(Value::as_array) {
                 for region_json in regions {
-                    check_keys!(
-                        region_json,
-                        &[
-                            "layer",
-                            "vertices",
-                            "flags",
-                            "kind",
-                            "name",
-                            "net_index",
-                            "polygon_index",
-                            "component_index",
-                            "arc_resolution",
-                            "cavity_height",
-                            "sub_poly_index",
-                            "union_index",
-                            "is_shape_based",
-                            "holes",
-                            "unique_id",
-                            "additional_parameters",
-                            "guid",
-                            "v7_layer",
-                            "param_key_order"
-                        ]
-                    );
+                    check_keys!(region_json, &keys.region);
                     if let Some(region) = Self::parse_region(region_json) {
                         footprint.add_region(region);
                     }
@@ -699,40 +665,7 @@ impl McpServer {
             // Parse text
             if let Some(texts) = fp_json.get("text").and_then(Value::as_array) {
                 for text_json in texts {
-                    check_keys!(
-                        text_json,
-                        &[
-                            "bold",
-                            "component_index",
-                            "flags",
-                            "font_name",
-                            "height",
-                            "inverted_border",
-                            "inverted_rect_height",
-                            "inverted_rect_text_offset",
-                            "inverted_rect_width",
-                            "is_comment",
-                            "is_designator",
-                            "is_inverted",
-                            "italic",
-                            "justification",
-                            "kind",
-                            "layer",
-                            "mirror",
-                            "net_index",
-                            "polygon_index",
-                            "rotation",
-                            "stroke_font",
-                            "stroke_width",
-                            "text",
-                            "unique_id",
-                            "use_inverted_rectangle",
-                            "x",
-                            "y",
-                            "guid",
-                            "raw_geometry"
-                        ]
-                    );
+                    check_keys!(text_json, &keys.text);
                     if let Some(text) = Self::parse_text(text_json) {
                         footprint.add_text(text);
                     }
@@ -741,6 +674,7 @@ impl McpServer {
 
             // Parse 3D model
             if let Some(model_json) = fp_json.get("step_model") {
+                check_keys!(model_json, &keys.model);
                 if let Some(model_path) = model_json.get("filepath").and_then(Value::as_str) {
                     let embed = model_json
                         .get("embed")
@@ -841,6 +775,7 @@ impl McpServer {
             // (filepath + offsets/rotation).
             if fp_json.get("step_model").is_none() {
                 if let Some(model_json) = fp_json.get("model_3d").filter(|v| !v.is_null()) {
+                    check_keys!(model_json, &keys.model);
                     let model_path = model_json
                         .get("filepath")
                         .and_then(Value::as_str)
@@ -885,6 +820,7 @@ impl McpServer {
             // shape-based extruded bodies.
             if let Some(bodies) = fp_json.get("component_bodies").and_then(Value::as_array) {
                 for body_json in bodies {
+                    check_keys!(body_json, &keys.component_body);
                     footprint.add_component_body(Self::parse_component_body_json(body_json));
                 }
             }
@@ -1292,44 +1228,9 @@ impl McpServer {
         // echo below to what the caller actually wrote.
         let mut written_names: std::collections::HashSet<String> = std::collections::HashSet::new();
 
+        let keys = allowed_keys::SchLibKeys::new();
         for sym_json in symbols_json {
-            check_keys!(
-                sym_json,
-                &[
-                    "name",
-                    "description",
-                    "designator",
-                    "designator_prefix",
-                    "designator_x",
-                    "designator_y",
-                    "designator_unique_id",
-                    "component_type",
-                    "part_count",
-                    "display_mode_count",
-                    "current_part_id",
-                    "part_id_locked",
-                    "source_library_name",
-                    "target_file_name",
-                    "pins",
-                    "rectangles",
-                    "round_rects",
-                    "lines",
-                    "polylines",
-                    "polygons",
-                    "arcs",
-                    "pies",
-                    "images",
-                    "text_frames",
-                    "beziers",
-                    "ellipses",
-                    "elliptical_arcs",
-                    "labels",
-                    "text",
-                    "parameters",
-                    "footprints",
-                    "primitive_order"
-                ]
-            );
+            check_keys!(sym_json, &keys.symbol);
             let name = sym_json
                 .get("name")
                 .and_then(Value::as_str)
@@ -1412,37 +1313,7 @@ impl McpServer {
             // Parse pins
             if let Some(pins) = sym_json.get("pins").and_then(Value::as_array) {
                 for pin_json in pins {
-                    check_keys!(
-                        pin_json,
-                        &[
-                            "name",
-                            "designator",
-                            "x",
-                            "y",
-                            "length",
-                            "orientation",
-                            "electrical_type",
-                            "hidden",
-                            "show_name",
-                            "show_designator",
-                            "owner_part_id",
-                            "symbol_inner_edge",
-                            "symbol_outer_edge",
-                            "symbol_inside",
-                            "symbol_outside",
-                            "description",
-                            "colour",
-                            "graphically_locked",
-                            "swap_id_group",
-                            "part_and_sequence",
-                            "default_value",
-                            "owner_part_display_mode",
-                            "symbol_line_width",
-                            "frac",
-                            "is_not_accessible",
-                            "formal_type"
-                        ]
-                    );
+                    check_keys!(pin_json, &keys.pin);
                     if let Some(pin) = Self::parse_schlib_pin(pin_json) {
                         symbol.add_pin(pin);
                     }
@@ -1452,27 +1323,7 @@ impl McpServer {
             // Parse rectangles
             if let Some(rects) = sym_json.get("rectangles").and_then(Value::as_array) {
                 for rect_json in rects {
-                    check_keys!(
-                        rect_json,
-                        &[
-                            "fill_color",
-                            "filled",
-                            "line_color",
-                            "line_style",
-                            "line_width",
-                            "owner_part_id",
-                            "transparent",
-                            "x1",
-                            "x2",
-                            "y1",
-                            "y2",
-                            "unique_id",
-                            "graphically_locked",
-                            "disabled",
-                            "dimmed",
-                            "owner_part_display_mode"
-                        ]
-                    );
+                    check_keys!(rect_json, allowed_keys::RECTANGLE);
                     if let Some(rect) = Self::parse_schlib_rectangle(rect_json) {
                         symbol.add_rectangle(rect);
                     }
@@ -1482,29 +1333,7 @@ impl McpServer {
             // Parse rounded rectangles
             if let Some(round_rects) = sym_json.get("round_rects").and_then(Value::as_array) {
                 for round_rect_json in round_rects {
-                    check_keys!(
-                        round_rect_json,
-                        &[
-                            "corner_x_radius",
-                            "corner_y_radius",
-                            "fill_color",
-                            "filled",
-                            "line_color",
-                            "line_style",
-                            "line_width",
-                            "owner_part_id",
-                            "transparent",
-                            "x1",
-                            "x2",
-                            "y1",
-                            "y2",
-                            "unique_id",
-                            "graphically_locked",
-                            "disabled",
-                            "dimmed",
-                            "owner_part_display_mode"
-                        ]
-                    );
+                    check_keys!(round_rect_json, allowed_keys::ROUND_RECT);
                     if let Some(round_rect) = Self::parse_schlib_round_rect(round_rect_json) {
                         symbol.add_round_rect(round_rect);
                     }
@@ -1514,25 +1343,7 @@ impl McpServer {
             // Parse lines
             if let Some(lines) = sym_json.get("lines").and_then(Value::as_array) {
                 for line_json in lines {
-                    check_keys!(
-                        line_json,
-                        &[
-                            "color",
-                            "line_style",
-                            "line_width",
-                            "is_not_accessible",
-                            "owner_part_id",
-                            "x1",
-                            "x2",
-                            "y1",
-                            "y2",
-                            "unique_id",
-                            "graphically_locked",
-                            "disabled",
-                            "dimmed",
-                            "owner_part_display_mode"
-                        ]
-                    );
+                    check_keys!(line_json, allowed_keys::LINE);
                     if let Some(line) = Self::parse_schlib_line(line_json) {
                         symbol.add_line(line);
                     }
@@ -1542,27 +1353,7 @@ impl McpServer {
             // Parse polylines
             if let Some(polylines) = sym_json.get("polylines").and_then(Value::as_array) {
                 for polyline_json in polylines {
-                    check_keys!(
-                        polyline_json,
-                        &[
-                            "color",
-                            "end_line_shape",
-                            "line_shape_size",
-                            "line_style",
-                            "line_width",
-                            "is_not_accessible",
-                            "owner_part_id",
-                            "points",
-                            "start_line_shape",
-                            "transparent",
-                            "vertices",
-                            "unique_id",
-                            "graphically_locked",
-                            "disabled",
-                            "dimmed",
-                            "owner_part_display_mode"
-                        ]
-                    );
+                    check_keys!(polyline_json, allowed_keys::POLYLINE);
                     if let Some(polyline) = Self::parse_schlib_polyline(polyline_json) {
                         symbol.add_polyline(polyline);
                     }
@@ -1572,26 +1363,7 @@ impl McpServer {
             // Parse polygons
             if let Some(polygons) = sym_json.get("polygons").and_then(Value::as_array) {
                 for polygon_json in polygons {
-                    check_keys!(
-                        polygon_json,
-                        &[
-                            "fill_color",
-                            "filled",
-                            "line_color",
-                            "line_width",
-                            "line_style",
-                            "transparent",
-                            "is_not_accessible",
-                            "owner_part_id",
-                            "points",
-                            "vertices",
-                            "unique_id",
-                            "graphically_locked",
-                            "disabled",
-                            "dimmed",
-                            "owner_part_display_mode"
-                        ]
-                    );
+                    check_keys!(polygon_json, allowed_keys::POLYGON);
                     if let Some(polygon) = Self::parse_schlib_polygon(polygon_json) {
                         symbol.add_polygon(polygon);
                     }
@@ -1604,26 +1376,7 @@ impl McpServer {
                     // SchLib arcs are centre/radius/angle based, NOT layer-based like PcbLib arcs; the
                     // allow-list must match the documented fields in tool_definitions or every arc is
                     // rejected as an "unknown field" (was erroneously copied from the PcbLib arc as ["layer"]).
-                    check_keys!(
-                        arc_json,
-                        &[
-                            "color",
-                            "end_angle",
-                            "fill_color",
-                            "line_width",
-                            "is_not_accessible",
-                            "owner_part_id",
-                            "radius",
-                            "start_angle",
-                            "x",
-                            "y",
-                            "unique_id",
-                            "graphically_locked",
-                            "disabled",
-                            "dimmed",
-                            "owner_part_display_mode"
-                        ]
-                    );
+                    check_keys!(arc_json, allowed_keys::ARC);
                     if let Some(arc) = Self::parse_schlib_arc(arc_json) {
                         symbol.add_arc(arc);
                     }
@@ -1632,28 +1385,7 @@ impl McpServer {
 
             if let Some(pies) = sym_json.get("pies").and_then(Value::as_array) {
                 for pie_json in pies {
-                    check_keys!(
-                        pie_json,
-                        &[
-                            "x",
-                            "y",
-                            "radius",
-                            "start_angle",
-                            "end_angle",
-                            "line_width",
-                            "line_color",
-                            "fill_color",
-                            "filled",
-                            "transparent",
-                            "is_not_accessible",
-                            "owner_part_id",
-                            "unique_id",
-                            "graphically_locked",
-                            "disabled",
-                            "dimmed",
-                            "owner_part_display_mode"
-                        ]
-                    );
+                    check_keys!(pie_json, allowed_keys::PIE);
                     if let Some(pie) = Self::parse_schlib_pie(pie_json) {
                         symbol.add_pie(pie);
                     }
@@ -1662,33 +1394,7 @@ impl McpServer {
 
             if let Some(images) = sym_json.get("images").and_then(Value::as_array) {
                 for image_json in images {
-                    check_keys!(
-                        image_json,
-                        &[
-                            "x1",
-                            "y1",
-                            "x2",
-                            "y2",
-                            "line_width",
-                            "line_color",
-                            "line_style",
-                            "fill_color",
-                            "filled",
-                            "transparent",
-                            "show_border",
-                            "keep_aspect",
-                            "embed_image",
-                            "file_name",
-                            "image_data",
-                            "is_not_accessible",
-                            "owner_part_id",
-                            "unique_id",
-                            "graphically_locked",
-                            "disabled",
-                            "dimmed",
-                            "owner_part_display_mode"
-                        ]
-                    );
+                    check_keys!(image_json, allowed_keys::IMAGE);
                     if let Some(image) = Self::parse_schlib_image(image_json) {
                         symbol.add_image(image);
                     }
@@ -1697,37 +1403,7 @@ impl McpServer {
 
             if let Some(text_frames) = sym_json.get("text_frames").and_then(Value::as_array) {
                 for frame_json in text_frames {
-                    check_keys!(
-                        frame_json,
-                        &[
-                            "x1",
-                            "y1",
-                            "x2",
-                            "y2",
-                            "text",
-                            "color",
-                            "area_color",
-                            "text_color",
-                            "text_margin",
-                            "line_width",
-                            "line_style",
-                            "transparent",
-                            "font_id",
-                            "orientation",
-                            "alignment",
-                            "is_solid",
-                            "show_border",
-                            "word_wrap",
-                            "clip_to_rect",
-                            "is_not_accessible",
-                            "owner_part_id",
-                            "unique_id",
-                            "graphically_locked",
-                            "disabled",
-                            "dimmed",
-                            "owner_part_display_mode"
-                        ]
-                    );
+                    check_keys!(frame_json, allowed_keys::TEXT_FRAME);
                     if let Some(text_frame) = Self::parse_schlib_text_frame(frame_json) {
                         symbol.add_text_frame(text_frame);
                     }
@@ -1736,24 +1412,7 @@ impl McpServer {
 
             if let Some(beziers) = sym_json.get("beziers").and_then(Value::as_array) {
                 for bezier_json in beziers {
-                    check_keys!(
-                        bezier_json,
-                        &[
-                            "x1",
-                            "y1",
-                            "x2",
-                            "y2",
-                            "x3",
-                            "y3",
-                            "x4",
-                            "y4",
-                            "line_width",
-                            "color",
-                            "is_not_accessible",
-                            "owner_part_id",
-                            "unique_id"
-                        ]
-                    );
+                    check_keys!(bezier_json, allowed_keys::BEZIER);
                     if let Some(bezier) = Self::parse_schlib_bezier(bezier_json) {
                         symbol.add_bezier(bezier);
                     }
@@ -1762,22 +1421,7 @@ impl McpServer {
 
             if let Some(ell_arcs) = sym_json.get("elliptical_arcs").and_then(Value::as_array) {
                 for ell_arc_json in ell_arcs {
-                    check_keys!(
-                        ell_arc_json,
-                        &[
-                            "x",
-                            "y",
-                            "radius",
-                            "secondary_radius",
-                            "start_angle",
-                            "end_angle",
-                            "line_width",
-                            "color",
-                            "fill_color",
-                            "owner_part_id",
-                            "unique_id"
-                        ]
-                    );
+                    check_keys!(ell_arc_json, allowed_keys::ELLIPTICAL_ARC);
                     if let Some(ell_arc) = Self::parse_schlib_elliptical_arc(ell_arc_json) {
                         symbol.add_elliptical_arc(ell_arc);
                     }
@@ -1787,27 +1431,7 @@ impl McpServer {
             // Parse ellipses
             if let Some(ellipses) = sym_json.get("ellipses").and_then(Value::as_array) {
                 for ellipse_json in ellipses {
-                    check_keys!(
-                        ellipse_json,
-                        &[
-                            "fill_color",
-                            "filled",
-                            "line_color",
-                            "line_width",
-                            "is_not_accessible",
-                            "owner_part_id",
-                            "radius_x",
-                            "radius_y",
-                            "transparent",
-                            "x",
-                            "y",
-                            "unique_id",
-                            "graphically_locked",
-                            "disabled",
-                            "dimmed",
-                            "owner_part_display_mode"
-                        ]
-                    );
+                    check_keys!(ellipse_json, allowed_keys::ELLIPSE);
                     if let Some(ellipse) = Self::parse_schlib_ellipse(ellipse_json) {
                         symbol.add_ellipse(ellipse);
                     }
@@ -1817,27 +1441,7 @@ impl McpServer {
             // Parse labels
             if let Some(labels) = sym_json.get("labels").and_then(Value::as_array) {
                 for label_json in labels {
-                    check_keys!(
-                        label_json,
-                        &[
-                            "color",
-                            "font_id",
-                            "hidden",
-                            "is_hidden",
-                            "is_mirrored",
-                            "justification",
-                            "owner_part_id",
-                            "rotation",
-                            "text",
-                            "x",
-                            "y",
-                            "unique_id",
-                            "graphically_locked",
-                            "disabled",
-                            "dimmed",
-                            "owner_part_display_mode"
-                        ]
-                    );
+                    check_keys!(label_json, allowed_keys::LABEL);
                     if let Some(label) = Self::parse_schlib_label(label_json) {
                         symbol.add_label(label);
                     }
@@ -1847,23 +1451,7 @@ impl McpServer {
             // Parse text annotations
             if let Some(texts) = sym_json.get("text").and_then(Value::as_array) {
                 for text_json in texts {
-                    check_keys!(
-                        text_json,
-                        &[
-                            "color",
-                            "font_id",
-                            "hidden",
-                            "is_hidden",
-                            "is_mirrored",
-                            "justification",
-                            "owner_part_id",
-                            "rotation",
-                            "text",
-                            "x",
-                            "y",
-                            "unique_id"
-                        ]
-                    );
+                    check_keys!(text_json, allowed_keys::TEXT);
                     if let Some(text) = Self::parse_schlib_text(text_json) {
                         symbol.add_text(text);
                     }
@@ -1873,32 +1461,7 @@ impl McpServer {
             // Parse parameters
             if let Some(params) = sym_json.get("parameters").and_then(Value::as_array) {
                 for param_json in params {
-                    check_keys!(
-                        param_json,
-                        &[
-                            "name",
-                            "value",
-                            "x",
-                            "y",
-                            "hidden",
-                            "font_id",
-                            "color",
-                            "read_only_state",
-                            "param_type",
-                            "unique_id",
-                            "orientation",
-                            "justification",
-                            "show_name",
-                            "hide_name",
-                            "description",
-                            "is_configurable",
-                            "owner_part_id",
-                            "graphically_locked",
-                            "disabled",
-                            "dimmed",
-                            "owner_part_display_mode"
-                        ]
-                    );
+                    check_keys!(param_json, allowed_keys::PARAMETER);
                     if let Some(param) = Self::parse_schlib_parameter(param_json) {
                         symbol.add_parameter(param);
                     }
@@ -1908,10 +1471,10 @@ impl McpServer {
             // Parse footprint references
             if let Some(footprints) = sym_json.get("footprints").and_then(Value::as_array) {
                 for fp_json in footprints {
-                    // A footprint reference is a model link (name + optional
-                    // description + library_path), not an embedded footprint, so
-                    // only those fields are read here.
-                    check_keys!(fp_json, &["name", "description", "library_path"]);
+                    // A footprint reference is a model link, not an embedded
+                    // footprint: name, description, library_path, and the
+                    // read-preserved identity a replay carries back.
+                    check_keys!(fp_json, &keys.footprint);
                     if let Some(fp_name) = fp_json.get("name").and_then(Value::as_str) {
                         let mut fp = FootprintModel::new(fp_name);
                         if let Some(desc) = fp_json.get("description").and_then(Value::as_str) {
@@ -1923,6 +1486,14 @@ impl McpServer {
                         {
                             fp.library_path = Some(lib_path.to_string());
                         }
+                        fp.is_current = fp_json
+                            .get("is_current")
+                            .and_then(Value::as_bool)
+                            .unwrap_or(false);
+                        fp.unique_id = fp_json
+                            .get("unique_id")
+                            .and_then(Value::as_str)
+                            .map(str::to_string);
                         symbol.add_footprint(fp);
                     }
                 }
@@ -2848,6 +2419,465 @@ mod tests {
                 texts_after, texts_before,
                 "no primitive was added to a replayed footprint"
             );
+        }
+
+        /// Asserts two optional streams are byte-identical, naming the first
+        /// divergent offset when they are not.
+        fn assert_same_stream(what: &str, expected: Option<&Vec<u8>>, actual: Option<&Vec<u8>>) {
+            let a = expected.map_or(&[][..], Vec::as_slice);
+            let b = actual.map_or(&[][..], Vec::as_slice);
+            let first = a
+                .iter()
+                .zip(b)
+                .position(|(x, y)| x != y)
+                .unwrap_or_else(|| a.len().min(b.len()));
+            assert!(
+                expected == actual,
+                "{what}: expected {} bytes (present: {}), got {} bytes (present: {}), \
+                 first divergence at {first:#x}",
+                a.len(),
+                expected.is_some(),
+                b.len(),
+                actual.is_some()
+            );
+        }
+
+        /// Every top-level component storage of an OLE file, keyed by name,
+        /// with the bytes of the streams that carry the component.
+        fn component_streams(
+            path: &std::path::Path,
+        ) -> std::collections::BTreeMap<String, std::collections::BTreeMap<String, Vec<u8>>>
+        {
+            let file = std::fs::File::open(path).unwrap();
+            let mut cfb = cfb::CompoundFile::open(file).unwrap();
+            let streams: Vec<std::path::PathBuf> = cfb
+                .walk()
+                .filter(cfb::Entry::is_stream)
+                .map(|e| e.path().to_path_buf())
+                .collect();
+            let mut out: std::collections::BTreeMap<_, std::collections::BTreeMap<_, _>> =
+                std::collections::BTreeMap::new();
+            for stream in streams {
+                let mut parts = stream
+                    .iter()
+                    .skip(1)
+                    .map(|p| p.to_string_lossy().into_owned());
+                let component = parts.next().unwrap();
+                let rest = parts.collect::<Vec<_>>().join("/");
+                let library_level = matches!(
+                    component.as_str(),
+                    "Library" | "FileVersionInfo" | "FileHeader"
+                );
+                // A top-level stream (`SchLib`'s image `Storage`, `SectionKeys`)
+                // is kept under its own name so it is compared too.
+                let rest = if rest.is_empty() {
+                    ".".to_string()
+                } else {
+                    rest
+                };
+                let bytes = crate::altium::read_stream_opt(&mut cfb, &stream).unwrap();
+                if !library_level {
+                    out.entry(component).or_default().insert(rest, bytes);
+                }
+            }
+            out
+        }
+
+        /// The tool-layer twin of the library-level byte-fidelity suite: every
+        /// golden footprint read as JSON through `read_pcblib` and written back
+        /// through `write_pcblib` comes out byte-identical — the `Data` stream,
+        /// the unique-id records and (as a set, since Altium scrambles their
+        /// order) the primitive GUIDs. Anything the JSON boundary drops,
+        /// invents or reorders fails here, footprint by footprint.
+        #[test]
+        fn write_pcblib_replays_every_golden_footprint_byte_for_byte() {
+            let dir = test_temp_dir();
+            let samples = std::path::Path::new("scripts/samples")
+                .canonicalize()
+                .unwrap();
+            let server =
+                crate::mcp::server::McpServer::new(vec![dir.path().to_path_buf(), samples.clone()]);
+            let src = samples.join("footprints.PcbLib");
+
+            let read = server.call_read_pcblib(&json!({ "filepath": src.to_string_lossy() }));
+            assert!(!read.is_error, "{}", get_result_text(&read));
+            let footprints = parse_result_json(&read)["footprints"].clone();
+            assert!(footprints.as_array().is_some_and(|f| f.len() > 20));
+
+            let out = dir.path().join("Replay.PcbLib");
+            let written = server.call_write_pcblib(&json!({
+                "filepath": out.to_string_lossy(),
+                "footprints": footprints,
+            }));
+            assert!(!written.is_error, "{}", get_result_text(&written));
+
+            let (golden, ours) = (component_streams(&src), component_streams(&out));
+            // A non-ASCII storage name is widened through the writing
+            // machine's code page, so the one such golden footprint may sit
+            // under a different storage name: pair the leftovers by elimination.
+            let shared: Vec<String> = golden
+                .keys()
+                .filter(|k| ours.contains_key(*k))
+                .cloned()
+                .collect();
+            let g_left: Vec<&String> = golden.keys().filter(|k| !ours.contains_key(*k)).collect();
+            let o_left: Vec<&String> = ours.keys().filter(|k| !golden.contains_key(*k)).collect();
+            assert_eq!(
+                g_left.len(),
+                o_left.len(),
+                "footprints lost or invented: {g_left:?} vs {o_left:?}"
+            );
+            assert!(
+                g_left.len() <= 1,
+                "only the single non-ASCII name may be renamed: {g_left:?}"
+            );
+            let pairs: Vec<(&String, &String)> = shared
+                .iter()
+                .map(|k| (k, k))
+                .chain(g_left.iter().copied().zip(o_left.iter().copied()))
+                .collect();
+            assert_eq!(pairs.len(), golden.len());
+
+            for (g_name, o_name) in pairs {
+                let (g, o) = (&golden[g_name], &ours[o_name]);
+                for stream in ["Data", "UniqueIDPrimitiveInformation/Data"] {
+                    assert_same_stream(&format!("{g_name}/{stream}"), g.get(stream), o.get(stream));
+                }
+                // Altium scrambles the PrimitiveGuids record order while the
+                // writer emits it canonically: compared as record sets.
+                let guids = |bytes: Option<&Vec<u8>>| -> std::collections::BTreeSet<Vec<u8>> {
+                    bytes
+                        .map_or(&[][..], Vec::as_slice)
+                        .chunks_exact(24)
+                        .map(<[u8]>::to_vec)
+                        .collect()
+                };
+                assert_eq!(
+                    guids(g.get("PrimitiveGuids/Data")),
+                    guids(o.get("PrimitiveGuids/Data")),
+                    "{g_name}/PrimitiveGuids"
+                );
+            }
+        }
+
+        /// Every `UniqueID=XXXXXXXX` value in a `SchLib` Data stream.
+        fn unique_ids(bytes: &[u8]) -> Vec<Vec<u8>> {
+            const KEY: &[u8] = b"|UniqueID=";
+            bytes
+                .windows(KEY.len())
+                .enumerate()
+                .filter(|(_, w)| *w == KEY)
+                .filter_map(|(i, _)| bytes.get(i + KEY.len()..i + KEY.len() + 8))
+                .map(<[u8]>::to_vec)
+                .collect()
+        }
+
+        /// Replaces every `UniqueID` value not in `keep` with `********`.
+        fn mask_generated_ids(bytes: &[u8], keep: &std::collections::HashSet<Vec<u8>>) -> Vec<u8> {
+            const KEY: &[u8] = b"|UniqueID=";
+            let mut out = bytes.to_vec();
+            let mut i = 0;
+            while i + KEY.len() + 8 <= out.len() {
+                if &out[i..i + KEY.len()] == KEY
+                    && !keep.contains(&out[i + KEY.len()..i + KEY.len() + 8])
+                {
+                    out[i + KEY.len()..i + KEY.len() + 8].copy_from_slice(b"********");
+                    i += KEY.len() + 8;
+                } else {
+                    i += 1;
+                }
+            }
+            out
+        }
+
+        /// The `SchLib` twin: every golden symbol read as JSON through
+        /// `read_schlib` and written back through `write_schlib` produces the
+        /// same bytes as the library-level save the byte-fidelity suite holds
+        /// to the golden — every symbol storage's streams and the shared image
+        /// `Storage`, so a record the JSON boundary drops, invents or reorders
+        /// fails here, symbol by symbol.
+        #[test]
+        fn write_schlib_replays_every_golden_symbol_byte_for_byte() {
+            use crate::altium::SchLib;
+
+            let dir = test_temp_dir();
+            let samples = std::path::Path::new("scripts/samples")
+                .canonicalize()
+                .unwrap();
+            let server =
+                crate::mcp::server::McpServer::new(vec![dir.path().to_path_buf(), samples.clone()]);
+            let src = samples.join("symbols.SchLib");
+
+            let baseline = dir.path().join("Baseline.SchLib");
+            SchLib::open(&src).unwrap().save(&baseline).unwrap();
+
+            let read = server.call_read_schlib(&json!({ "filepath": src.to_string_lossy() }));
+            assert!(!read.is_error, "{}", get_result_text(&read));
+            let symbols = parse_result_json(&read)["symbols"].clone();
+            assert!(symbols.as_array().is_some_and(|s| s.len() > 50));
+
+            let out = dir.path().join("Replay.SchLib");
+            let written = server.call_write_schlib(&json!({
+                "filepath": out.to_string_lossy(),
+                "symbols": symbols,
+            }));
+            assert!(!written.is_error, "{}", get_result_text(&written));
+
+            // A record the golden stores without a UniqueID gets a fresh one
+            // on every save, so those IDs — and only those — are masked; an ID
+            // the golden carries must come through unchanged.
+            let golden_ids: std::collections::HashSet<Vec<u8>> = component_streams(&src)
+                .values()
+                .flat_map(|streams| streams.values())
+                .flat_map(|bytes| unique_ids(bytes))
+                .collect();
+            let (expected, ours) = (component_streams(&baseline), component_streams(&out));
+            assert_eq!(
+                expected.keys().collect::<Vec<_>>(),
+                ours.keys().collect::<Vec<_>>(),
+                "symbol storages differ"
+            );
+            for (name, e) in &expected {
+                let o = &ours[name];
+                assert_eq!(
+                    e.keys().collect::<Vec<_>>(),
+                    o.keys().collect::<Vec<_>>(),
+                    "{name}: streams differ"
+                );
+                for (stream, a) in e {
+                    let a = mask_generated_ids(a, &golden_ids);
+                    let b = o.get(stream).map(|b| mask_generated_ids(b, &golden_ids));
+                    assert_same_stream(&format!("{name}/{stream}"), Some(&a), b.as_ref());
+                }
+            }
+        }
+
+        /// A misspelled key on any `PcbLib` object is refused, not ignored —
+        /// an ignored typo is a pad of the wrong shape or a track on the
+        /// wrong layer, found in Altium.
+        #[test]
+        fn write_pcblib_refuses_a_typo_on_every_object_kind() {
+            let dir = test_temp_dir();
+            let server = create_test_server(dir.path());
+            let out = dir.path().join("Typo.PcbLib");
+            let pad = json!({ "designator": "1", "x": 0.0, "y": 0.0, "width": 1.0, "height": 1.0 });
+            let cases: Vec<(&str, serde_json::Value)> = vec![
+                (
+                    "footprint",
+                    json!({ "name": "T", "pads": [pad], "descripton": "x" }),
+                ),
+                (
+                    "pad",
+                    json!({ "name": "T", "pads": [{ "designator": "1", "x": 0.0, "y": 0.0, "width": 1.0, "height": 1.0, "shpae": "round" }] }),
+                ),
+                (
+                    "track",
+                    json!({ "name": "T", "pads": [pad], "tracks": [{ "x1": 0.0, "y1": 0.0, "x2": 1.0, "y2": 1.0, "width": 0.2, "layr": "Top Overlay" }] }),
+                ),
+                (
+                    "arc",
+                    json!({ "name": "T", "pads": [pad], "arcs": [{ "x": 0.0, "y": 0.0, "radius": 1.0, "start_angle": 0.0, "end_angle": 90.0, "width": 0.2, "layre": "Top Overlay" }] }),
+                ),
+                (
+                    "via",
+                    json!({ "name": "T", "pads": [pad], "vias": [{ "x": 0.0, "y": 0.0, "diameter": 0.6, "hole_size": 0.3, "hole_sixe": 0.3 }] }),
+                ),
+                (
+                    "fill",
+                    json!({ "name": "T", "pads": [pad], "fills": [{ "x1": 0.0, "y1": 0.0, "x2": 1.0, "y2": 1.0, "rotaton": 0.0 }] }),
+                ),
+                (
+                    "region",
+                    json!({ "name": "T", "pads": [pad], "regions": [{ "layer": "Top Overlay", "vertices": [{ "x": 0.0, "y": 0.0 }, { "x": 1.0, "y": 0.0 }, { "x": 1.0, "y": 1.0 }], "knid": "copper" }] }),
+                ),
+                (
+                    "text",
+                    json!({ "name": "T", "pads": [pad], "text": [{ "x": 0.0, "y": 0.0, "text": "hi", "height": 1.0, "hieght": 1.0 }] }),
+                ),
+                (
+                    "component_body",
+                    json!({ "name": "T", "pads": [pad], "component_bodies": [{ "overall_height": 1.0, "overal_height": 1.0 }] }),
+                ),
+                (
+                    "step_model",
+                    json!({ "name": "T", "pads": [pad], "step_model": { "filepath": "x.step", "embed": false, "rotaton": 0.0 } }),
+                ),
+                (
+                    "model_3d",
+                    json!({ "name": "T", "pads": [pad], "model_3d": { "filepath": "x.step", "z_offest": 0.0 } }),
+                ),
+            ];
+            for (kind, footprint) in cases {
+                let result = server.call_write_pcblib(&json!({
+                    "filepath": out.to_string_lossy(),
+                    "footprints": [footprint],
+                }));
+                let text = get_result_text(&result);
+                assert!(result.is_error, "{kind}: a typo was accepted: {text}");
+                assert!(text.contains("Unknown field"), "{kind}: {text}");
+            }
+        }
+
+        /// Per-layer sizes and offsets are accepted in the documented
+        /// `{width, height}` / `{x, y}` spelling and as bare pairs, and come
+        /// back in the documented spelling (to the format's 0.0001 mil grid).
+        #[test]
+        fn write_pcblib_accepts_stack_geometry_in_both_spellings() {
+            let dir = test_temp_dir();
+            let server = create_test_server(dir.path());
+            let close = |v: &serde_json::Value, expected: f64| {
+                (v.as_f64().unwrap() - expected).abs() < 1e-5
+            };
+            let mut sizes_obj = vec![json!({ "width": 1.0, "height": 2.0 }); 32];
+            sizes_obj[5] = json!({ "width": 0.5, "height": 0.6 });
+            let mut sizes_pair = vec![json!([1.0, 2.0]); 32];
+            sizes_pair[5] = json!([0.5, 0.6]);
+            let mut offsets_obj = vec![json!({ "x": 0.0, "y": 0.0 }); 32];
+            offsets_obj[7] = json!({ "x": -0.1, "y": -0.2 });
+            let mut offsets_pair = vec![json!([0.0, 0.0]); 32];
+            offsets_pair[7] = json!([-0.1, -0.2]);
+            let mut shapes = vec![json!("round"); 32];
+            shapes[5] = json!("rectangular");
+            shapes[6] = json!("octagonal");
+            shapes[8] = json!("rounded_rectangle");
+            for (i, (sizes, offsets)) in [(sizes_obj, offsets_obj), (sizes_pair, offsets_pair)]
+                .into_iter()
+                .enumerate()
+            {
+                let out = dir.path().join(format!("Stack{i}.PcbLib"));
+                let written = server.call_write_pcblib(&json!({
+                    "filepath": out.to_string_lossy(),
+                    "footprints": [{ "name": "S", "pads": [{
+                        "designator": "1", "x": 0.0, "y": 0.0, "width": 1.0, "height": 2.0,
+                        "layer": "Multi-Layer", "hole_size": 0.3,
+                        "stack_mode": "full_stack",
+                        "per_layer_sizes": sizes, "per_layer_offsets": offsets,
+                        "per_layer_shapes": shapes,
+                    }] }],
+                }));
+                assert!(!written.is_error, "{}", get_result_text(&written));
+                let back = server.call_read_pcblib(&json!({ "filepath": out.to_string_lossy() }));
+                let pad = parse_result_json(&back)["footprints"][0]["pads"][0].clone();
+                assert_eq!(pad["stack_mode"], "full_stack");
+                let size = &pad["per_layer_sizes"][5];
+                assert!(
+                    close(&size["width"], 0.5) && close(&size["height"], 0.6),
+                    "{pad}"
+                );
+                let offset = &pad["per_layer_offsets"][7];
+                assert!(
+                    close(&offset["x"], -0.1) && close(&offset["y"], -0.2),
+                    "{pad}"
+                );
+                assert_eq!(pad["per_layer_shapes"][0], "round", "{pad}");
+                assert_eq!(pad["per_layer_shapes"][5], "rectangle", "{pad}");
+                assert_eq!(pad["per_layer_shapes"][6], "octagonal", "{pad}");
+                assert_eq!(pad["per_layer_shapes"][8], "rounded_rectangle", "{pad}");
+            }
+        }
+
+        /// A body outline is accepted as `{x, y}` objects (documented) or
+        /// bare pairs, and comes back as objects.
+        #[test]
+        fn write_pcblib_accepts_a_body_outline_in_both_spellings() {
+            let dir = test_temp_dir();
+            let server = create_test_server(dir.path());
+            for (i, outline) in [
+                json!([{ "x": -1.5, "y": -0.5 }, { "x": 1.5, "y": -0.5 }, { "x": 1.5, "y": 0.5 }, { "x": -1.5, "y": 0.5 }]),
+                json!([[-1.5, -0.5], [1.5, -0.5], [1.5, 0.5], [-1.5, 0.5]]),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let out = dir.path().join(format!("Body{i}.PcbLib"));
+                let written = server.call_write_pcblib(&json!({
+                    "filepath": out.to_string_lossy(),
+                    "footprints": [{
+                        "name": "B",
+                        "pads": [{ "designator": "1", "x": 0.0, "y": 0.0, "width": 1.0, "height": 1.0 }],
+                        "component_bodies": [{ "overall_height": 1.2, "outline": outline }],
+                    }],
+                }));
+                assert!(!written.is_error, "{}", get_result_text(&written));
+                let back = server.call_read_pcblib(&json!({ "filepath": out.to_string_lossy() }));
+                let body = parse_result_json(&back)["footprints"][0]["component_bodies"][0].clone();
+                let outline = body["outline"].as_array().unwrap();
+                assert_eq!(outline.len(), 4, "{body}");
+                let corners = [(-1.5, -0.5), (1.5, -0.5), (1.5, 0.5), (-1.5, 0.5)];
+                for (vertex, (x, y)) in outline.iter().zip(corners) {
+                    assert!((vertex["x"].as_f64().unwrap() - x).abs() < 1e-5, "{body}");
+                    assert!((vertex["y"].as_f64().unwrap() - y).abs() < 1e-5, "{body}");
+                }
+            }
+        }
+
+        /// Polygon and polyline points are accepted as `{x, y}` objects
+        /// (documented) or bare pairs, and come back as objects.
+        #[test]
+        fn write_schlib_accepts_points_in_both_spellings() {
+            let dir = test_temp_dir();
+            let server = create_test_server(dir.path());
+            for (i, points) in [
+                json!([{ "x": -10, "y": 0 }, { "x": 0, "y": 5 }, { "x": 10, "y": 0 }]),
+                json!([[-10, 0], [0, 5], [10, 0]]),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let out = dir.path().join(format!("Points{i}.SchLib"));
+                let written = server.call_write_schlib(&json!({
+                    "filepath": out.to_string_lossy(),
+                    "symbols": [{
+                        "name": "P",
+                        "polygons": [{ "points": points }],
+                        "polylines": [{ "points": points }],
+                    }],
+                }));
+                assert!(!written.is_error, "{}", get_result_text(&written));
+                let back = server.call_read_schlib(&json!({ "filepath": out.to_string_lossy() }));
+                let symbol = parse_result_json(&back)["symbols"][0].clone();
+                let expected = json!([{ "x": -10.0, "y": 0.0 }, { "x": 0.0, "y": 5.0 }, { "x": 10.0, "y": 0.0 }]);
+                assert_eq!(symbol["polygons"][0]["points"], expected, "{symbol}");
+                assert_eq!(symbol["polylines"][0]["points"], expected, "{symbol}");
+            }
+        }
+
+        /// A footprint link echoed back from a read keeps its record identity
+        /// and current flag, so a read-modify-write re-emits the same
+        /// `RECORD=45` rather than a freshly numbered one.
+        #[test]
+        fn write_schlib_replays_a_footprint_link_identity() {
+            let dir = test_temp_dir();
+            let server = create_test_server(dir.path());
+            let out = dir.path().join("Link.SchLib");
+            let written = server.call_write_schlib(&json!({
+                "filepath": out.to_string_lossy(),
+                "symbols": [{
+                    "name": "L",
+                    "footprints": [
+                        { "name": "SOT-23", "description": "d", "library_path": "Lib.PcbLib", "unique_id": "ABCDEFGH", "is_current": true },
+                        { "name": "SOT-23-ALT", "uniqe_id": "ABCDEFGH" },
+                    ],
+                }],
+            }));
+            assert!(written.is_error, "{}", get_result_text(&written));
+            assert!(get_result_text(&written).contains("Unknown field 'uniqe_id'"));
+
+            let written = server.call_write_schlib(&json!({
+                "filepath": out.to_string_lossy(),
+                "symbols": [{
+                    "name": "L",
+                    "footprints": [
+                        { "name": "SOT-23", "description": "d", "library_path": "Lib.PcbLib", "unique_id": "ABCDEFGH", "is_current": true },
+                    ],
+                }],
+            }));
+            assert!(!written.is_error, "{}", get_result_text(&written));
+            let back = server.call_read_schlib(&json!({ "filepath": out.to_string_lossy() }));
+            let link = parse_result_json(&back)["symbols"][0]["footprints"][0].clone();
+            assert_eq!(link["unique_id"], "ABCDEFGH", "{link}");
+            assert_eq!(link["is_current"], true, "{link}");
+            assert_eq!(link["library_path"], "Lib.PcbLib", "{link}");
         }
 
         /// From scratch the designator is still added by default, and

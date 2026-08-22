@@ -156,8 +156,8 @@ fn json_guidless_opt(json: &Value, key: &str) -> Option<String> {
 
 /// Accepted pad-shape spellings, quoted in every shape error so the two tools
 /// give identical guidance.
-pub const PAD_SHAPE_HELP: &str = "Valid shapes are: rectangle, round (or circle), \
-     oval, octagonal, rounded_rectangle. Matching is case-insensitive and ignores \
+pub const PAD_SHAPE_HELP: &str = "Valid shapes are: rectangle (or rectangular), round (or \
+     circle), oval, octagonal, rounded_rectangle. Matching is case-insensitive and ignores \
      '_'/'-' separators.";
 
 impl McpServer {
@@ -170,7 +170,7 @@ impl McpServer {
     pub(crate) fn parse_pad_shape(s: &str) -> Option<crate::altium::pcblib::PadShape> {
         use crate::altium::pcblib::PadShape;
         match s.to_lowercase().replace(['_', '-'], "").as_str() {
-            "rectangle" | "rect" => Some(PadShape::Rectangle),
+            "rectangle" | "rectangular" | "rect" => Some(PadShape::Rectangle),
             "round" | "circle" | "circular" => Some(PadShape::Round),
             "oval" | "oblong" => Some(PadShape::Oval),
             "octagonal" | "octagon" => Some(PadShape::Octagonal),
@@ -407,13 +407,13 @@ impl McpServer {
             Some("full_stack") => PadStackMode::FullStack,
             _ => PadStackMode::Simple,
         };
+        // Each entry in any spelling the tools accept (`{width, height}`,
+        // `{x, y}` or `[a, b]`); a malformed entry is a zero pair rather than
+        // a silently shortened stack.
         let pairs = |field: &str| {
             json.get(field).and_then(Value::as_array).map(|a| {
                 a.iter()
-                    .map(|v| {
-                        let get = |k: &str| v.get(k).and_then(Value::as_f64).unwrap_or(0.0);
-                        (get("width") + get("x"), get("height") + get("y"))
-                    })
+                    .map(|v| crate::altium::serde_round::pair_from_json(v).unwrap_or((0.0, 0.0)))
                     .collect::<Vec<_>>()
             })
         };
@@ -911,18 +911,14 @@ impl McpServer {
             .and_then(Value::as_str)
             .and_then(Layer::parse)
             .unwrap_or(Layer::Top3DBody);
+        // Vertices in any spelling the tools accept (`{x, y}` or `[x, y]`).
         let outline = body_json
             .get("outline")
             .and_then(Value::as_array)
             .map(|verts| {
                 verts
                     .iter()
-                    .filter_map(|v| {
-                        Some((
-                            v.get("x").and_then(Value::as_f64)?,
-                            v.get("y").and_then(Value::as_f64)?,
-                        ))
-                    })
+                    .filter_map(crate::altium::serde_round::pair_from_json)
                     .collect::<Vec<_>>()
             })
             .unwrap_or_default();
@@ -1722,13 +1718,11 @@ impl McpServer {
             .get("points")
             .or_else(|| json.get("vertices"))
             .and_then(Value::as_array)?;
+        // Each point in any spelling the tools accept (`{x, y}` or `[x, y]`).
         let points: Vec<(f64, f64)> = points_json
             .iter()
-            .filter_map(|p| {
-                let x = json_f64(p, "x")?;
-                let y = json_f64(p, "y")?;
-                Some((x, y))
-            })
+            .filter_map(crate::altium::serde_round::pair_from_json)
+            .filter(|(x, y)| x.is_finite() && y.is_finite())
             .collect();
 
         if points.len() < 2 {
@@ -1800,13 +1794,11 @@ impl McpServer {
             .get("points")
             .or_else(|| json.get("vertices"))
             .and_then(Value::as_array)?;
+        // Each point in any spelling the tools accept (`{x, y}` or `[x, y]`).
         let points: Vec<(f64, f64)> = points_json
             .iter()
-            .filter_map(|p| {
-                let x = json_f64(p, "x")?;
-                let y = json_f64(p, "y")?;
-                Some((x, y))
-            })
+            .filter_map(crate::altium::serde_round::pair_from_json)
+            .filter(|(x, y)| x.is_finite() && y.is_finite())
             .collect();
 
         if points.len() < 3 {

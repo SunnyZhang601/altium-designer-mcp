@@ -15,9 +15,8 @@ project, issue tracker and contribution guide live on GitHub:
 |------|---------|
 | `altium-designer-mcp` (`.exe` on Windows) | The MCP server binary. |
 | `example-config.json` | Starting configuration — set `allowed_paths` to your library folders. |
-| `docs/CLAUDE_CODE_GUIDE.md` | Full Claude Code guide, including example workflows and prompts. |
-| `docs/ANTIGRAVITY_GUIDE.md` | Full Google Antigravity guide. |
-| `docs/CLIENT_SETUP.md` | Setup for every MCP client: Cursor, VS Code, Windsurf, Cline, Roo Code, Kiro, JetBrains, Zed, Gemini CLI, Codex CLI, Continue, Goose, OpenCode and more, plus troubleshooting. |
+| `docs/CLIENT_SETUP.md` | Setup for every MCP client: Claude Code, Claude Desktop, Google Antigravity, Cursor, VS Code, Windsurf, Cline, Roo Code, Kiro, JetBrains, Zed, Gemini CLI, Codex CLI, Continue, Goose, OpenCode and more, plus troubleshooting. |
+| `docs/USAGE.md` | What to ask for once connected: example workflows, prompts and tips, identical for every client. |
 | `docs/AGENT_GUIDE.md` | Invariants an AI assistant must follow (units, pin geometry, sandbox). |
 | `docs/TOOLS.md` | Reference for every MCP tool. |
 | `CHANGELOG.md` | Release history. |
@@ -94,7 +93,7 @@ On Windows PowerShell:
 claude mcp add altium -- "$env:LOCALAPPDATA\Programs\altium-designer-mcp\altium-designer-mcp.exe" "$env:USERPROFILE\.altium-designer-mcp\config.json"
 ```
 
-Then run `claude`, and check it is loaded with `/mcp`. See `docs/CLAUDE_CODE_GUIDE.md` for worked
+Then run `claude`, and check it is loaded with `/mcp`. See `docs/USAGE.md` for worked
 examples.
 
 ### Claude Desktop
@@ -118,7 +117,7 @@ Restart Claude Desktop afterwards. On Windows, note the doubled backslashes — 
 ### Google Antigravity
 
 Settings → Customizations → Add MCP, or edit the MCP config file directly using the same
-`mcpServers` block as above. See `docs/ANTIGRAVITY_GUIDE.md`.
+`mcpServers` block as above. See `docs/CLIENT_SETUP.md` § Google Antigravity.
 
 ### Cursor
 

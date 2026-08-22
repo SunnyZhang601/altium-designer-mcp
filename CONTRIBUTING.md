@@ -280,9 +280,8 @@ remaining headroom sits in `mcp/server.rs` and `mcp/tools/library_ops.rs`.
 | `docs/ARCHITECTURE.md` | System architecture and module layout |
 | `docs/AI_WORKFLOW.md` | AI usage workflow, symbol pin conventions, IPC reference |
 | `docs/AGENT_GUIDE.md` | Invariants for an agent driving the server (units, pin geometry, sandbox) |
-| `docs/CLAUDE_CODE_GUIDE.md` | Step-by-step Claude Code setup guide |
-| `docs/ANTIGRAVITY_GUIDE.md` | Google Antigravity setup guide |
-| `docs/CLIENT_SETUP.md` | Setup for every other MCP client (Cursor, VS Code, Windsurf, Cline, Zed, JetBrains, Gemini CLI, Codex CLI, …) + troubleshooting |
+| `docs/CLIENT_SETUP.md` | Setup for every MCP client (Claude Code, Claude Desktop, Antigravity, Cursor, VS Code, Windsurf, Cline, Zed, JetBrains, Gemini CLI, Codex CLI, …) + troubleshooting — the single place a client's wiring is described |
+| `docs/USAGE.md` | What to ask for once connected: workflows, prompts, tips — client-neutral |
 | `docs/SECURITY.md` | Security threat model and design rationale |
 | `docs/RELEASING.md` | Release runbook: dry run, tag-day steps, draft review, rollback |
 | `docs/errors.md` | Error reference catalogue |

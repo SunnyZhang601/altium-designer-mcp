@@ -101,7 +101,7 @@ standard block as `.mcp.json` at the project root — Claude Code asks each pers
 approve it on first use.
 
 Check: `claude mcp list` shows `altium` with `✔ Connected`; inside a session, `/mcp` lists
-its 34 tools. See [`CLAUDE_CODE_GUIDE.md`](CLAUDE_CODE_GUIDE.md) for worked examples.
+its 34 tools. See [`USAGE.md`](USAGE.md) for worked examples.
 
 ## Claude Desktop
 
@@ -129,7 +129,9 @@ Settings (bottom left) → **Customizations** → **Add MCP**, or edit the file 
 - One project only: `.agents/mcp_config.json` in the workspace root
 
 Paste the standard block (`"disabled": true` parks an entry without deleting it). The file
-is strict JSON (no comments). Full walkthrough in [`ANTIGRAVITY_GUIDE.md`](ANTIGRAVITY_GUIDE.md).
+is strict JSON (no comments). Reload Antigravity after editing it; the MCP store / server
+list must show `altium` enabled. The official
+[Antigravity MCP docs](https://antigravity.google/docs/mcp) carry the current UI.
 
 ## Cursor
 

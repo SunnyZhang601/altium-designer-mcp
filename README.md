@@ -60,25 +60,15 @@ read and write the actual `.PcbLib` / `.SchLib` files.
 
 ---
 
-## Quick Start with Claude Code
+## Quick Start
 
-> **[Claude Code Setup Guide](docs/CLAUDE_CODE_GUIDE.md)** — Complete step-by-step instructions
-> for using this MCP server with Claude Code CLI on **Windows**, **Linux**, and **macOS**.
-
----
-
-## Quick Start with Google Antigravity
-
-> **[Google Antigravity Setup Guide](docs/ANTIGRAVITY_GUIDE.md)** — Step-by-step instructions
-> for using this MCP server with Google Antigravity (IDE and CLI) on **Windows**, **Linux**, and **macOS**.
-
----
-
-## Quick Start with any other AI client
-
-> **[Client Setup](docs/CLIENT_SETUP.md)** — verified configuration for Claude Desktop, Cursor,
-> VS Code, GitHub Copilot CLI, Windsurf, Cline, Roo Code, Kiro, JetBrains, Zed, Gemini CLI,
-> Codex CLI, Continue, Goose, OpenCode and any other stdio MCP client, plus troubleshooting.
+> **[Client Setup](docs/CLIENT_SETUP.md)** — verified configuration for Claude Code, Claude
+> Desktop, Google Antigravity, Cursor, VS Code, GitHub Copilot CLI, Windsurf, Cline, Roo Code,
+> Kiro, JetBrains, Zed, Gemini CLI, Codex CLI, Continue, Goose, OpenCode and any other stdio
+> MCP client, plus troubleshooting — on **Windows**, **Linux**, and **macOS**.
+>
+> **[Using the server](docs/USAGE.md)** — what to ask for once it is connected: example
+> workflows, prompts and tips, identical for every client.
 
 ---
 
@@ -493,7 +483,8 @@ use any length component name and it will be preserved on read/write roundtrips.
 
 | For… | Read |
 |------|------|
-| Wiring the server into your AI client | [docs/CLIENT_SETUP.md](docs/CLIENT_SETUP.md), [Claude Code guide](docs/CLAUDE_CODE_GUIDE.md), [Antigravity guide](docs/ANTIGRAVITY_GUIDE.md) |
+| Wiring the server into your AI client | [docs/CLIENT_SETUP.md](docs/CLIENT_SETUP.md) — one section per client |
+| What to ask for once it is connected | [docs/USAGE.md](docs/USAGE.md) — workflows, prompts, tips |
 | Telling the AI how to use it well | [docs/AGENT_GUIDE.md](docs/AGENT_GUIDE.md) (paste into a project brief), [docs/AI_WORKFLOW.md](docs/AI_WORKFLOW.md) |
 | Every tool, parameter and example | [docs/TOOLS.md](docs/TOOLS.md); error messages in [docs/errors.md](docs/errors.md) |
 | Why it is built this way | [docs/VISION.md](docs/VISION.md), [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) |

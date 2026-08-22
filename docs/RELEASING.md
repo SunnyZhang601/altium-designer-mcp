@@ -24,7 +24,7 @@ The final publish is a manual click. Nothing in CI makes a release public.
 ### What ships in an archive
 
 The binary, `example-config.json`, `LICENCE`, `CHANGELOG.md`, and `docs/`
-(`CLIENT_SETUP`, `CLAUDE_CODE_GUIDE`, `ANTIGRAVITY_GUIDE`, `AGENT_GUIDE`, `TOOLS`) — plus a
+(`CLIENT_SETUP`, `USAGE`, `AGENT_GUIDE`, `TOOLS`) — plus a
 **bundle-specific `README.md` generated from
 [`.github/release-assets/README.md`](../.github/release-assets/README.md)**, with
 `@VERSION@` substituted for the tag. That file is what someone sees first after

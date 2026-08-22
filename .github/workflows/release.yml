@@ -253,7 +253,7 @@ jobs:
                 cp LICENCE CHANGELOG.md dist/
                 cp config/example-config.json dist/
                 cp docs/AGENT_GUIDE.md docs/TOOLS.md dist/docs/
-                cp docs/CLAUDE_CODE_GUIDE.md docs/ANTIGRAVITY_GUIDE.md docs/CLIENT_SETUP.md dist/docs/
+                cp docs/CLIENT_SETUP.md docs/USAGE.md dist/docs/
 
                 # A bundle-specific README rather than the repository's own:
                 # someone unpacking a binary wants install and verification
@@ -275,7 +275,7 @@ jobs:
 
                 for f in ${{ matrix.binary }} README.md LICENCE CHANGELOG.md \
                          example-config.json docs/AGENT_GUIDE.md docs/TOOLS.md \
-                         docs/CLAUDE_CODE_GUIDE.md docs/ANTIGRAVITY_GUIDE.md docs/CLIENT_SETUP.md; do
+                         docs/CLIENT_SETUP.md docs/USAGE.md; do
                     if [[ ! -e "verify/$f" ]]; then
                         echo "Error: $f missing from ${{ matrix.artifact }}"
                         exit 1
@@ -302,7 +302,7 @@ jobs:
                 cp LICENCE CHANGELOG.md dist/
                 cp config/example-config.json dist/
                 cp docs/AGENT_GUIDE.md docs/TOOLS.md dist/docs/
-                cp docs/CLAUDE_CODE_GUIDE.md docs/ANTIGRAVITY_GUIDE.md docs/CLIENT_SETUP.md dist/docs/
+                cp docs/CLIENT_SETUP.md docs/USAGE.md dist/docs/
 
                 # A bundle-specific README rather than the repository's own:
                 # someone unpacking a binary wants install and verification
@@ -321,7 +321,7 @@ jobs:
 
                 for f in ${{ matrix.binary }} README.md LICENCE CHANGELOG.md \
                          example-config.json docs/AGENT_GUIDE.md docs/TOOLS.md \
-                         docs/CLAUDE_CODE_GUIDE.md docs/ANTIGRAVITY_GUIDE.md docs/CLIENT_SETUP.md; do
+                         docs/CLIENT_SETUP.md docs/USAGE.md; do
                     if [[ ! -e "verify/$f" ]]; then
                         echo "Error: $f missing from ${{ matrix.artifact }}"
                         exit 1

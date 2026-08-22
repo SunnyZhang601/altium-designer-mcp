@@ -2,8 +2,9 @@
 
 This document is a consolidated catalogue of every error this MCP server can surface, the
 condition that produces it, and how to resolve it. It complements the operational hints in
-[CLAUDE_CODE_GUIDE.md § Troubleshooting](CLAUDE_CODE_GUIDE.md#troubleshooting), which covers
-client-side setup problems, and the tool reference in
+[CLIENT_SETUP.md § Troubleshooting](CLIENT_SETUP.md#troubleshooting), which covers
+client-side setup problems, [USAGE.md § When Something Goes Wrong](USAGE.md#when-something-goes-wrong),
+which covers problems once connected, and the tool reference in
 [README § MCP Tools](../README.md#mcp-tools), which it does not repeat here.
 
 ---

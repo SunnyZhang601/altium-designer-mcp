@@ -2203,7 +2203,19 @@ mod tests {
             let read = server.call_read_pcblib(&json!({ "filepath": src.to_string_lossy() }));
             assert!(!read.is_error, "{}", get_result_text(&read));
             let footprints = parse_result_json(&read)["footprints"].clone();
-            for fp in footprints.as_array().unwrap() {
+            for (i, fp) in footprints.as_array().unwrap().iter().enumerate() {
+                // Alternate between the two read shapes: read_pcblib builds
+                // its JSON by hand, get_component serialises the struct.
+                let fp = if i % 2 == 0 {
+                    fp.clone()
+                } else {
+                    let got = server.call_get_component(&json!({
+                        "filepath": src.to_string_lossy(),
+                        "component_name": fp["name"],
+                    }));
+                    assert!(!got.is_error, "{}", get_result_text(&got));
+                    parse_result_json(&got)["component"].clone()
+                };
                 let updated = server.call_update_component(&json!({
                     "filepath": work.to_string_lossy(),
                     "component_name": fp["name"],
@@ -2377,7 +2389,17 @@ mod tests {
             let symbols = parse_result_json(&read)["symbols"].clone();
             // Every third symbol is enough saves to surface per-save drift
             // on all of them while keeping the test under a quarter minute.
-            for symbol in symbols.as_array().unwrap().iter().step_by(3) {
+            for (i, symbol) in symbols.as_array().unwrap().iter().step_by(3).enumerate() {
+                let symbol = if i % 2 == 0 {
+                    symbol.clone()
+                } else {
+                    let got = server.call_get_component(&json!({
+                        "filepath": src.to_string_lossy(),
+                        "component_name": symbol["name"],
+                    }));
+                    assert!(!got.is_error, "{}", get_result_text(&got));
+                    parse_result_json(&got)["component"].clone()
+                };
                 let updated = server.call_update_component(&json!({
                     "filepath": work.to_string_lossy(),
                     "component_name": symbol["name"],

@@ -2011,7 +2011,10 @@ impl McpServer {
                 example: Some(serde_json::json!({"name": "update_pad", "arguments": {"filepath": "./MyLibrary.PcbLib", "component_name": "RESC0603", "designator": "1", "updates": {"width": 1.0, "height": 0.9, "shape": "rectangle"}, "dry_run": false}})),
                 description: Some(
                     "Update specific properties of a pad in a PcbLib footprint without replacing \
-                     the entire component. Find pad by designator and apply only the specified updates."
+                     the entire component. Find pad by designator and apply only the specified updates. \
+                     On a stacked pad (stack_mode other than simple) a width/height/shape change also \
+                     reaches the per-layer tables: layers that shared the old primary value follow it, \
+                     layers with their own value keep it, and the response reports how many followed."
                         .to_string(),
                 ),
                 input_schema: json!({

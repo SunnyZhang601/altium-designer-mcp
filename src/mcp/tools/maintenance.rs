@@ -4,6 +4,41 @@ use serde_json::{json, Value};
 
 use crate::mcp::server::{McpServer, ToolCallResult};
 
+/// The properties `update_pad` applies.
+const UPDATE_PAD_KEYS: &[&str] = &[
+    "x",
+    "y",
+    "width",
+    "height",
+    "rotation",
+    "hole_size",
+    "shape",
+];
+
+/// The properties `update_primitive` applies to a primitive kind, or `None`
+/// for a kind it does not address.
+fn update_primitive_keys(primitive_type: &str) -> Option<&'static [&'static str]> {
+    Some(match primitive_type {
+        "track" => &["x1", "y1", "x2", "y2", "width", "layer"],
+        "arc" => &[
+            "x1",
+            "y1",
+            "x",
+            "y",
+            "radius",
+            "start_angle",
+            "end_angle",
+            "width",
+            "layer",
+        ],
+        "text" => &["x", "y", "height", "rotation", "text", "layer"],
+        "fill" => &["x1", "y1", "x", "y", "x2", "y2", "rotation", "layer"],
+        "region" => &["layer"],
+        "via" => &["x", "y", "diameter", "hole_size", "from_layer", "to_layer"],
+        _ => return None,
+    })
+}
+
 impl McpServer {
     /// Repairs a library by removing orphaned references.
     pub(crate) fn call_repair_library(&self, arguments: &Value) -> ToolCallResult {
@@ -687,6 +722,10 @@ impl McpServer {
         let Some(updates) = arguments.get("updates") else {
             return ToolCallResult::error("Missing required parameter: updates");
         };
+        // A key this tool does not apply is a typo to refuse, not a no-op.
+        if let Err(e) = Self::check_unknown_fields(updates, UPDATE_PAD_KEYS) {
+            return ToolCallResult::error(e);
+        }
 
         // Validate path
         if let Err(e) = self.validate_path(filepath) {
@@ -794,6 +833,16 @@ impl McpServer {
         let Some(updates) = arguments.get("updates") else {
             return ToolCallResult::error("Missing required parameter: updates");
         };
+        // The properties this primitive kind can take; anything else is a
+        // typo or a property of another kind, refused rather than ignored.
+        let Some(keys) = update_primitive_keys(primitive_type) else {
+            return ToolCallResult::error(format!(
+                "Invalid primitive_type '{primitive_type}'. Valid: track, arc, region, text, fill, via"
+            ));
+        };
+        if let Err(e) = Self::check_unknown_fields(updates, keys) {
+            return ToolCallResult::error(e);
+        }
 
         // Validate path
         if let Err(e) = self.validate_path(filepath) {
@@ -1824,12 +1873,23 @@ mod tests {
         assert!(result.is_error);
         assert!(get_result_text(&result).contains("must be positive"));
 
-        // No recognised update keys.
+        // A key the tool does not apply is refused, naming the ones it does.
         let result = server.call_update_pad(&json!({
             "filepath": filepath,
             "component_name": "CHIP_0402",
             "designator": "1",
             "updates": { "bogus": 1.0 },
+        }));
+        assert!(result.is_error);
+        assert!(get_result_text(&result).contains("Unknown field 'bogus'"));
+        assert!(get_result_text(&result).contains("\"hole_size\""));
+
+        // An empty update set is a caller error rather than a silent no-op write.
+        let result = server.call_update_pad(&json!({
+            "filepath": filepath,
+            "component_name": "CHIP_0402",
+            "designator": "1",
+            "updates": {},
         }));
         assert!(result.is_error);
         assert_eq!(get_result_text(&result), "No valid updates specified");
@@ -3053,7 +3113,8 @@ mod tests {
             assert_error_mentions(&update(json!({ "height": -1.0 })), "must be positive");
             assert_error_mentions(&update(json!({ "hole_size": -0.5 })), "must be >= 0");
             assert_error_mentions(&update(json!({ "shape": "trapezoid" })), "Invalid shape");
-            assert_error_mentions(&update(json!({ "unknown_key": 1 })), "No valid updates");
+            assert_error_mentions(&update(json!({ "unknown_key": 1 })), "Unknown field");
+            assert_error_mentions(&update(json!({})), "No valid updates");
             assert_error_mentions(
                 &update(json!({ "x": 99_999.0 })),
                 "exceeds the maximum safe range",
@@ -3168,9 +3229,14 @@ mod tests {
             // Each family is addressed positionally, so each keeps its own
             // range check naming the family.
             for family in ["track", "arc", "text", "fill", "region", "via"] {
+                let updates = if family == "via" {
+                    json!({ "diameter": 0.6 })
+                } else {
+                    json!({ "layer": "Top Layer" })
+                };
                 let r = server.call_update_primitive(&json!({
                     "filepath": &lib, "component_name": "RICH",
-                    "primitive_type": family, "index": 99, "updates": { "layer": "Top Layer" },
+                    "primitive_type": family, "index": 99, "updates": updates,
                 }));
                 assert_error_mentions(&r, "out of range");
             }
@@ -3274,9 +3340,18 @@ mod tests {
                 "smaller than diameter",
             );
 
-            // Nothing recognised in `updates` is a caller error rather than a
-            // silent no-op write.
-            assert_error_mentions(&update("track", json!({ "nope": 1 })), "No valid updates");
+            // A key the family does not take is refused (a typo, or another
+            // family's property); nothing at all is a caller error rather than
+            // a silent no-op write.
+            assert_error_mentions(
+                &update("track", json!({ "nope": 1 })),
+                "Unknown field 'nope'",
+            );
+            assert_error_mentions(
+                &update("region", json!({ "width": 0.2 })),
+                "Unknown field 'width'",
+            );
+            assert_error_mentions(&update("track", json!({})), "No valid updates");
 
             // And the whole-footprint coordinate check still applies.
             assert_error_mentions(

@@ -2121,7 +2121,7 @@ impl McpServer {
                         },
                         "updates": {
                             "type": "object",
-                            "description": "Properties to update (only specified properties are changed). Valid properties depend on primitive_type.",
+                            "description": "Properties to update (only specified properties are changed). Valid properties depend on primitive_type — track: x1, y1, x2, y2, width, layer; arc: x/x1, y/y1, radius, start_angle, end_angle, width, layer; text: x, y, height, rotation, text, layer; fill: x/x1, y/y1, x2, y2, rotation, layer; region: layer; via: x, y, diameter, hole_size, from_layer, to_layer. Any other key is refused.",
                             "properties": {
                                 "x1": { "type": "number", "description": "Start X (track) or centre X (arc)" },
                                 "y1": { "type": "number", "description": "Start Y (track) or centre Y (arc)" },
@@ -2135,8 +2135,12 @@ impl McpServer {
                                 "start_angle": { "type": "number", "description": "Start angle in degrees (arc)" },
                                 "end_angle": { "type": "number", "description": "End angle in degrees (arc)" },
                                 "text": { "type": "string", "description": "Text content (text primitive)" },
-                                "rotation": { "type": "number", "description": "Rotation angle" },
-                                "layer": { "type": "string", "description": "Layer name" }
+                                "rotation": { "type": "number", "description": "Rotation angle (text, fill)" },
+                                "layer": { "type": "string", "description": "Layer name (track, arc, text, fill, region)" },
+                                "diameter": { "type": "number", "description": "Barrel diameter in mm (via)" },
+                                "hole_size": { "type": "number", "description": "Hole diameter in mm (via)" },
+                                "from_layer": { "type": "string", "description": "Start layer (via)" },
+                                "to_layer": { "type": "string", "description": "End layer (via)" }
                             }
                         },
                         "dry_run": {

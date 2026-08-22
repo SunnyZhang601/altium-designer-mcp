@@ -18,6 +18,27 @@ impl McpServer {
         let Some(parameters) = arguments.get("parameters") else {
             return ToolCallResult::error("Missing required parameter: parameters");
         };
+        // The parameters each operation reads; a key outside them is a typo
+        // (`tolerence`) that would otherwise silently fall back to a default.
+        let keys: &[&str] = match operation {
+            "update_track_width" => &["from_width", "to_width", "tolerance"],
+            "rename_layer" => &["from_layer", "to_layer"],
+            "update_parameters" => &[
+                "param_name",
+                "param_value",
+                "symbol_filter",
+                "add_if_missing",
+            ],
+            _ => {
+                return ToolCallResult::error(format!(
+                    "Unknown operation '{operation}'. Valid: update_track_width, rename_layer, \
+                     update_parameters"
+                ))
+            }
+        };
+        if let Err(e) = Self::check_unknown_fields(parameters, keys) {
+            return ToolCallResult::error(e);
+        }
 
         let dry_run = arguments
             .get("dry_run")
@@ -557,7 +578,7 @@ mod tests {
             "parameters": {},
         }));
         assert!(result.is_error);
-        assert!(get_result_text(&result).contains("Unknown PcbLib operation: frobnicate"));
+        assert!(get_result_text(&result).contains("Unknown operation 'frobnicate'"));
 
         let sch = dir.path().join("Syms.SchLib");
         create_test_schlib(&sch);
@@ -567,7 +588,26 @@ mod tests {
             "parameters": {},
         }));
         assert!(result.is_error);
-        assert!(get_result_text(&result).contains("Unknown SchLib operation: frobnicate"));
+        assert!(get_result_text(&result).contains("Unknown operation 'frobnicate'"));
+
+        // A valid operation on the other format is still refused by that
+        // format's own dispatch.
+        let result = server.call_batch_update(&json!({
+            "filepath": sch.to_string_lossy(),
+            "operation": "rename_layer",
+            "parameters": { "from_layer": "Mechanical 1", "to_layer": "Mechanical 2" },
+        }));
+        assert!(result.is_error);
+        assert!(get_result_text(&result).contains("Unknown SchLib operation: rename_layer"));
+
+        // A misspelt parameter is refused rather than falling back to a default.
+        let result = server.call_batch_update(&json!({
+            "filepath": pcb.to_string_lossy(),
+            "operation": "update_track_width",
+            "parameters": { "from_width": 0.2, "to_width": 0.25, "tolerence": 0.01 },
+        }));
+        assert!(result.is_error);
+        assert!(get_result_text(&result).contains("Unknown field 'tolerence'"));
     }
 
     #[test]

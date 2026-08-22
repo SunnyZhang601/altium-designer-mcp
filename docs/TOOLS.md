@@ -505,7 +505,8 @@ Use dry_run=true to preview changes without modifying the file.
 
 ## `copy_component`
 
-Copy/duplicate a component within an Altium library file. Creates a new component with a different name but identical primitives. Useful for creating variants.
+Copy/duplicate a component within an Altium library file. Creates a new component with a different name and identical primitives, but its own identity: the copy's GUIDs
+and unique ids are minted fresh rather than shared with the original. Useful for creating variants.
 
 **Example**
 

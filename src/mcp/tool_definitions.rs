@@ -1404,7 +1404,9 @@ impl McpServer {
                 example: Some(serde_json::json!({"name": "copy_component", "arguments": {"filepath": "./MyLibrary.PcbLib", "source_name": "RESC0603_IPC_MEDIUM", "target_name": "RESC0603_IPC_MEDIUM_V2", "description": "0603 resistor variant 2"}})),
                 description: Some(
                     "Copy/duplicate a component within an Altium library file. Creates a new component \
-                     with a different name but identical primitives. Useful for creating variants."
+                     with a different name and identical primitives, but its own identity: the copy's \
+                     GUIDs and unique ids are minted fresh rather than shared with the original. \
+                     Useful for creating variants."
                         .to_string(),
                 ),
                 input_schema: json!({

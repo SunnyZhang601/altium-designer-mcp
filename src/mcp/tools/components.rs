@@ -93,9 +93,12 @@ impl McpServer {
             ));
         };
 
-        // Clone the footprint with new name
+        // Clone the footprint with new name. The copy lives beside its source,
+        // so it gets the identity of a new component rather than sharing the
+        // original's GUIDs and unique ids.
         let mut new_footprint = source.clone();
         new_footprint.name = target_name.to_string();
+        new_footprint.reset_identities();
         if let Some(desc) = description {
             new_footprint.description = desc.to_string();
         }
@@ -170,9 +173,11 @@ impl McpServer {
             ));
         };
 
-        // Clone the symbol with new name
+        // Clone the symbol with new name. The copy lives beside its source, so
+        // it gets fresh unique ids rather than sharing the original's.
         let mut new_symbol = source.clone();
         new_symbol.name = target_name.to_string();
+        new_symbol.reset_identities();
         if let Some(desc) = description {
             new_symbol.description = desc.to_string();
         }
@@ -1685,6 +1690,100 @@ mod tests {
         // The source is untouched.
         let src = PcbLib::open(&source).unwrap();
         assert_eq!(src.len(), 2);
+    }
+
+    /// A copy living beside its source is a new component: it must not share
+    /// the original's footprint GUID, primitive GUIDs, unique ids or pad
+    /// identity GUIDs — the writer mints fresh ones, and the original keeps
+    /// its own.
+    #[test]
+    fn copy_component_pcblib_gives_the_copy_fresh_identities() {
+        let dir = test_temp_dir();
+        let server = create_test_server(dir.path());
+
+        let mut fp = Footprint::new("ORIG");
+        fp.guid = Some("{11111111-2222-3333-4444-555555555555}".to_string());
+        let mut pad = Pad::smd("1", -0.5, 0.0, 0.6, 0.5);
+        pad.guid = Some("{AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE}".to_string());
+        pad.unique_id = Some("ORIGPAD1".to_string());
+        pad.identity_guid = Some("{A5172B29-10E4-C726-929A-64E441352E67}".to_string());
+        fp.add_pad(pad);
+        let mut lib = PcbLib::new();
+        lib.add(fp);
+        let path = dir.path().join("Ident.PcbLib");
+        lib.save(&path).unwrap();
+
+        let result = server.call_copy_component(&json!({
+            "filepath": path.to_string_lossy(),
+            "source_name": "ORIG",
+            "target_name": "COPY",
+        }));
+        assert!(!result.is_error, "{}", get_result_text(&result));
+
+        let lib = PcbLib::open(&path).unwrap();
+        let orig = lib.get("ORIG").unwrap();
+        let copy = lib.get("COPY").unwrap();
+        assert_eq!(
+            orig.guid.as_deref(),
+            Some("{11111111-2222-3333-4444-555555555555}"),
+            "the original keeps its identity"
+        );
+        assert_eq!(orig.pads[0].unique_id.as_deref(), Some("ORIGPAD1"));
+        assert!(
+            copy.guid.is_none(),
+            "the copy has no inherited footprint identity"
+        );
+        assert!(
+            copy.pads[0].guid.is_none(),
+            "no inherited primitive identity"
+        );
+        assert_ne!(copy.pads[0].unique_id, orig.pads[0].unique_id);
+        assert_ne!(
+            copy.pads[0].identity_guid, orig.pads[0].identity_guid,
+            "fresh pad identity GUID minted on write"
+        );
+        assert!((copy.pads[0].width - 0.6).abs() < 1e-4, "geometry copied");
+    }
+
+    /// The `SchLib` copy likewise gets fresh record unique ids.
+    #[test]
+    fn copy_component_schlib_gives_the_copy_fresh_identities() {
+        use crate::altium::schlib::{Pin, PinOrientation, Rectangle, Symbol};
+
+        let dir = test_temp_dir();
+        let server = create_test_server(dir.path());
+
+        let mut symbol = Symbol::new("ORIG");
+        symbol.designator = "U?".to_string();
+        symbol.designator_unique_id = Some("DESIGUID".to_string());
+        let mut rect = Rectangle::new(0.0, 0.0, 20.0, 20.0);
+        rect.unique_id = Some("RECTUID1".to_string());
+        symbol.add_rectangle(rect);
+        symbol.add_pin(Pin::new("IN", "1", 0, 0, 10, PinOrientation::Left));
+        let mut lib = SchLib::new();
+        lib.add(symbol);
+        let path = dir.path().join("Ident.SchLib");
+        lib.save(&path).unwrap();
+
+        let result = server.call_copy_component(&json!({
+            "filepath": path.to_string_lossy(),
+            "source_name": "ORIG",
+            "target_name": "COPY",
+        }));
+        assert!(!result.is_error, "{}", get_result_text(&result));
+
+        let lib = SchLib::open(&path).unwrap();
+        let orig = lib.get("ORIG").unwrap();
+        let copy = lib.get("COPY").unwrap();
+        assert_eq!(orig.rectangles[0].unique_id.as_deref(), Some("RECTUID1"));
+        assert_eq!(orig.designator_unique_id.as_deref(), Some("DESIGUID"));
+        assert!(
+            copy.rectangles[0].unique_id.is_some(),
+            "a fresh id was minted"
+        );
+        assert_ne!(copy.rectangles[0].unique_id, orig.rectangles[0].unique_id);
+        assert_ne!(copy.designator_unique_id, orig.designator_unique_id);
+        assert_eq!(copy.pins.len(), 1, "geometry copied");
     }
 
     #[test]

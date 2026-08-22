@@ -479,6 +479,35 @@ impl Symbol {
     }
 
     /// Adds a pin to the symbol.
+    /// Gives the symbol the identity of a brand-new component: the designator
+    /// record's unique id and every record's unique id are cleared, so the
+    /// writer mints fresh ones exactly as for a symbol built from scratch. For
+    /// a clone that will live beside its source.
+    pub fn reset_identities(&mut self) {
+        self.designator_unique_id = None;
+        macro_rules! clear {
+            ($($list:ident),* $(,)?) => { $( for item in &mut self.$list { item.unique_id = None; } )* };
+        }
+        clear!(
+            rectangles,
+            lines,
+            polylines,
+            polygons,
+            arcs,
+            pies,
+            images,
+            text_frames,
+            beziers,
+            ellipses,
+            round_rects,
+            elliptical_arcs,
+            labels,
+            text,
+            parameters,
+            footprints,
+        );
+    }
+
     pub fn add_pin(&mut self, pin: Pin) {
         self.pins.push(pin);
         self.primitive_order.push(SchPrimitiveKind::Pin);
@@ -638,6 +667,36 @@ impl Symbol {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `reset_identities` clears the designator record's id and every
+    /// record's unique id across all sixteen lists.
+    #[test]
+    fn reset_identities_clears_every_record_unique_id() {
+        let uid = || Some("ABCDEFGH".to_string());
+        let mut s = Symbol::new("S");
+        s.designator_unique_id = uid();
+        let mut rect = Rectangle::new(0.0, 0.0, 1.0, 1.0);
+        rect.unique_id = uid();
+        s.add_rectangle(rect);
+        let mut line = Line::new(0.0, 0.0, 1.0, 1.0);
+        line.unique_id = uid();
+        s.add_line(line);
+        let mut param = Parameter::new("Value", "10k");
+        param.unique_id = uid();
+        s.add_parameter(param);
+        let mut fpm = FootprintModel::new("RESC1608X55N");
+        fpm.unique_id = uid();
+        s.add_footprint(fpm);
+
+        s.reset_identities();
+
+        assert!(s.designator_unique_id.is_none());
+        assert!(s.rectangles[0].unique_id.is_none());
+        assert!(s.lines[0].unique_id.is_none());
+        assert!(s.parameters[0].unique_id.is_none());
+        assert!(s.footprints[0].unique_id.is_none());
+        assert_eq!(s.parameters[0].value, "10k", "content untouched");
+    }
     use std::io::Cursor;
 
     #[test]

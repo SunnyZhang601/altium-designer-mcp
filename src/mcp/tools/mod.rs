@@ -5,6 +5,7 @@
 //! (and the in-crate tests) call these methods unchanged via `Self::`/`self.`.
 //! Helpers reached across modules are `pub(crate)`.
 
+mod allowed_keys;
 mod batch;
 mod compare;
 mod components;

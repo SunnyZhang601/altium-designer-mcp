@@ -160,7 +160,9 @@ impl Line {
 /// not derived (floats are only `PartialEq`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Polyline {
-    /// Points as (x, y) pairs.
+    /// Points as (x, y) pairs; serialised as `{x, y}` objects, the shape the
+    /// tool schema documents.
+    #[serde(with = "crate::altium::serde_round::xy_points")]
     pub points: Vec<(f64, f64)>,
     /// Line width.
     #[serde(default = "default_line_width")]
@@ -206,7 +208,9 @@ pub struct Polyline {
 /// not derived (floats are only `PartialEq`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Polygon {
-    /// Vertices as (x, y) pairs.
+    /// Vertices as (x, y) pairs; serialised as `{x, y}` objects, the shape the
+    /// tool schema documents.
+    #[serde(with = "crate::altium::serde_round::xy_points")]
     pub points: Vec<(f64, f64)>,
     /// Border line width.
     #[serde(default = "default_line_width")]

@@ -3491,7 +3491,10 @@ mod tests {
                 );
             }
             let layer0 = &pads[1]["per_layer_sizes"][0];
-            assert!((layer0[0].as_f64().unwrap() - 1.2).abs() < 1e-3, "{layer0}");
+            assert!(
+                (layer0["width"].as_f64().unwrap() - 1.2).abs() < 1e-3,
+                "{layer0}"
+            );
             assert_eq!(pads[2]["stack_mode"], "simple");
             assert!(
                 pads[2].get("per_layer_sizes").is_none(),

@@ -123,12 +123,17 @@ pub struct ComponentBody {
     #[serde(default)]
     pub layer: Layer,
 
-    /// 2D outline of the body in the footprint plane, as `(x, y)` vertices in mm.
+    /// 2D outline of the body in the footprint plane, as `(x, y)` vertices in
+    /// mm; serialised as `{x, y}` objects, the shape the tool schema documents.
     ///
     /// Altium stores a closed polygon giving the body's 2D extent. When this is
     /// empty the writer synthesises a bounding box from the footprint, since
     /// Altium needs a non-degenerate outline to place and render the body.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        with = "crate::altium::serde_round::xy_points"
+    )]
     pub outline: Vec<(f64, f64)>,
 
     /// Unique ID assigned by Altium (8-character alphanumeric string).

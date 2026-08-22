@@ -207,7 +207,7 @@ pub struct Pad {
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
-        with = "crate::altium::serde_round::vec_tuple"
+        with = "crate::altium::serde_round::wh_pairs_opt"
     )]
     pub per_layer_sizes: Option<Vec<(f64, f64)>>,
 
@@ -229,7 +229,7 @@ pub struct Pad {
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
-        with = "crate::altium::serde_round::vec_tuple"
+        with = "crate::altium::serde_round::xy_points_opt"
     )]
     pub per_layer_offsets: Option<Vec<(f64, f64)>>,
 

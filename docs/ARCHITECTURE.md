@@ -69,6 +69,7 @@ src/
     ├── tool_definitions.rs      # Tool schemas (source of truth for docs/TOOLS.md)
     ├── tool_docs.rs             # docs/TOOLS.md generator + drift guard (test-only)
     └── tools/                   # One file per tool family (read_write, compare, …)
+        └── allowed_keys.rs      # JSON keys the write tools accept, derived from the structs
 ```
 
 ---

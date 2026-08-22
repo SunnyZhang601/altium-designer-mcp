@@ -408,33 +408,30 @@ fn encode_pad_per_layer_data(pad: &Pad) -> Vec<u8> {
         });
     }
 
-    // 32 corner radius percentages - 32 bytes
-    // Default corner radius: 50% for RoundedRectangle, 0% otherwise
-    // This ensures RoundedRectangle pads round-trip correctly (they share shape ID 1 with Round)
-    let default_radius = pad.corner_radius_percent.unwrap_or_else(|| {
-        if pad.shape == PadShape::RoundedRectangle {
-            50
-        } else {
-            0
-        }
-    });
+    // 32 corner radius percentages - 32 bytes. On disk a rounded rectangle
+    // is shape id 1 (Round) plus a radius in 1..=99, so the radius byte is
+    // what tells the two apart: a rounded-rectangle layer gets the pad's
+    // radius (50% when none is set) and every other layer gets 0, or a
+    // round layer would read back as a rounded rectangle.
+    let default_radius = match pad.corner_radius_percent {
+        Some(radius) if radius > 0 => radius,
+        _ => 50,
+    };
     for i in 0..32 {
-        // Get per-layer corner radius, or calculate default based on per-layer shape
         let radius = pad
             .per_layer_corner_radii
             .as_ref()
             .and_then(|radii| radii.get(i).copied())
             .unwrap_or_else(|| {
-                // If per-layer shape is specified and is RoundedRectangle, use 50%
                 let layer_shape = pad
                     .per_layer_shapes
                     .as_ref()
                     .and_then(|shapes| shapes.get(i).copied())
                     .unwrap_or(pad.shape);
-                if layer_shape == PadShape::RoundedRectangle && default_radius == 0 {
-                    50
-                } else {
+                if layer_shape == PadShape::RoundedRectangle {
                     default_radius
+                } else {
+                    0
                 }
             });
         // Corner radius is a 0-100 percentage; clamp on write to mirror the
@@ -4019,5 +4016,38 @@ mod tests {
         let mut short = Vec::new();
         encode_via(&mut short, &partial);
         assert_eq!(short.len(), stacked.len());
+    }
+
+    /// On disk a rounded rectangle is shape id 1 plus a radius in 1..=99, so
+    /// a per-layer round, rectangular or octagonal land must carry radius 0
+    /// whatever the pad's own corner radius is — the alternative reads back
+    /// as a rounded rectangle on every such layer.
+    #[test]
+    fn per_layer_corner_radius_follows_the_layer_shape() {
+        let mut pad = Pad::smd("1", 0.0, 0.0, 1.0, 1.0);
+        pad.shape = PadShape::RoundedRectangle;
+        pad.corner_radius_percent = Some(30);
+        pad.stack_mode = PadStackMode::FullStack;
+        let mut shapes = vec![PadShape::Round; 32];
+        shapes[1] = PadShape::Rectangle;
+        shapes[2] = PadShape::Octagonal;
+        shapes[3] = PadShape::RoundedRectangle;
+        pad.per_layer_shapes = Some(shapes);
+
+        let block = encode_pad_per_layer_data(&pad);
+        let (ids, radii) = (&block[256..288], &block[288..320]);
+        assert_eq!(&ids[..4], &[1, 2, 3, 1]);
+        assert_eq!(
+            &radii[..4],
+            &[0, 0, 0, 30],
+            "only the rounded layer carries the radius"
+        );
+
+        // Without a pad radius the rounded layer gets the 50% default; an
+        // explicit per-layer table wins over both.
+        pad.corner_radius_percent = None;
+        assert_eq!(encode_pad_per_layer_data(&pad)[288 + 3], 50);
+        pad.per_layer_corner_radii = Some(vec![7; 32]);
+        assert_eq!(&encode_pad_per_layer_data(&pad)[288..292], &[7, 7, 7, 7]);
     }
 }

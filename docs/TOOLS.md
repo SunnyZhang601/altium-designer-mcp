@@ -15,9 +15,11 @@ _34 tools._
 
 ## `read_pcblib`
 
-Read an Altium .PcbLib file and return its contents including footprints with their primitives (pads, tracks, arcs, regions, text). Returns structured data that can be
-used to understand existing footprint styles. All coordinates and dimensions are in millimetres (mm). For large libraries, use component_name to fetch specific
-footprints, or use limit/offset for pagination.
+Read an Altium .PcbLib file and return its contents including footprints with their primitives (pads, vias, tracks, arcs, regions, fills, text, component_bodies). Returns
+structured data that can be used to understand existing footprint styles. All coordinates and dimensions are in millimetres (mm). Fields such as guid, unique_id,
+raw_tail, raw_block, raw_geometry, param_key_order and primitive_order are fidelity carriers: pass them back unchanged to write_pcblib or update_component and the rewrite
+is byte-identical to the source; omit them when authoring from scratch. For large libraries, use component_name to fetch specific footprints, or use limit/offset for
+pagination.
 
 **Example**
 
@@ -42,8 +44,10 @@ footprints, or use limit/offset for pagination.
 
 ## `read_schlib`
 
-Read an Altium .SchLib file and return its contents including symbols with their primitives (pins, rectangles, lines, text). Coordinates are in schematic units (10 units
-= 1 grid square, not mm). For large libraries, use component_name to fetch specific symbols, or use limit/offset for pagination.
+Read an Altium .SchLib file and return its contents including symbols with their primitives (pins, rectangles, round_rects, lines, polylines, polygons, arcs, pies,
+images, text_frames, beziers, ellipses, elliptical_arcs, labels, text), parameters and footprint links. Coordinates are in schematic units (10 units = 1 grid square, not
+mm). Fields such as unique_id and primitive_order are fidelity carriers: pass them back unchanged to write_schlib or update_component to keep the source's record
+identities and order; omit them when authoring from scratch. For large libraries, use component_name to fetch specific symbols, or use limit/offset for pagination.
 
 **Example**
 
@@ -117,12 +121,13 @@ Use this to learn from existing libraries and create consistent new components.
 
 ## `write_pcblib`
 
-Write footprints to an Altium .PcbLib file. Each footprint is defined by its primitives: pads (with position, size, shape, layer), tracks, vias, fills, arcs, regions, and
-text. The AI is responsible for calculating correct positions and sizes based on IPC-7351B or other standards. All coordinates and dimensions must be in millimetres (mm).
-The response 'bodies' array echoes each footprint's 3D body height and source; a footprint with no STEP model and no component body reports source 'none'. Set
-'auto_3d_body': true to have an extruded placeholder body (default height 1.0 mm, flagged 'assumed_height': true) added to such footprints, then confirm or override it by
-supplying 'component_bodies' explicitly. The response also includes a 'warnings' array flagging silkscreen (overlay) tracks that overlap a pad (silk-on-pad) so you can
-move them clear.
+Write footprints to an Altium .PcbLib file (set 'append': true to add to an existing library instead of replacing it). Each footprint is defined by its primitives: pads
+(with position, size, shape, layer), tracks, vias, fills, arcs, regions, text and component_bodies. The AI is responsible for calculating correct positions and sizes
+based on IPC-7351B or other standards. All coordinates and dimensions must be in millimetres (mm). A footprint given no '.Designator' text receives one on the Top Overlay
+automatically, just above its topmost pad, so every placed part shows its reference designator; supply your own to control its placement. The response 'bodies' array
+echoes each footprint's 3D body height and source; a footprint with no STEP model and no component body reports source 'none'. Set 'auto_3d_body': true to have an
+extruded placeholder body (default height 1.0 mm, flagged 'assumed_height': true) added to such footprints, then confirm or override it by supplying 'component_bodies'
+explicitly. The response also includes a 'warnings' array flagging silkscreen (overlay) tracks that overlap a pad (silk-on-pad) so you can move them clear.
 
 **Example**
 
@@ -210,8 +215,11 @@ move them clear.
 
 ## `write_schlib`
 
-Write schematic symbols to an Altium .SchLib file. Each symbol is defined by its primitives: pins, rectangles, round_rects, lines, polylines, polygons, arcs, pies,
-images, text_frames, beziers, ellipses, elliptical_arcs, labels, and text. Coordinates must be in schematic units (10 units = 1 grid square, not mm).
+Write schematic symbols to an Altium .SchLib file (set 'append': true to add to an existing library instead of replacing it). Each symbol is defined by its primitives:
+pins, rectangles, round_rects, lines, polylines, polygons, arcs, pies, images, text_frames, beziers, ellipses, elliptical_arcs, labels, and text — plus its designator,
+parameters (Value, Manufacturer, ...) and footprint links ('footprints', name + optional library_path). Multi-part symbols set 'part_count' and tag each pin with
+'owner_part_id'. Coordinates must be in schematic units (10 units = 1 grid square, not mm); a pin's (x, y) is its body-attach end and 'orientation' is the direction it
+points outward — the response echoes each pin's computed body_end and tip.
 
 **Example**
 
@@ -475,8 +483,9 @@ Compare two Altium library files and report differences. Shows added, removed, a
 
 ## `batch_update`
 
-Perform batch updates across all components in an Altium library file. For PcbLib: update track widths, rename layers. For SchLib: update parameter values across symbols.
-Use dry_run=true to preview changes without modifying the file.
+Perform one batch operation across all components in an Altium library file. PcbLib: 'update_track_width' (change every track of from_width to to_width, within tolerance)
+and 'rename_layer' (move every primitive from from_layer to to_layer). SchLib: 'update_parameters' (set parameter values across symbols). Use dry_run=true to preview
+changes without modifying the file.
 
 **Example**
 
@@ -562,8 +571,10 @@ efficient than copy + delete for simple renames.
 
 ## `copy_component_cross_library`
 
-Copy a component from one Altium library to another. Both libraries must be the same type (PcbLib to PcbLib, or SchLib to SchLib). Useful for consolidating libraries or
-sharing components between projects.
+Copy a component from one Altium library to another. Both libraries must be the same type (PcbLib to PcbLib, or SchLib to SchLib), and different files (use copy_component
+to duplicate within a library). The component keeps its identity, and the embedded 3D models its bodies reference travel with it; an external STEP file reference is
+dropped with a warning unless preserve_external_paths is true, since a path relative to the source library rarely resolves elsewhere. Useful for consolidating libraries
+or sharing components between projects.
 
 **Example**
 
@@ -944,8 +955,8 @@ Returns detailed primitive-level differences (pads, tracks, pins, etc.).
 
 ## `repair_library`
 
-Repair a library by removing orphaned references. For PcbLib files, this removes: (1) embedded models not referenced by any footprint, and (2) component body references
-that point to non-existent models. This fixes libraries where STEP model data is missing but references remain.
+Repair a PcbLib by removing orphaned 3D-model data: (1) embedded models not referenced by any footprint, and (2) component body references that point to non-existent
+models. This fixes libraries where STEP model data is missing but references remain (validate_library reports both conditions). PcbLib only; a SchLib is refused.
 
 **Example**
 
@@ -1075,7 +1086,8 @@ their own value keep it, and the response reports how many followed.
 
 ## `update_primitive`
 
-Update specific properties of a primitive (track, arc, region, or text) in a PcbLib footprint. Find primitive by type and index, apply only specified updates.
+Update specific properties of a primitive (track, arc, text, fill, region or via) in a PcbLib footprint. Find the primitive by type and index (its position in
+read_pcblib's list for that type), apply only the specified updates.
 
 **Example**
 

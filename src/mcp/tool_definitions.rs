@@ -34,9 +34,13 @@ impl McpServer {
                 example: Some(serde_json::json!({"name": "read_pcblib", "arguments": {"filepath": "./MyLibrary.PcbLib"}})),
                 description: Some(
                     "Read an Altium .PcbLib file and return its contents including footprints \
-                     with their primitives (pads, tracks, arcs, regions, text). Returns structured \
-                     data that can be used to understand existing footprint styles. \
-                     All coordinates and dimensions are in millimetres (mm). \
+                     with their primitives (pads, vias, tracks, arcs, regions, fills, text, \
+                     component_bodies). Returns structured data that can be used to understand \
+                     existing footprint styles. All coordinates and dimensions are in millimetres \
+                     (mm). Fields such as guid, unique_id, raw_tail, raw_block, raw_geometry, \
+                     param_key_order and primitive_order are fidelity carriers: pass them back \
+                     unchanged to write_pcblib or update_component and the rewrite is \
+                     byte-identical to the source; omit them when authoring from scratch. \
                      For large libraries, use component_name to fetch specific footprints, \
                      or use limit/offset for pagination."
                         .to_string(),
@@ -73,10 +77,15 @@ impl McpServer {
                 example: Some(serde_json::json!({"name": "read_schlib", "arguments": {"filepath": "./MySymbols.SchLib"}})),
                 description: Some(
                     "Read an Altium .SchLib file and return its contents including symbols \
-                     with their primitives (pins, rectangles, lines, text). \
+                     with their primitives (pins, rectangles, round_rects, lines, polylines, \
+                     polygons, arcs, pies, images, text_frames, beziers, ellipses, \
+                     elliptical_arcs, labels, text), parameters and footprint links. \
                      Coordinates are in schematic units (10 units = 1 grid square, not mm). \
-                     For large libraries, use component_name to fetch specific symbols, \
-                     or use limit/offset for pagination."
+                     Fields such as unique_id and primitive_order are fidelity carriers: pass \
+                     them back unchanged to write_schlib or update_component to keep the \
+                     source's record identities and order; omit them when authoring from \
+                     scratch. For large libraries, use component_name to fetch specific \
+                     symbols, or use limit/offset for pagination."
                         .to_string(),
                 ),
                 input_schema: json!({
@@ -172,11 +181,15 @@ impl McpServer {
                 name: "write_pcblib".to_string(),
                 example: Some(serde_json::json!({"name": "write_pcblib", "arguments": {"filepath": "./Passives.PcbLib", "footprints": [{"name": "RESC1608X55N", "description": "Chip resistor, 0603 (1608 metric)", "pads": [{"designator": "1", "x": -0.75, "y": 0, "width": 0.9, "height": 0.95}, {"designator": "2", "x": 0.75, "y": 0, "width": 0.9, "height": 0.95}], "tracks": [{"x1": -0.8, "y1": -0.425, "x2": 0.8, "y2": -0.425, "width": 0.12, "layer": "Top Overlay"}, {"x1": -0.8, "y1": 0.425, "x2": 0.8, "y2": 0.425, "width": 0.12, "layer": "Top Overlay"}], "regions": [{"vertices": [{"x": -1.45, "y": -0.73}, {"x": 1.45, "y": -0.73}, {"x": 1.45, "y": 0.73}, {"x": -1.45, "y": 0.73}], "layer": "Top Courtyard"}]}], "append": false}})),
                 description: Some(
-                    "Write footprints to an Altium .PcbLib file. Each footprint is defined by \
+                    "Write footprints to an Altium .PcbLib file (set 'append': true to add to an \
+                     existing library instead of replacing it). Each footprint is defined by \
                      its primitives: pads (with position, size, shape, layer), tracks, vias, \
-                     fills, arcs, regions, and text. The AI is responsible for calculating correct positions \
-                     and sizes based on IPC-7351B or other standards. \
-                     All coordinates and dimensions must be in millimetres (mm). \
+                     fills, arcs, regions, text and component_bodies. The AI is responsible for \
+                     calculating correct positions and sizes based on IPC-7351B or other standards. \
+                     All coordinates and dimensions must be in millimetres (mm). A footprint \
+                     given no '.Designator' text receives one on the Top Overlay automatically, \
+                     just above its topmost pad, so every placed part shows its reference \
+                     designator; supply your own to control its placement. \
                      The response 'bodies' array echoes each footprint's 3D body height and source; \
                      a footprint with no STEP model and no component body reports source 'none'. \
                      Set 'auto_3d_body': true to have an extruded placeholder body (default height \
@@ -581,11 +594,16 @@ impl McpServer {
                     }
                 })),
                 description: Some(
-                    "Write schematic symbols to an Altium .SchLib file. Each symbol is defined by \
+                    "Write schematic symbols to an Altium .SchLib file (set 'append': true to add \
+                     to an existing library instead of replacing it). Each symbol is defined by \
                      its primitives: pins, rectangles, round_rects, lines, polylines, polygons, \
                      arcs, pies, images, text_frames, beziers, ellipses, elliptical_arcs, labels, \
-                     and text. \
-                     Coordinates must be in schematic units (10 units = 1 grid square, not mm)."
+                     and text — plus its designator, parameters (Value, Manufacturer, ...) and \
+                     footprint links ('footprints', name + optional library_path). Multi-part \
+                     symbols set 'part_count' and tag each pin with 'owner_part_id'. \
+                     Coordinates must be in schematic units (10 units = 1 grid square, not mm); \
+                     a pin's (x, y) is its body-attach end and 'orientation' is the direction it \
+                     points outward — the response echoes each pin's computed body_end and tip."
                         .to_string(),
                 ),
                 input_schema: json!({
@@ -1332,9 +1350,10 @@ impl McpServer {
                 name: "batch_update".to_string(),
                 example: Some(serde_json::json!({"name": "batch_update", "arguments": {"filepath": "./MyLibrary.PcbLib", "operation": "update_track_width", "parameters": {"from_width": 0.2, "to_width": 0.25, "tolerance": 0.001}}})),
                 description: Some(
-                    "Perform batch updates across all components in an Altium library file. \
-                     For PcbLib: update track widths, rename layers. \
-                     For SchLib: update parameter values across symbols. \
+                    "Perform one batch operation across all components in an Altium library file. \
+                     PcbLib: 'update_track_width' (change every track of from_width to to_width, \
+                     within tolerance) and 'rename_layer' (move every primitive from from_layer to \
+                     to_layer). SchLib: 'update_parameters' (set parameter values across symbols). \
                      Use dry_run=true to preview changes without modifying the file."
                         .to_string(),
                 ),
@@ -1475,8 +1494,13 @@ impl McpServer {
                 example: Some(serde_json::json!({"name": "copy_component_cross_library", "arguments": {"source_filepath": "./SourceLibrary.PcbLib", "target_filepath": "./TargetLibrary.PcbLib", "component_name": "RESC0603_IPC_MEDIUM", "new_name": "RESC0603_COPIED", "description": "Copied from SourceLibrary", "ignore_missing_models": false, "preserve_external_paths": false}})),
                 description: Some(
                     "Copy a component from one Altium library to another. Both libraries must be \
-                     the same type (PcbLib to PcbLib, or SchLib to SchLib). Useful for consolidating \
-                     libraries or sharing components between projects."
+                     the same type (PcbLib to PcbLib, or SchLib to SchLib), and different files \
+                     (use copy_component to duplicate within a library). The component keeps its \
+                     identity, and the embedded 3D models its bodies reference travel with it; an \
+                     external STEP file reference is dropped with a warning unless \
+                     preserve_external_paths is true, since a path relative to the source library \
+                     rarely resolves elsewhere. Useful for consolidating libraries or sharing \
+                     components between projects."
                         .to_string(),
                 ),
                 input_schema: json!({
@@ -1916,10 +1940,11 @@ impl McpServer {
                 name: "repair_library".to_string(),
                 example: Some(serde_json::json!({"name": "repair_library", "arguments": {"filepath": "./MyLibrary.PcbLib", "dry_run": true}})),
                 description: Some(
-                    "Repair a library by removing orphaned references. For PcbLib files, this removes: \
+                    "Repair a PcbLib by removing orphaned 3D-model data: \
                      (1) embedded models not referenced by any footprint, and \
                      (2) component body references that point to non-existent models. \
-                     This fixes libraries where STEP model data is missing but references remain."
+                     This fixes libraries where STEP model data is missing but references remain \
+                     (validate_library reports both conditions). PcbLib only; a SchLib is refused."
                         .to_string(),
                 ),
                 input_schema: json!({
@@ -2063,8 +2088,9 @@ impl McpServer {
                 name: "update_primitive".to_string(),
                 example: Some(serde_json::json!({"name": "update_primitive", "arguments": {"filepath": "./MyLibrary.PcbLib", "component_name": "RESC0603", "primitive_type": "track", "index": 0, "updates": {"width": 0.15, "layer": "Top Overlay"}, "dry_run": false}})),
                 description: Some(
-                    "Update specific properties of a primitive (track, arc, region, or text) in a \
-                     PcbLib footprint. Find primitive by type and index, apply only specified updates."
+                    "Update specific properties of a primitive (track, arc, text, fill, region or \
+                     via) in a PcbLib footprint. Find the primitive by type and index (its position \
+                     in read_pcblib's list for that type), apply only the specified updates."
                         .to_string(),
                 ),
                 input_schema: json!({

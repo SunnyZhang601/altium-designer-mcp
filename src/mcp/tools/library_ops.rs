@@ -313,6 +313,20 @@ impl McpServer {
         }
     }
 
+    /// Embedded models no footprint's body references.
+    fn orphaned_model_count(library: &crate::altium::pcblib::PcbLib) -> usize {
+        let referenced: std::collections::HashSet<&str> = library
+            .iter()
+            .flat_map(|fp| fp.component_bodies.iter())
+            .filter(|b| b.embedded)
+            .map(|b| b.model_id.as_str())
+            .collect();
+        library
+            .models()
+            .filter(|m| !referenced.contains(m.id.as_str()))
+            .count()
+    }
+
     /// Validates a `PcbLib` file.
     #[allow(clippy::too_many_lines)]
     pub(crate) fn validate_pcblib(filepath: &str) -> ToolCallResult {
@@ -494,6 +508,35 @@ impl McpServer {
                     }));
                 }
             }
+
+            // An embedded body's model lives at library level; a body whose
+            // model the library does not hold is a dangling reference Altium
+            // cannot render — the damage a lossy copy or import leaves behind.
+            for (i, body) in fp.component_bodies.iter().enumerate() {
+                if body.embedded && library.get_model(&body.model_id).is_none() {
+                    issues.push(json!({
+                        "severity": "error",
+                        "component": name,
+                        "issue": format!(
+                            "Component body {} references embedded model {} which the library does not contain (the 3D model cannot render)",
+                            i, body.model_id
+                        )
+                    }));
+                }
+            }
+        }
+
+        // The converse: model streams no footprint references any more —
+        // harmless to Altium, but dead weight that repair_library removes.
+        let orphaned = Self::orphaned_model_count(&library);
+        if orphaned > 0 {
+            issues.push(json!({
+                "severity": "warning",
+                "component": null,
+                "issue": format!(
+                    "{orphaned} embedded 3D model(s) are referenced by no footprint; repair_library removes them"
+                )
+            }));
         }
 
         let error_count = issues.iter().filter(|i| i["severity"] == "error").count();
@@ -714,6 +757,35 @@ impl McpServer {
                     }));
                 }
             }
+
+            // An embedded body's model lives at library level; a body whose
+            // model the library does not hold is a dangling reference Altium
+            // cannot render — the damage a lossy copy or import leaves behind.
+            for (i, body) in fp.component_bodies.iter().enumerate() {
+                if body.embedded && library.get_model(&body.model_id).is_none() {
+                    issues.push(json!({
+                        "severity": "error",
+                        "component": name,
+                        "issue": format!(
+                            "Component body {} references embedded model {} which the library does not contain (the 3D model cannot render)",
+                            i, body.model_id
+                        )
+                    }));
+                }
+            }
+        }
+
+        // The converse: model streams no footprint references any more —
+        // harmless to Altium, but dead weight that repair_library removes.
+        let orphaned = Self::orphaned_model_count(&library);
+        if orphaned > 0 {
+            issues.push(json!({
+                "severity": "warning",
+                "component": null,
+                "issue": format!(
+                    "{orphaned} embedded 3D model(s) are referenced by no footprint; repair_library removes them"
+                )
+            }));
         }
 
         let error_count = issues.iter().filter(|i| i["severity"] == "error").count();
@@ -1655,6 +1727,65 @@ mod tests {
         assert_eq!(parsed["warning_count"], 1);
         assert_eq!(parsed["issues"][0]["severity"], "warning");
         assert_eq!(parsed["issues"][0]["issue"], "Footprint has no pads");
+    }
+
+    /// A body whose embedded model the library does not hold is an error, and
+    /// a model no body references is a warning — both in `validate_library` and
+    /// in the post-write validation every mutating tool reports.
+    #[test]
+    fn validate_library_pcblib_reports_model_integrity() {
+        let dir = test_temp_dir();
+        let server = create_test_server(dir.path());
+
+        let mut lib = PcbLib::new();
+        let mut fp = Footprint::new("DANGLING");
+        fp.add_pad(Pad::smd("1", -1.0, 0.0, 0.3, 0.8));
+        fp.add_component_body(ComponentBody::new(
+            "{99999999-8888-7777-6666-555555555555}",
+            "gone.step",
+        ));
+        lib.add(fp);
+        lib.add_model(EmbeddedModel::new(
+            "{11111111-2222-3333-4444-555555555555}",
+            "unused.step",
+            b"ISO-10303-21; nobody references me".to_vec(),
+        ));
+        let path = dir.path().join("Models.PcbLib");
+        lib.save(&path).unwrap();
+
+        let result = server.call_validate_library(&json!({
+            "filepath": path.to_string_lossy(),
+        }));
+        assert!(!result.is_error, "{}", get_result_text(&result));
+        let parsed = parse_result_json(&result);
+        assert_eq!(parsed["status"], "invalid");
+        let issues = parsed["issues"].as_array().unwrap();
+        let dangling = issues
+            .iter()
+            .find(|i| i["issue"].as_str().unwrap().contains("does not contain"))
+            .expect("dangling body reported");
+        assert_eq!(dangling["severity"], "error");
+        assert_eq!(dangling["component"], "DANGLING");
+        let orphan = issues
+            .iter()
+            .find(|i| {
+                i["issue"]
+                    .as_str()
+                    .unwrap()
+                    .contains("referenced by no footprint")
+            })
+            .expect("orphaned model reported");
+        assert_eq!(orphan["severity"], "warning");
+        assert!(orphan["issue"].as_str().unwrap().starts_with("1 embedded"));
+
+        // The post-write validation carries the same checks.
+        let post = McpServer::post_write_validation_pcblib(path.to_str().unwrap()).unwrap();
+        assert_eq!(post["status"], "invalid");
+        assert!(post["issues"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|i| i["issue"].as_str().unwrap().contains("does not contain")));
     }
 
     #[test]

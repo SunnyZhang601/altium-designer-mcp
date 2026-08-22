@@ -337,8 +337,9 @@ deleted, not_found, or error. Use dry_run=true to preview changes without modify
 
 ## `validate_library`
 
-Validate an Altium library file for common issues. Checks for: empty components (no pads/pins), duplicate designators, invalid coordinates, zero-size primitives, and
-other integrity problems. Returns a list of warnings and errors.
+Validate an Altium library file for common issues. Checks for: empty components (no pads/pins), duplicate designators, invalid coordinates, zero-size primitives,
+overlapping pads, 3D bodies whose embedded model the library does not contain, embedded models no footprint references, and other integrity problems. Returns a list of
+warnings and errors.
 
 **Example**
 

@@ -66,6 +66,30 @@ jobs:
             - name: Lint markdown
               run: markdownlint-cli2 "**/*.md"
 
+            # Offline: every relative link and #anchor across the Markdown must
+            # resolve. No network, so it is deterministic and safe to gate on;
+            # external URLs are checked by the scheduled links.yml instead,
+            # because third-party sites go down independently of this repo.
+            # lychee is installed from its pinned release archive with a checksum
+            # check rather than via lycheeverse/lychee-action: the repository
+            # allow-lists the actions it runs, and a verified download keeps
+            # that list — and the trust it represents — unchanged.
+            - name: Install lychee
+              shell: bash
+              env:
+                LYCHEE_VERSION: v0.24.2
+                LYCHEE_SHA256: 1f4e0ef7f6554a6ed33dd7ac144fb2e1bbed98598e7af973042fc5cd43951c9a
+              run: |
+                curl -sSfL -o lychee.tar.gz                     "https://github.com/lycheeverse/lychee/releases/download/lychee-${LYCHEE_VERSION}/lychee-x86_64-unknown-linux-gnu.tar.gz"
+                echo "${LYCHEE_SHA256}  lychee.tar.gz" | sha256sum --check --strict
+                tar -xzf lychee.tar.gz
+                sudo install -m 755 lychee-x86_64-unknown-linux-gnu/lychee /usr/local/bin/lychee
+                rm -rf lychee.tar.gz lychee-x86_64-unknown-linux-gnu
+                lychee --version
+
+            - name: Check internal links and anchors
+              run: lychee --offline --include-fragments --no-progress --root-dir "$(pwd)" --exclude-path node_modules --exclude-path target --exclude-path .venv --exclude-path tests/integration/.venv "./**/*.md"
+
             - name: Check documentation
               run: cargo doc --no-deps --document-private-items
               env:

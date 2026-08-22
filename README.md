@@ -1,7 +1,7 @@
 # altium-designer-mcp
 
 [![CI](https://github.com/embedded-society/altium-designer-mcp/actions/workflows/ci_main.yml/badge.svg)](https://github.com/embedded-society/altium-designer-mcp/actions/workflows/ci_main.yml)
-[![codecov](https://codecov.io/gh/embedded-society/altium-designer-mcp/branch/main/graph/badge.svg)](https://codecov.io/gh/embedded-society/altium-designer-mcp)
+[![codecov](https://codecov.io/gh/embedded-society/altium-designer-mcp/branch/main/graph/badge.svg)](https://app.codecov.io/gh/embedded-society/altium-designer-mcp)
 
 **Let an AI build your Altium libraries — it does the engineering, this tool writes the files.**
 
@@ -401,12 +401,16 @@ Altium supports two ways to reference 3D models:
 | **Embedded** | STEP data stored inside the .PcbLib file | Fully portable — the model travels with the library |
 | **External** | File path reference to a .step file on disk | Not portable — requires the file to exist at the referenced path |
 
-When using `copy_component_cross_library` or `merge_libraries`:
+When copying or merging components between libraries:
 
-- **Embedded models** are copied along with the component
-- **External model references** are removed with a warning, as the file paths are not portable across different machines or directory structures
+- **Embedded models** travel with the component — `copy_component_cross_library` and
+  `merge_libraries` both copy the referenced model streams into the target (a model shared by
+  several footprints is copied once), so the bodies still resolve after the move.
+- **External model references**: `copy_component_cross_library` removes them with a warning by
+  default, since a path relative to the source library rarely resolves elsewhere — pass
+  `preserve_external_paths=true` to keep them. `merge_libraries` carries them unchanged.
 
-To preserve 3D models when copying components, ensure they are embedded in the source library (not external references).
+Embedding a model in the source library is the reliable way to keep 3D data through any copy.
 
 ### Extracting Embedded Models
 

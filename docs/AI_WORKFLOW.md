@@ -142,9 +142,9 @@ IPC Name: RESC1608X55N
 ```json
 {
     "status": "success",
-    "filepath": "./MyLib.PcbLib",
+    "filepath": "./Passives.PcbLib",
     "footprint_count": 1,
-    "footprint_names": ["RES_0603"],
+    "footprint_names": ["RESC1608X55N"],
     "warnings": [],
     "bodies": []
 }
@@ -414,8 +414,8 @@ RESC1608X55N
 ### Official IPC Resources
 
 - **IPC Standards Store**: [shop.ipc.org](https://shop.ipc.org/)
-- **IPC-7351B LP Calculator**: [PCB Libraries Calculator](https://www.pcblibraries.com/Products/FPL_702-IPC7351LandPatternCalculator.asp)
-- **IPC-7351B Naming and Land Pattern Tool**: [PCB Libraries](https://www.pcblibraries.com/)
+- **IPC-7351B land-pattern and naming tools**: [PCB Libraries](https://www.pcblibraries.com/)
+  (the Library Expert / LP Calculator product family)
 
 ### Additional References
 

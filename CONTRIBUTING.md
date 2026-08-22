@@ -99,6 +99,7 @@ When submitting:
 - [ ] Code is formatted (`cargo fmt --all --check`)
 - [ ] Clippy passes (`cargo clippy --all-targets --all-features -- -D warnings`)
 - [ ] Markdown lints cleanly (`markdownlint-cli2 "**/*.md"`)
+- [ ] Internal links and anchors resolve (`lychee --offline --include-fragments "./**/*.md"`; `cargo install lychee`)
 - [ ] File paths are validated and path-traversal tests cover any new file-touching tool (see [Security Considerations](#security-considerations))
 - [ ] Documentation is updated if needed
 - [ ] CHANGELOG.md is updated for user-facing changes (add to the `## [Unreleased]` section)

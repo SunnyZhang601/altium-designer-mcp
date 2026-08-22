@@ -870,6 +870,12 @@ impl McpServer {
         let mut merged_count = 0;
         let mut skipped_count = 0;
         let mut renamed_count = 0;
+        let mut models_copied = 0;
+        // Model ids copied (or, in a dry run, that would be copied) so far,
+        // so a model shared by several footprints is counted once.
+        let mut copied_model_ids: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
+        let mut warnings: Vec<String> = Vec::new();
         let mut source_details: Vec<Value> = Vec::new();
 
         for source_path in source_paths {
@@ -885,6 +891,7 @@ impl McpServer {
             let mut source_merged = 0;
             let mut source_skipped = 0;
             let mut source_renamed = 0;
+            let mut source_models_copied = 0;
 
             for footprint in source_library.iter() {
                 let original_name = footprint.name.clone();
@@ -929,6 +936,33 @@ impl McpServer {
                     }
                 }
 
+                // A footprint's embedded 3D bodies reference model streams
+                // that live in the source library, not in the footprint
+                // record; carrying the bodies without their models leaves
+                // dangling references Altium cannot render. Copy each model
+                // once (the id is a GUID, so a model already in the target is
+                // the same model), and report a body whose model is missing
+                // from the source too rather than quietly inventing fidelity.
+                for body in fp_to_add.component_bodies.iter().filter(|b| b.embedded) {
+                    match source_library.get_model(&body.model_id) {
+                        Some(model) => {
+                            let already_present = target_library.get_model(&body.model_id).is_some()
+                                || copied_model_ids.contains(&body.model_id);
+                            if !already_present {
+                                if !dry_run {
+                                    target_library.add_model(model.clone());
+                                }
+                                copied_model_ids.insert(body.model_id.clone());
+                                source_models_copied += 1;
+                            }
+                        }
+                        None => warnings.push(format!(
+                            "'{}' from '{source_path}' references embedded model {} which the source library does not contain; the body was merged as-is",
+                            fp_to_add.name, body.model_id
+                        )),
+                    }
+                }
+
                 if dry_run {
                     simulated_names.insert(fp_to_add.name.clone());
                 } else {
@@ -938,11 +972,13 @@ impl McpServer {
                 merged_count += 1;
             }
 
+            models_copied += source_models_copied;
             source_details.push(json!({
                 "source": source_path,
                 "merged": source_merged,
                 "skipped": source_skipped,
                 "renamed": source_renamed,
+                "embedded_models_copied": source_models_copied,
             }));
         }
 
@@ -971,6 +1007,7 @@ impl McpServer {
             "merged_count": merged_count,
             "skipped_count": skipped_count,
             "renamed_count": renamed_count,
+            "embedded_models_copied": models_copied,
             "final_count": final_count,
             "sources": source_details,
             "message": format!(
@@ -982,6 +1019,9 @@ impl McpServer {
                 final_count
             ),
         });
+        if !warnings.is_empty() {
+            result["warnings"] = json!(warnings);
+        }
 
         // Run post-write validation (only if actual changes were made)
         if merged_count > 0 && !dry_run {
@@ -1808,6 +1848,104 @@ mod tests {
         assert_eq!(lib.len(), 4);
         assert!(lib.get("CHIP_0402").is_some());
         assert!(lib.get("CHIP_0402_1").is_some());
+    }
+
+    /// A merged footprint's embedded 3D bodies must bring their model streams
+    /// along — a body whose model stayed behind in the source is a dangling
+    /// reference Altium cannot render. A model shared by two footprints is
+    /// copied (and counted) once, and a dry run reports the count without
+    /// writing anything.
+    #[test]
+    fn merge_libraries_pcblib_copies_embedded_models() {
+        let dir = test_temp_dir();
+        let server = create_test_server(dir.path());
+
+        let model_id = "{11111111-2222-3333-4444-555555555555}";
+        let mut lib = PcbLib::new();
+        for name in ["QFN16_A", "QFN16_B"] {
+            let mut fp = Footprint::new(name);
+            fp.add_pad(Pad::smd("1", -1.0, 0.0, 0.3, 0.8));
+            fp.add_component_body(ComponentBody::new(model_id, "QFN16.step"));
+            lib.add(fp);
+        }
+        lib.add_model(EmbeddedModel::new(
+            model_id,
+            "QFN16.step",
+            b"ISO-10303-21; test model".to_vec(),
+        ));
+        let source = dir.path().join("MergeModels.PcbLib");
+        lib.save(&source).unwrap();
+        let target = dir.path().join("MergeModelsTarget.PcbLib");
+
+        let dry = server.call_merge_libraries(&json!({
+            "source_filepaths": [source.to_string_lossy()],
+            "target_filepath": target.to_string_lossy(),
+            "dry_run": true,
+        }));
+        assert!(!dry.is_error, "{}", get_result_text(&dry));
+        let parsed = parse_result_json(&dry);
+        assert_eq!(
+            parsed["embedded_models_copied"], 1,
+            "shared model counted once"
+        );
+        assert!(!target.exists(), "dry run writes nothing");
+
+        let result = server.call_merge_libraries(&json!({
+            "source_filepaths": [source.to_string_lossy()],
+            "target_filepath": target.to_string_lossy(),
+        }));
+        assert!(!result.is_error, "{}", get_result_text(&result));
+        let parsed = parse_result_json(&result);
+        assert_eq!(parsed["merged_count"], 2);
+        assert_eq!(parsed["embedded_models_copied"], 1);
+        assert_eq!(parsed["sources"][0]["embedded_models_copied"], 1);
+        assert!(parsed.get("warnings").is_none(), "nothing to warn about");
+
+        let out = PcbLib::open(&target).unwrap();
+        assert_eq!(out.models().count(), 1);
+        for name in ["QFN16_A", "QFN16_B"] {
+            let body = &out.get(name).unwrap().component_bodies[0];
+            assert!(body.embedded);
+            assert!(
+                out.get_model(&body.model_id).is_some(),
+                "{name}'s body resolves to a model in the target"
+            );
+        }
+    }
+
+    /// A body whose model is missing from the source too is merged as-is
+    /// and reported, rather than silently dropped or invented.
+    #[test]
+    fn merge_libraries_pcblib_reports_a_model_missing_from_the_source() {
+        let dir = test_temp_dir();
+        let server = create_test_server(dir.path());
+
+        let mut lib = PcbLib::new();
+        let mut fp = Footprint::new("ORPHAN");
+        fp.add_pad(Pad::smd("1", -1.0, 0.0, 0.3, 0.8));
+        fp.add_component_body(ComponentBody::new(
+            "{99999999-8888-7777-6666-555555555555}",
+            "gone.step",
+        ));
+        lib.add(fp);
+        let source = dir.path().join("MergeOrphan.PcbLib");
+        lib.save(&source).unwrap();
+        let target = dir.path().join("MergeOrphanTarget.PcbLib");
+
+        let result = server.call_merge_libraries(&json!({
+            "source_filepaths": [source.to_string_lossy()],
+            "target_filepath": target.to_string_lossy(),
+        }));
+        assert!(!result.is_error, "{}", get_result_text(&result));
+        let parsed = parse_result_json(&result);
+        assert_eq!(parsed["embedded_models_copied"], 0);
+        let warnings = parsed["warnings"].as_array().expect("warning emitted");
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].as_str().unwrap().contains("ORPHAN"));
+        assert!(warnings[0].as_str().unwrap().contains("merged as-is"));
+
+        let out = PcbLib::open(&target).unwrap();
+        assert_eq!(out.get("ORPHAN").unwrap().component_bodies.len(), 1);
     }
 
     #[test]

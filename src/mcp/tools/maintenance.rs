@@ -168,6 +168,12 @@ impl McpServer {
         let mut new_names: std::collections::HashSet<String> = std::collections::HashSet::new();
 
         for (old_name, new_name) in &renames {
+            // A regex replacement can produce anything, including an empty
+            // string or a name no storage can carry.
+            if let Err(e) = Self::validate_ole_name(new_name) {
+                errors.push(format!("Cannot rename '{old_name}': {e}"));
+                continue;
+            }
             // Check if new name conflicts with an existing name that's not being renamed
             if existing_names.contains(new_name.as_str()) {
                 let is_being_renamed = renames.iter().any(|(o, _)| o == new_name);
@@ -269,6 +275,12 @@ impl McpServer {
         let mut new_names: std::collections::HashSet<String> = std::collections::HashSet::new();
 
         for (old_name, new_name) in &renames {
+            // A regex replacement can produce anything, including an empty
+            // string or a name no storage can carry.
+            if let Err(e) = Self::validate_ole_name(new_name) {
+                errors.push(format!("Cannot rename '{old_name}': {e}"));
+                continue;
+            }
             if existing_names.contains(new_name.as_str()) {
                 let is_being_renamed = renames.iter().any(|(o, _)| o == new_name);
                 if !is_being_renamed {
@@ -1349,6 +1361,42 @@ mod tests {
         assert!(lib.get("RES_0402").is_some());
         assert!(lib.get("RES_0603").is_some());
         assert!(lib.get("CHIP_0402").is_none());
+    }
+
+    /// A replacement can produce a name no storage (or file) can carry, or
+    /// nothing at all; both are refused by name, on both formats, and the
+    /// library is left untouched.
+    #[test]
+    fn bulk_rename_refuses_names_no_storage_can_carry() {
+        let dir = test_temp_dir();
+        let server = create_test_server(dir.path());
+        let pcb = dir.path().join("BulkBad.PcbLib");
+        create_test_pcblib(&pcb);
+        let sch = dir.path().join("BulkBad.SchLib");
+        create_test_schlib(&sch);
+
+        for (path, pattern, replacement, expect) in [
+            (&pcb, "^CHIP_(.*)$", "CHIP:$1", "invalid character ':'"),
+            (&pcb, "^CHIP_0402$", "", "cannot be empty"),
+            (&sch, "^RESISTOR$", "RES/1", "invalid character '/'"),
+        ] {
+            let result = server.call_bulk_rename(&json!({
+                "filepath": path.to_string_lossy(),
+                "pattern": pattern,
+                "replacement": replacement,
+            }));
+            assert!(result.is_error, "{pattern} -> {replacement:?}");
+            let text = get_result_text(&result);
+            assert!(text.contains(expect), "{text}");
+        }
+        assert!(
+            PcbLib::open(&pcb).unwrap().get("CHIP_0402").is_some(),
+            "untouched"
+        );
+        assert!(
+            SchLib::open(&sch).unwrap().get("RESISTOR").is_some(),
+            "untouched"
+        );
     }
 
     #[test]

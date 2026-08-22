@@ -26,6 +26,30 @@ impl McpServer {
         Ok(())
     }
 
+    /// Validates a component name for every tool that creates one (write,
+    /// copy, rename, bulk rename, update, import): non-empty and free of the
+    /// characters neither an OLE storage name nor a Windows file name may
+    /// carry. The library layer sanitises the OLE-forbidden subset as a
+    /// safety net, but the tools refuse up front so a caller learns why.
+    ///
+    /// Note: OLE storage names are limited to 31 characters, but the library layer
+    /// handles this by truncating storage names while preserving full names in
+    /// the PATTERN/LIBREFERENCE fields.
+    pub(crate) fn validate_ole_name(name: &str) -> Result<(), String> {
+        const INVALID_CHARS: &[char] = &['/', '\\', ':', '*', '?', '"', '<', '>', '|'];
+
+        if name.is_empty() {
+            return Err("Component name cannot be empty".to_string());
+        }
+        if let Some(c) = name.chars().find(|c| INVALID_CHARS.contains(c)) {
+            return Err(format!(
+                "Component name '{name}' contains invalid character '{c}'. \
+                 Names cannot contain: / \\ : * ? \" < > |",
+            ));
+        }
+        Ok(())
+    }
+
     /// Validates all coordinates in a footprint before writing.
     pub(crate) fn validate_footprint_coordinates(
         footprint: &crate::altium::pcblib::Footprint,

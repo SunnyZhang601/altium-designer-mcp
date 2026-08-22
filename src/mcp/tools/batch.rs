@@ -475,26 +475,6 @@ impl McpServer {
 
         Layer::parse(spaced)
     }
-
-    /// Validates a component name.
-    ///
-    /// Note: OLE storage names are limited to 31 characters, but the library layer
-    /// handles this by truncating storage names while preserving full names in
-    /// the PATTERN/LIBREFERENCE fields.
-    pub(crate) fn validate_ole_name(name: &str) -> Result<(), String> {
-        const INVALID_CHARS: &[char] = &['/', '\\', ':', '*', '?', '"', '<', '>', '|'];
-
-        if name.is_empty() {
-            return Err("Component name cannot be empty".to_string());
-        }
-        if let Some(c) = name.chars().find(|c| INVALID_CHARS.contains(c)) {
-            return Err(format!(
-                "Component name '{name}' contains invalid character '{c}'. \
-                 Names cannot contain: / \\ : * ? \" < > |",
-            ));
-        }
-        Ok(())
-    }
 }
 
 #[cfg(test)]

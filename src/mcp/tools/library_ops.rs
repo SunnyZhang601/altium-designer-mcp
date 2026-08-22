@@ -1307,6 +1307,9 @@ impl McpServer {
                 .and_then(Value::as_str)
                 .unwrap_or("Unnamed");
 
+            if let Err(e) = Self::validate_ole_name(name) {
+                return ToolCallResult::error(format!("Footprint {idx}: {e}"));
+            }
             // Check for duplicate
             if library.get(name).is_some() {
                 return ToolCallResult::error(format!(
@@ -1512,6 +1515,9 @@ impl McpServer {
                 .and_then(Value::as_str)
                 .unwrap_or("Unnamed");
 
+            if let Err(e) = Self::validate_ole_name(name) {
+                return ToolCallResult::error(format!("Symbol {idx}: {e}"));
+            }
             // Check for duplicate
             if library.get(name).is_some() {
                 return ToolCallResult::error(format!(
@@ -2152,6 +2158,47 @@ mod tests {
             symbol.primitive_order,
             vec![SchPrimitiveKind::Line, SchPrimitiveKind::Pin]
         );
+    }
+
+    /// Import data names components too: an empty or storage-hostile name is
+    /// refused by position, on both formats, before anything is written.
+    #[test]
+    fn import_library_refuses_names_no_storage_can_carry() {
+        let dir = test_temp_dir();
+        let server = create_test_server(dir.path());
+        for (file_type, key, name, expect) in [
+            (
+                "PcbLib",
+                "footprints",
+                "A:B",
+                "Footprint 0: Component name 'A:B' contains invalid character ':'",
+            ),
+            (
+                "PcbLib",
+                "footprints",
+                "",
+                "Footprint 0: Component name cannot be empty",
+            ),
+            (
+                "SchLib",
+                "symbols",
+                "A/B",
+                "Symbol 0: Component name 'A/B' contains invalid character '/'",
+            ),
+        ] {
+            let out = dir.path().join(format!("Import{file_type}.{file_type}"));
+            let result = server.call_import_library(&json!({
+                "output_path": out.to_string_lossy(),
+                "json_data": { "file_type": file_type, key: [{ "name": name }] },
+            }));
+            assert!(result.is_error, "{file_type} {name:?}");
+            assert!(
+                get_result_text(&result).contains(expect),
+                "{}",
+                get_result_text(&result)
+            );
+            assert!(!out.exists(), "nothing written");
+        }
     }
 
     #[test]
@@ -3813,6 +3860,7 @@ mod tests {
 
     mod degenerate_libraries {
         use crate::altium::pcblib::{Arc, Footprint, Layer, Pad, PcbLib, Track};
+        use crate::altium::schlib::{SchLib, Symbol};
         use crate::mcp::tools::test_support::{
             create_test_server, parse_result_json, test_temp_dir,
         };
@@ -3855,10 +3903,10 @@ mod tests {
             // The validator carries "component has empty name" checks in four
             // places (validate_pcblib, validate_schlib and both post-write
             // passes), but none of them can fire on a library read from disk:
-            // the component name IS the OLE storage name, so an empty one
-            // collides with the root and the save is refused before a file
-            // exists to validate. Pinning that here so the checks are
-            // understood as unreachable-by-construction rather than untested.
+            // the component name IS the OLE storage name, so a writer refuses
+            // an empty one up front and no file exists to validate. Pinning
+            // that here so the checks are understood as
+            // unreachable-by-construction rather than untested.
             let dir = test_temp_dir();
 
             let mut fp = Footprint::new("");
@@ -3868,7 +3916,37 @@ mod tests {
             let err = lib
                 .save(dir.path().join("Nameless.PcbLib"))
                 .expect_err("a nameless footprint has no storage name");
-            assert!(err.to_string().contains("storage"), "{err}");
+            assert!(err.to_string().contains("empty name"), "{err}");
+
+            let mut lib = SchLib::new();
+            lib.add(Symbol::new(""));
+            let err = lib
+                .save(dir.path().join("Nameless.SchLib"))
+                .expect_err("a nameless symbol has no storage name");
+            assert!(err.to_string().contains("empty name"), "{err}");
+        }
+
+        /// Names carrying characters an OLE storage name cannot hold (`/ \ : !`)
+        /// save anyway: the storage name is sanitised the way Altium sanitises a
+        /// slash, `SectionKeys` maps it back, and the real name survives the
+        /// round trip. A colon used to reach the cfb crate and panic.
+        #[test]
+        fn ole_forbidden_characters_in_a_name_are_sanitised_not_fatal() {
+            let dir = test_temp_dir();
+            for (i, name) in ["A:B", r"A\B", "A!B", "A/B"].iter().enumerate() {
+                let mut fp = Footprint::new(*name);
+                fp.add_pad(Pad::smd("1", 0.0, 0.0, 1.0, 1.0));
+                let mut lib = PcbLib::new();
+                lib.add(fp);
+                let path = dir.path().join(format!("Forbidden{i}.PcbLib"));
+                lib.save(&path).unwrap_or_else(|e| panic!("{name}: {e}"));
+                let back = PcbLib::open(&path).unwrap();
+                assert_eq!(
+                    back.names(),
+                    vec![(*name).to_string()],
+                    "{name} round-trips"
+                );
+            }
         }
 
         #[test]

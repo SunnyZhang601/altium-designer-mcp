@@ -196,10 +196,15 @@ impl McpServer {
         // A replacement may carry a new name, which makes this a rename too —
         // and a rename onto a name another footprint already holds would leave
         // two components answering to it. Refuse, as rename_component does.
-        if name != component_name && library.get(name).is_some() {
-            return ToolCallResult::error(format!(
-                "Cannot rename '{component_name}' to '{name}': a footprint with that name already exists"
-            ));
+        if name != component_name {
+            if let Err(e) = Self::validate_ole_name(name) {
+                return ToolCallResult::error(e);
+            }
+            if library.get(name).is_some() {
+                return ToolCallResult::error(format!(
+                    "Cannot rename '{component_name}' to '{name}': a footprint with that name already exists"
+                ));
+            }
         }
 
         // Get the old component for comparison
@@ -592,10 +597,15 @@ impl McpServer {
         // A replacement may carry a new name, which makes this a rename too —
         // and a rename onto a name another symbol already holds would leave
         // two components answering to it. Refuse, as rename_component does.
-        if name != component_name && library.get(name).is_some() {
-            return ToolCallResult::error(format!(
-                "Cannot rename '{component_name}' to '{name}': a symbol with that name already exists"
-            ));
+        if name != component_name {
+            if let Err(e) = Self::validate_ole_name(name) {
+                return ToolCallResult::error(e);
+            }
+            if library.get(name).is_some() {
+                return ToolCallResult::error(format!(
+                    "Cannot rename '{component_name}' to '{name}': a symbol with that name already exists"
+                ));
+            }
         }
 
         // Get the old component for comparison
@@ -1581,6 +1591,58 @@ mod tests {
         assert!(get_result_text(&result).contains("already exists"));
         let lib = SchLib::open(&sch).unwrap();
         assert_eq!(lib.len(), 2, "nothing changed");
+
+        // A rename onto a name no storage can carry is refused too, on both formats.
+        for (path, key, body) in [
+            (
+                &pcb,
+                "footprint",
+                json!({ "name": "BAD:NAME", "pads": [{ "designator": "1", "x": 0.0, "y": 0.0, "width": 0.6, "height": 0.5 }] }),
+            ),
+            (&sch, "symbol", json!({ "name": "BAD/NAME", "pins": [] })),
+        ] {
+            let result = server.call_update_component(&json!({
+                "filepath": path.to_string_lossy(),
+                "component_name": if key == "footprint" { "CHIP_0603" } else { "RESISTOR" },
+                key: body,
+            }));
+            assert!(result.is_error, "{key}");
+            assert!(
+                get_result_text(&result).contains("invalid character"),
+                "{}",
+                get_result_text(&result)
+            );
+        }
+    }
+
+    /// A malformed `primitive_order` in a replacement is ignored with the
+    /// default grouped order rather than failing the update, on both formats —
+    /// the same advisory treatment the create path gives it.
+    #[test]
+    fn update_component_ignores_a_malformed_primitive_order() {
+        let dir = test_temp_dir();
+        let server = create_test_server(dir.path());
+
+        let pcb = dir.path().join("Order.PcbLib");
+        create_test_pcblib(&pcb);
+        let result = server.call_update_component(&json!({
+            "filepath": pcb.to_string_lossy(),
+            "component_name": "CHIP_0402",
+            "footprint": {
+                "pads": [{ "designator": "1", "x": 0.0, "y": 0.0, "width": 0.6, "height": 0.5 }],
+                "primitive_order": ["not_a_kind"],
+            },
+        }));
+        assert!(!result.is_error, "{}", get_result_text(&result));
+
+        let sch = dir.path().join("Order.SchLib");
+        create_test_schlib(&sch);
+        let result = server.call_update_component(&json!({
+            "filepath": sch.to_string_lossy(),
+            "component_name": "RESISTOR",
+            "symbol": { "pins": [], "primitive_order": 42 },
+        }));
+        assert!(!result.is_error, "{}", get_result_text(&result));
     }
 
     #[test]

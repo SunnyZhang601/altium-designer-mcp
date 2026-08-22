@@ -19,6 +19,16 @@ impl PcbLib {
         &mut self,
         writer: impl std::io::Read + std::io::Write + std::io::Seek,
     ) -> AltiumResult<()> {
+        // An empty name has no storage name to derive — the root storage
+        // would be "created" twice and the save fail half-way — so refuse it
+        // before touching the file.
+        if let Some(i) = self.footprints.iter().position(|f| f.name.is_empty()) {
+            return Err(AltiumError::InvalidParameter {
+                name: "name".to_string(),
+                message: format!("footprint {i} has an empty name"),
+            });
+        }
+
         // Convert model_3d references to ComponentBody + EmbeddedModel before writing
         self.prepare_3d_models_for_writing()?;
 

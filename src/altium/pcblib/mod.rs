@@ -456,6 +456,58 @@ impl Footprint {
         sequence
     }
 
+    /// Gives the footprint the identity of a brand-new component.
+    ///
+    /// A clone that will live beside its source must not share its
+    /// identities: the kind-85 footprint GUID, every primitive's GUID and
+    /// unique id, and the two per-pad identity GUIDs are cleared, so the
+    /// writer omits the identity streams and mints fresh pad GUIDs exactly as
+    /// for a footprint built from scratch; a replayed via block's identity
+    /// slots are zeroed to the nil GUIDs Altium itself writes. Geometry and
+    /// the replayed binary bases are untouched.
+    pub fn reset_identities(&mut self) {
+        self.guid = None;
+        for pad in &mut self.pads {
+            pad.guid = None;
+            pad.unique_id = None;
+            pad.identity_guid = None;
+            pad.identity_guid_b = None;
+        }
+        for via in &mut self.vias {
+            via.guid = None;
+            via.unique_id = None;
+            if let Some(block) = via.raw_block.as_mut() {
+                if block.len() >= 291 {
+                    block[259..291].fill(0);
+                }
+            }
+        }
+        for track in &mut self.tracks {
+            track.guid = None;
+            track.unique_id = None;
+        }
+        for arc in &mut self.arcs {
+            arc.guid = None;
+            arc.unique_id = None;
+        }
+        for region in &mut self.regions {
+            region.guid = None;
+            region.unique_id = None;
+        }
+        for text in &mut self.text {
+            text.guid = None;
+            text.unique_id = None;
+        }
+        for fill in &mut self.fills {
+            fill.guid = None;
+            fill.unique_id = None;
+        }
+        for body in &mut self.component_bodies {
+            body.guid = None;
+            body.unique_id = None;
+        }
+    }
+
     /// How many primitives of one kind the footprint holds.
     #[must_use]
     pub fn count_of(&self, kind: PrimitiveKind) -> usize {
@@ -806,6 +858,136 @@ impl PcbLib {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A footprint carrying an identity on every primitive kind, plus a via
+    /// whose replayed block has identity bytes and one whose block is too
+    /// short to hold any.
+    fn footprint_with_identities_everywhere() -> Footprint {
+        let guid = Some("{11111111-2222-3333-4444-555555555555}".to_string());
+        let uid = Some("ABCDEFGH".to_string());
+        let mut fp = Footprint::new("FP");
+        fp.guid = guid.clone();
+
+        let mut pad = Pad::smd("1", -0.5, 0.0, 0.6, 0.5);
+        pad.guid = guid.clone();
+        pad.unique_id = uid.clone();
+        pad.identity_guid = guid.clone();
+        pad.identity_guid_b = guid.clone();
+        fp.add_pad(pad);
+
+        let mut via = Via::new(1.5, 0.0, 0.6, 0.3);
+        via.guid = guid.clone();
+        via.unique_id = uid.clone();
+        let mut block = vec![0u8; 300];
+        block[259..291].fill(0xAB);
+        block[0] = 0x4A; // non-identity bytes must survive
+        via.raw_block = Some(block);
+        fp.add_via(via);
+
+        let mut short_via = Via::new(2.5, 0.0, 0.6, 0.3);
+        short_via.raw_block = Some(vec![0xAB; 10]); // too short to hold identities
+        fp.add_via(short_via);
+
+        let mut track = Track::new(0.0, 0.0, 1.0, 0.0, 0.2, Layer::TopOverlay);
+        track.guid = guid.clone();
+        track.unique_id = uid.clone();
+        fp.add_track(track);
+        let mut arc = Arc::circle(0.0, 2.0, 0.5, 0.1, Layer::TopOverlay);
+        arc.guid = guid.clone();
+        arc.unique_id = uid.clone();
+        fp.add_arc(arc);
+        let mut region = Region::rectangle(-1.0, -1.0, 1.0, 1.0, Layer::TopCourtyard);
+        region.guid = guid.clone();
+        region.unique_id = uid.clone();
+        fp.add_region(region);
+        let mut fill = Fill::new(-0.5, 0.8, 0.5, 1.2, Layer::TopLayer);
+        fill.guid = guid.clone();
+        fill.unique_id = uid.clone();
+        fp.add_fill(fill);
+        let mut body = ComponentBody::new("{G-1}", "m.step");
+        body.guid = guid.clone();
+        body.unique_id = uid.clone();
+        fp.add_component_body(body);
+        fp.add_text(Text {
+            barcode_full_width: None,
+            barcode_full_height: None,
+            barcode_x_margin: None,
+            barcode_y_margin: None,
+            barcode_kind: 0,
+            barcode_font_name: String::new(),
+            barcode_inverted: false,
+            barcode_show_text: false,
+            x: 0.0,
+            y: -2.0,
+            text: ".Designator".to_string(),
+            height: 1.0,
+            layer: Layer::TopOverlay,
+            kind: TextKind::Stroke,
+            rotation: 0.0,
+            stroke_font: None,
+            stroke_width: None,
+            italic: false,
+            bold: false,
+            mirror: false,
+            is_comment: false,
+            is_designator: false,
+            font_name: "Arial".to_string(),
+            justification: TextJustification::default(),
+            is_inverted: false,
+            inverted_border: None,
+            use_inverted_rectangle: false,
+            inverted_rect_width: None,
+            inverted_rect_height: None,
+            inverted_rect_text_offset: None,
+            flags: PcbFlags::default(),
+            net_index: 0xFFFF,
+            polygon_index: 0xFFFF,
+            component_index: -1,
+            unique_id: uid,
+            guid,
+            raw_geometry: None,
+        });
+        fp
+    }
+
+    /// `reset_identities` clears every identity on every primitive kind and
+    /// zeroes a replayed via block's identity slots, leaving geometry alone.
+    #[test]
+    fn reset_identities_clears_every_identity_and_keeps_geometry() {
+        let mut fp = footprint_with_identities_everywhere();
+        fp.reset_identities();
+
+        assert!(fp.guid.is_none());
+        let pad = &fp.pads[0];
+        assert!(pad.guid.is_none() && pad.unique_id.is_none());
+        assert!(pad.identity_guid.is_none() && pad.identity_guid_b.is_none());
+        assert!((pad.width - 0.6).abs() < 1e-9, "geometry untouched");
+        let via = &fp.vias[0];
+        assert!(via.guid.is_none() && via.unique_id.is_none());
+        let block = via.raw_block.as_ref().unwrap();
+        assert!(
+            block[259..291].iter().all(|&b| b == 0),
+            "identity slots zeroed"
+        );
+        assert_eq!(block[0], 0x4A, "other replayed bytes untouched");
+        assert_eq!(
+            fp.vias[1].raw_block.as_deref(),
+            Some(&[0xABu8; 10][..]),
+            "short block left alone"
+        );
+        assert!(fp.tracks[0].guid.is_none() && fp.tracks[0].unique_id.is_none());
+        assert!(fp.arcs[0].guid.is_none() && fp.arcs[0].unique_id.is_none());
+        assert!(fp.regions[0].guid.is_none() && fp.regions[0].unique_id.is_none());
+        assert!(fp.fills[0].guid.is_none() && fp.fills[0].unique_id.is_none());
+        assert!(fp.text[0].guid.is_none() && fp.text[0].unique_id.is_none());
+        assert!(
+            fp.component_bodies[0].guid.is_none() && fp.component_bodies[0].unique_id.is_none()
+        );
+        assert_eq!(
+            fp.component_bodies[0].model_id, "{G-1}",
+            "model reference kept"
+        );
+    }
 
     /// Helper to compare floats with tolerance.
     fn approx_eq(a: f64, b: f64, tolerance: f64) -> bool {

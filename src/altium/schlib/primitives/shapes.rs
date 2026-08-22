@@ -51,6 +51,14 @@ pub struct Rectangle {
     /// shape identity; a from-scratch shape generates a fresh one on write (#113).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unique_id: Option<String>,
+    /// The record exactly as read: every `key=value` segment in stored order
+    /// (an empty segment as `("", "")`), so the writer replays it verbatim
+    /// where the field behind a segment is unchanged and emits only the keys
+    /// Altium wrote — the UI omits `LineWidth=1` on a rectangle, a script
+    /// does not. Empty for a record built from scratch, which emits the
+    /// canonical form.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub raw_params: Vec<(String, String)>,
 }
 
 const fn default_line_width() -> u8 {
@@ -67,6 +75,7 @@ impl Rectangle {
         y2: impl Into<f64>,
     ) -> Self {
         Self {
+            raw_params: Vec::new(),
             x1: x1.into(),
             y1: y1.into(),
             x2: x2.into(),
@@ -126,6 +135,14 @@ pub struct Line {
     /// shape identity; a from-scratch shape generates a fresh one on write (#113).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unique_id: Option<String>,
+    /// The record exactly as read: every `key=value` segment in stored order
+    /// (an empty segment as `("", "")`), so the writer replays it verbatim
+    /// where the field behind a segment is unchanged and emits only the keys
+    /// Altium wrote — the UI omits `LineWidth=1` on a rectangle, a script
+    /// does not. Empty for a record built from scratch, which emits the
+    /// canonical form.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub raw_params: Vec<(String, String)>,
 }
 
 impl Line {
@@ -139,6 +156,7 @@ impl Line {
         y2: impl Into<f64>,
     ) -> Self {
         Self {
+            raw_params: Vec::new(),
             x1: x1.into(),
             y1: y1.into(),
             x2: x2.into(),
@@ -200,6 +218,14 @@ pub struct Polyline {
     /// shape identity; a from-scratch shape generates a fresh one on write (#113).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unique_id: Option<String>,
+    /// The record exactly as read: every `key=value` segment in stored order
+    /// (an empty segment as `("", "")`), so the writer replays it verbatim
+    /// where the field behind a segment is unchanged and emits only the keys
+    /// Altium wrote — the UI omits `LineWidth=1` on a rectangle, a script
+    /// does not. Empty for a record built from scratch, which emits the
+    /// canonical form.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub raw_params: Vec<(String, String)>,
 }
 
 /// A filled polygon.
@@ -247,6 +273,14 @@ pub struct Polygon {
     /// shape identity; a from-scratch shape generates a fresh one on write (#113).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unique_id: Option<String>,
+    /// The record exactly as read: every `key=value` segment in stored order
+    /// (an empty segment as `("", "")`), so the writer replays it verbatim
+    /// where the field behind a segment is unchanged and emits only the keys
+    /// Altium wrote — the UI omits `LineWidth=1` on a rectangle, a script
+    /// does not. Empty for a record built from scratch, which emits the
+    /// canonical form.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub raw_params: Vec<(String, String)>,
 }
 
 /// An arc or circle.
@@ -294,6 +328,14 @@ pub struct Arc {
     /// shape identity; a from-scratch shape generates a fresh one on write (#113).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unique_id: Option<String>,
+    /// The record exactly as read: every `key=value` segment in stored order
+    /// (an empty segment as `("", "")`), so the writer replays it verbatim
+    /// where the field behind a segment is unchanged and emits only the keys
+    /// Altium wrote — the UI omits `LineWidth=1` on a rectangle, a script
+    /// does not. Empty for a record built from scratch, which emits the
+    /// canonical form.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub raw_params: Vec<(String, String)>,
 }
 
 const fn default_end_angle() -> f64 {
@@ -354,6 +396,14 @@ pub struct Pie {
     /// shape identity; a from-scratch shape generates a fresh one on write (#113).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unique_id: Option<String>,
+    /// The record exactly as read: every `key=value` segment in stored order
+    /// (an empty segment as `("", "")`), so the writer replays it verbatim
+    /// where the field behind a segment is unchanged and emits only the keys
+    /// Altium wrote — the UI omits `LineWidth=1` on a rectangle, a script
+    /// does not. Empty for a record built from scratch, which emits the
+    /// canonical form.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub raw_params: Vec<(String, String)>,
 }
 
 impl Pie {
@@ -367,6 +417,7 @@ impl Pie {
         end_angle: f64,
     ) -> Self {
         Self {
+            raw_params: Vec::new(),
             x: x.into(),
             y: y.into(),
             radius: radius.into(),
@@ -466,6 +517,14 @@ pub struct Image {
     /// shape identity; a from-scratch shape generates a fresh one on write (#113).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unique_id: Option<String>,
+    /// The record exactly as read: every `key=value` segment in stored order
+    /// (an empty segment as `("", "")`), so the writer replays it verbatim
+    /// where the field behind a segment is unchanged and emits only the keys
+    /// Altium wrote — the UI omits `LineWidth=1` on a rectangle, a script
+    /// does not. Empty for a record built from scratch, which emits the
+    /// canonical form.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub raw_params: Vec<(String, String)>,
 }
 
 impl Image {
@@ -480,6 +539,7 @@ impl Image {
         file_name: impl Into<String>,
     ) -> Self {
         Self {
+            raw_params: Vec::new(),
             x1: x1.into(),
             y1: y1.into(),
             x2: x2.into(),
@@ -559,6 +619,14 @@ pub struct Bezier {
     /// shape identity; a from-scratch shape generates a fresh one on write (#113).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unique_id: Option<String>,
+    /// The record exactly as read: every `key=value` segment in stored order
+    /// (an empty segment as `("", "")`), so the writer replays it verbatim
+    /// where the field behind a segment is unchanged and emits only the keys
+    /// Altium wrote — the UI omits `LineWidth=1` on a rectangle, a script
+    /// does not. Empty for a record built from scratch, which emits the
+    /// canonical form.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub raw_params: Vec<(String, String)>,
 }
 
 impl Bezier {
@@ -576,6 +644,7 @@ impl Bezier {
         y4: impl Into<f64>,
     ) -> Self {
         Self {
+            raw_params: Vec::new(),
             x1: x1.into(),
             y1: y1.into(),
             x2: x2.into(),
@@ -642,6 +711,14 @@ pub struct Ellipse {
     /// shape identity; a from-scratch shape generates a fresh one on write (#113).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unique_id: Option<String>,
+    /// The record exactly as read: every `key=value` segment in stored order
+    /// (an empty segment as `("", "")`), so the writer replays it verbatim
+    /// where the field behind a segment is unchanged and emits only the keys
+    /// Altium wrote — the UI omits `LineWidth=1` on a rectangle, a script
+    /// does not. Empty for a record built from scratch, which emits the
+    /// canonical form.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub raw_params: Vec<(String, String)>,
 }
 
 impl Ellipse {
@@ -654,6 +731,7 @@ impl Ellipse {
         radius_y: impl Into<f64>,
     ) -> Self {
         Self {
+            raw_params: Vec::new(),
             x: x.into(),
             y: y.into(),
             radius_x: radius_x.into(),
@@ -731,6 +809,14 @@ pub struct RoundRect {
     /// shape identity; a from-scratch shape generates a fresh one on write (#113).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unique_id: Option<String>,
+    /// The record exactly as read: every `key=value` segment in stored order
+    /// (an empty segment as `("", "")`), so the writer replays it verbatim
+    /// where the field behind a segment is unchanged and emits only the keys
+    /// Altium wrote — the UI omits `LineWidth=1` on a rectangle, a script
+    /// does not. Empty for a record built from scratch, which emits the
+    /// canonical form.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub raw_params: Vec<(String, String)>,
 }
 
 impl RoundRect {
@@ -746,6 +832,7 @@ impl RoundRect {
         corner_y_radius: impl Into<f64>,
     ) -> Self {
         Self {
+            raw_params: Vec::new(),
             x1: x1.into(),
             y1: y1.into(),
             x2: x2.into(),
@@ -809,6 +896,14 @@ pub struct EllipticalArc {
     /// shape identity; a from-scratch shape generates a fresh one on write (#113).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unique_id: Option<String>,
+    /// The record exactly as read: every `key=value` segment in stored order
+    /// (an empty segment as `("", "")`), so the writer replays it verbatim
+    /// where the field behind a segment is unchanged and emits only the keys
+    /// Altium wrote — the UI omits `LineWidth=1` on a rectangle, a script
+    /// does not. Empty for a record built from scratch, which emits the
+    /// canonical form.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub raw_params: Vec<(String, String)>,
 }
 
 impl EllipticalArc {
@@ -823,6 +918,7 @@ impl EllipticalArc {
         end_angle: impl Into<f64>,
     ) -> Self {
         Self {
+            raw_params: Vec::new(),
             x: x.into(),
             y: y.into(),
             radius: radius.into(),

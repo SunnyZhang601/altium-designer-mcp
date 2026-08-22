@@ -42,6 +42,14 @@ pub struct Label {
     /// shape identity; a from-scratch shape generates a fresh one on write (#113).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unique_id: Option<String>,
+    /// The record exactly as read: every `key=value` segment in stored order
+    /// (an empty segment as `("", "")`), so the writer replays it verbatim
+    /// where the field behind a segment is unchanged and emits only the keys
+    /// Altium wrote — the UI omits `LineWidth=1` on a rectangle, a script
+    /// does not. Empty for a record built from scratch, which emits the
+    /// canonical form.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub raw_params: Vec<(String, String)>,
 }
 
 /// A text annotation (RECORD=3).
@@ -83,6 +91,14 @@ pub struct Text {
     /// shape identity; a from-scratch shape generates a fresh one on write (#113).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unique_id: Option<String>,
+    /// The record exactly as read: every `key=value` segment in stored order
+    /// (an empty segment as `("", "")`), so the writer replays it verbatim
+    /// where the field behind a segment is unchanged and emits only the keys
+    /// Altium wrote — the UI omits `LineWidth=1` on a rectangle, a script
+    /// does not. Empty for a record built from scratch, which emits the
+    /// canonical form.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub raw_params: Vec<(String, String)>,
 }
 
 /// A bordered multi-line text box — `SchLib` `RECORD=28`.
@@ -175,6 +191,14 @@ pub struct TextFrame {
     /// shape identity; a from-scratch shape generates a fresh one on write (#113).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unique_id: Option<String>,
+    /// The record exactly as read: every `key=value` segment in stored order
+    /// (an empty segment as `("", "")`), so the writer replays it verbatim
+    /// where the field behind a segment is unchanged and emits only the keys
+    /// Altium wrote — the UI omits `LineWidth=1` on a rectangle, a script
+    /// does not. Empty for a record built from scratch, which emits the
+    /// canonical form.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub raw_params: Vec<(String, String)>,
 }
 
 impl TextFrame {
@@ -190,6 +214,7 @@ impl TextFrame {
         text: impl Into<String>,
     ) -> Self {
         Self {
+            raw_params: Vec::new(),
             x1: x1.into(),
             y1: y1.into(),
             x2: x2.into(),
@@ -358,6 +383,14 @@ pub struct Parameter {
     /// parameter identity; a from-scratch parameter generates a fresh one on write.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unique_id: Option<String>,
+    /// The record exactly as read: every `key=value` segment in stored order
+    /// (an empty segment as `("", "")`), so the writer replays it verbatim
+    /// where the field behind a segment is unchanged and emits only the keys
+    /// Altium wrote — the UI omits `LineWidth=1` on a rectangle, a script
+    /// does not. Empty for a record built from scratch, which emits the
+    /// canonical form.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub raw_params: Vec<(String, String)>,
 }
 
 impl Parameter {
@@ -365,6 +398,7 @@ impl Parameter {
     #[must_use]
     pub fn new(name: impl Into<String>, value: impl Into<String>) -> Self {
         Self {
+            raw_params: Vec::new(),
             name: name.into(),
             value: value.into(),
             x: 0.0,

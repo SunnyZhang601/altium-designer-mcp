@@ -171,6 +171,15 @@ fn json_unique_id(json: &Value) -> Option<String> {
         .map(str::to_string)
 }
 
+/// Reads a `SchLib` record's raw segments (`raw_params`) from its JSON, so a
+/// read-modify-write replays the record as Altium wrote it.
+fn json_raw_params(json: &Value) -> Vec<(String, String)> {
+    json.get("raw_params")
+        .cloned()
+        .and_then(|v| serde_json::from_value(v).ok())
+        .unwrap_or_default()
+}
+
 /// Reads a primitive's Altium identity GUID from its JSON, so a
 /// read-modify-write that passes through the tool layer keeps it.
 fn json_guid(json: &Value) -> Option<String> {
@@ -2222,6 +2231,7 @@ impl McpServer {
             owner_part_id,
             display_flags: parse_schlib_display_flags(json),
             unique_id: json_unique_id(json),
+            raw_params: json_raw_params(json),
         })
     }
 
@@ -2278,6 +2288,7 @@ impl McpServer {
             owner_part_id,
             display_flags: parse_schlib_display_flags(json),
             unique_id: json_unique_id(json),
+            raw_params: json_raw_params(json),
         })
     }
 
@@ -2321,6 +2332,7 @@ impl McpServer {
             owner_part_id,
             display_flags: parse_schlib_display_flags(json),
             unique_id: json_unique_id(json),
+            raw_params: json_raw_params(json),
         })
     }
 
@@ -2407,6 +2419,7 @@ impl McpServer {
         let owner_part_id = json_i32(json, "owner_part_id").unwrap_or(1);
 
         Some(Parameter {
+            raw_params: json_raw_params(json),
             name: name.to_string(),
             value,
             x,
@@ -2504,6 +2517,7 @@ impl McpServer {
             owner_part_id,
             display_flags: parse_schlib_display_flags(json),
             unique_id: json_unique_id(json),
+            raw_params: json_raw_params(json),
         })
     }
 
@@ -2565,6 +2579,7 @@ impl McpServer {
             owner_part_id,
             display_flags: parse_schlib_display_flags(json),
             unique_id: json_unique_id(json),
+            raw_params: json_raw_params(json),
         })
     }
 
@@ -2613,6 +2628,7 @@ impl McpServer {
             owner_part_id,
             display_flags: parse_schlib_display_flags(json),
             unique_id: json_unique_id(json),
+            raw_params: json_raw_params(json),
         })
     }
 
@@ -2661,6 +2677,7 @@ impl McpServer {
             owner_part_id,
             display_flags: parse_schlib_display_flags(json),
             unique_id: json_unique_id(json),
+            raw_params: json_raw_params(json),
         })
     }
 
@@ -2712,6 +2729,7 @@ impl McpServer {
             owner_part_id,
             display_flags: parse_schlib_display_flags(json),
             unique_id: json_unique_id(json),
+            raw_params: json_raw_params(json),
         })
     }
 
@@ -2773,6 +2791,7 @@ impl McpServer {
             owner_part_id,
             display_flags: parse_schlib_display_flags(json),
             unique_id: json_unique_id(json),
+            raw_params: json_raw_params(json),
         })
     }
 
@@ -2817,6 +2836,7 @@ impl McpServer {
             owner_part_id,
             display_flags: parse_schlib_display_flags(json),
             unique_id: json_unique_id(json),
+            raw_params: json_raw_params(json),
         })
     }
 
@@ -2861,6 +2881,7 @@ impl McpServer {
             fill_color,
             owner_part_id,
             unique_id: json_unique_id(json),
+            raw_params: json_raw_params(json),
         })
     }
 
@@ -2913,6 +2934,7 @@ impl McpServer {
             owner_part_id,
             display_flags: parse_schlib_display_flags(json),
             unique_id: json_unique_id(json),
+            raw_params: json_raw_params(json),
         })
     }
 
@@ -2974,6 +2996,7 @@ impl McpServer {
             owner_part_id,
             display_flags: parse_schlib_display_flags(json),
             unique_id: json_unique_id(json),
+            raw_params: json_raw_params(json),
         })
     }
 
@@ -3034,6 +3057,7 @@ impl McpServer {
             is_hidden,
             owner_part_id,
             unique_id: json_unique_id(json),
+            raw_params: json_raw_params(json),
         })
     }
 }

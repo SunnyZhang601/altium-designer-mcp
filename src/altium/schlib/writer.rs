@@ -129,7 +129,16 @@ pub(crate) fn write_binary_pin(
     // ENCODED byte length (what the u8 length prefix actually holds), not the
     // UTF-8 String length — otherwise non-ASCII text is wrongly rejected even
     // though it fits in 255 encoded bytes.
-    let name = crate::altium::encode_windows1252(&pin.name);
+    //
+    // The name is the exception: Altium stores a non-ASCII pin name as its
+    // UTF-8 bytes (every one of the golden's 52 such pins, `Résistance`
+    // included though Windows-1252 could hold it) with the `PinWideText`
+    // stream beside it, so the record and the stream agree on every reader.
+    let name = if pin.name.is_ascii() {
+        crate::altium::encode_windows1252(&pin.name)
+    } else {
+        pin.name.as_bytes().to_vec()
+    };
     let designator = crate::altium::encode_windows1252(&pin.designator);
     let description = crate::altium::encode_windows1252(&pin.description);
     let swap_id_group = crate::altium::encode_windows1252(&pin.swap_id_group);
@@ -335,6 +344,196 @@ fn replay_header(symbol: &Symbol, canonical: &[(String, String)]) -> Vec<String>
         }
     }
     parts
+}
+
+/// Keys whose value is positional — assigned by the writer from the record's
+/// place in the stream — so the canonical value always wins and a stale read
+/// value is never replayed.
+const POSITIONAL_KEYS: &[&str] = &["IndexInSheet", "OwnerIndex"];
+
+/// A `key=value` the UI omits when it holds this value and a script writes
+/// out: left out when the read record lacked it and the value is still the
+/// implicit one, so the file comes back as Altium wrote it; emitted once the
+/// field is edited away from it.
+const IMPLICIT_DEFAULTS: &[(&str, &str)] = &[("LineWidth", "1")];
+
+/// Every key a content record's encoder can emit — the keys a struct field
+/// stands behind. A read key in this set that the canonical form now omits
+/// is a field edited to its omitted default (`IsHidden` cleared) and is
+/// dropped; a read key outside it is an Altium key this crate does not model
+/// and is replayed verbatim. Held complete against the golden by
+/// `every_golden_record_key_is_modelled`.
+const MODELLED_RECORD_KEYS: &[&str] = &[
+    "RECORD",
+    "Alignment",
+    "AreaColor",
+    "ClipToRect",
+    "Color",
+    "Corner.X",
+    "Corner.X_Frac",
+    "Corner.Y",
+    "Corner.Y_Frac",
+    "CornerXRadius",
+    "CornerXRadius_Frac",
+    "CornerYRadius",
+    "CornerYRadius_Frac",
+    "Description",
+    "%UTF8%Description",
+    "Dimmed",
+    "Disabled",
+    "EmbedImage",
+    "EndAngle",
+    "EndLineShape",
+    "FileName",
+    "%UTF8%FileName",
+    "FontID",
+    "GraphicallyLocked",
+    "HideName",
+    "IndexInSheet",
+    "IsConfigurable",
+    "IsHidden",
+    "IsMirrored",
+    "IsNotAccesible",
+    "IsRule",
+    "IsSolid",
+    "IsSystemParameter",
+    "Justification",
+    "KeepAspect",
+    "LineShapeSize",
+    "LineStyle",
+    "LineStyleExt",
+    "LineWidth",
+    "Location.X",
+    "Location.X_Frac",
+    "Location.Y",
+    "Location.Y_Frac",
+    "LocationCount",
+    "Name",
+    "%UTF8%Name",
+    "NotAutoPosition",
+    "Orientation",
+    "OwnerIndex",
+    "OwnerPartDisplayMode",
+    "OwnerPartId",
+    "ParamType",
+    "Radius",
+    "Radius_Frac",
+    "ReadOnlyState",
+    "SecondaryRadius",
+    "SecondaryRadius_Frac",
+    "ShowBorder",
+    "ShowName",
+    "StartAngle",
+    "StartLineShape",
+    "Text",
+    "%UTF8%Text",
+    "TextColor",
+    "TextHorzAnchor",
+    "TextMargin",
+    "TextMargin_Frac",
+    "TextVertAnchor",
+    "Transparent",
+    "UniqueID",
+    "WordWrap",
+];
+
+/// Whether `key` is one an encoder can emit: a vertex key (`X3`, `Y12`) or
+/// one of [`MODELLED_RECORD_KEYS`].
+fn is_modelled_record_key(key: &str) -> bool {
+    let vertex = key
+        .strip_prefix('X')
+        .or_else(|| key.strip_prefix('Y'))
+        .is_some_and(|rest| {
+            let rest = rest.strip_suffix("_Frac").unwrap_or(rest);
+            !rest.is_empty() && rest.bytes().all(|b| b.is_ascii_digit())
+        });
+    vertex
+        || MODELLED_RECORD_KEYS
+            .iter()
+            .any(|k| k.eq_ignore_ascii_case(key))
+}
+
+/// Replays a record read from a file over the canonical encoding of its
+/// current state (see `raw_params` on every record struct).
+///
+/// Segment by segment in the read order: a key the canonical form carries
+/// goes back verbatim when the two values decode to the same text (the UI
+/// stores a Latin-1 value as Windows-1252 where the canonical form uses
+/// UTF-8 bytes) and as the canonical value otherwise — an edit, or a
+/// positional key such as `IndexInSheet`. A key the canonical form lacks is
+/// dropped when an encoder could have emitted it (the field was edited to
+/// its omitted default — see [`MODELLED_RECORD_KEYS`]) and replayed verbatim
+/// otherwise, as an Altium key this crate does not model. Canonical keys the
+/// record lacked are appended, except an [`IMPLICIT_DEFAULTS`] value the
+/// file left implicit. A record without raw segments — built from scratch —
+/// is the canonical form.
+fn replay_record(canonical: &str, raw: &[(String, String)]) -> String {
+    if raw.is_empty() {
+        return canonical.to_string();
+    }
+    let canonical_pairs: Vec<(&str, &str)> = canonical
+        .split('|')
+        .skip(1)
+        .map(|segment| segment.split_once('=').unwrap_or((segment, "")))
+        .collect();
+    let canonical_value = |key: &str| {
+        canonical_pairs
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case(key))
+            .map(|(_, v)| *v)
+    };
+    let decoded =
+        |value: &str| crate::altium::from_wire_text(value).unwrap_or_else(|| value.to_string());
+    let is_positional = |key: &str| POSITIONAL_KEYS.iter().any(|k| k.eq_ignore_ascii_case(key));
+
+    // A `%UTF8%` twin's bytes are a locale artefact of the writing machine
+    // (the golden's were widened through Windows-1250), so whether it goes
+    // back verbatim follows its plain key, not its own bytes.
+    let raw_value = |key: &str| {
+        raw.iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case(key))
+            .map(|(_, v)| v.as_str())
+    };
+    let plain_unchanged = |key: &str| {
+        let plain = key.strip_prefix("%UTF8%").unwrap_or(key);
+        match (raw_value(plain), canonical_value(plain)) {
+            (Some(read), Some(current)) => read == current || decoded(read) == decoded(current),
+            _ => false,
+        }
+    };
+
+    let mut placed: Vec<bool> = vec![false; canonical_pairs.len()];
+    let mut parts: Vec<String> = Vec::with_capacity(raw.len() + 2);
+    for (key, read) in raw {
+        if key.is_empty() {
+            parts.push(String::new());
+            continue;
+        }
+        if let Some(i) = canonical_pairs
+            .iter()
+            .position(|(k, _)| k.eq_ignore_ascii_case(key))
+        {
+            placed[i] = true;
+            let current = canonical_pairs[i].1;
+            let unchanged = !is_positional(key)
+                && (read == current
+                    || decoded(read) == decoded(current)
+                    || (key.starts_with("%UTF8%") && plain_unchanged(key)));
+            let value = if unchanged { read.as_str() } else { current };
+            parts.push(format!("{key}={value}"));
+        } else if !is_positional(key) && !is_modelled_record_key(key) {
+            parts.push(format!("{key}={read}"));
+        }
+    }
+    for (i, (key, value)) in canonical_pairs.iter().enumerate() {
+        let implicit = IMPLICIT_DEFAULTS
+            .iter()
+            .any(|(k, v)| k.eq_ignore_ascii_case(key) && v == value);
+        if !placed[i] && !implicit {
+            parts.push(format!("{key}={value}"));
+        }
+    }
+    format!("|{}", parts.join("|"))
 }
 
 /// Whether a parameter is Altium's own system `Comment` record — stored after
@@ -1428,30 +1627,64 @@ pub fn encode_data_stream(symbol: &Symbol) -> crate::altium::error::AltiumResult
                 if is_system_parameter(param) {
                     continue;
                 }
-                encode_parameter(param, index_counter)
+                replay_record(&encode_parameter(param, index_counter), &param.raw_params)
             }
-            SchPrimitiveKind::Rectangle => {
-                encode_rectangle(&symbol.rectangles[index], index_counter)
-            }
-            SchPrimitiveKind::Line => encode_line(&symbol.lines[index], index_counter),
-            SchPrimitiveKind::Polyline => encode_polyline(&symbol.polylines[index], index_counter),
-            SchPrimitiveKind::Polygon => encode_polygon(&symbol.polygons[index], index_counter),
-            SchPrimitiveKind::Arc => encode_arc(&symbol.arcs[index], index_counter),
-            SchPrimitiveKind::Pie => encode_pie(&symbol.pies[index], index_counter),
-            SchPrimitiveKind::Image => encode_image(&symbol.images[index], index_counter),
-            SchPrimitiveKind::TextFrame => {
-                encode_text_frame(&symbol.text_frames[index], index_counter)
-            }
-            SchPrimitiveKind::Bezier => encode_bezier(&symbol.beziers[index], index_counter),
-            SchPrimitiveKind::Ellipse => encode_ellipse(&symbol.ellipses[index], index_counter),
-            SchPrimitiveKind::RoundRect => {
-                encode_round_rect(&symbol.round_rects[index], index_counter)
-            }
-            SchPrimitiveKind::EllipticalArc => {
-                encode_elliptical_arc(&symbol.elliptical_arcs[index], index_counter)
-            }
-            SchPrimitiveKind::Label => encode_label(&symbol.labels[index], index_counter),
-            SchPrimitiveKind::Text => encode_text(&symbol.text[index], index_counter),
+            SchPrimitiveKind::Rectangle => replay_record(
+                &encode_rectangle(&symbol.rectangles[index], index_counter),
+                &symbol.rectangles[index].raw_params,
+            ),
+            SchPrimitiveKind::Line => replay_record(
+                &encode_line(&symbol.lines[index], index_counter),
+                &symbol.lines[index].raw_params,
+            ),
+            SchPrimitiveKind::Polyline => replay_record(
+                &encode_polyline(&symbol.polylines[index], index_counter),
+                &symbol.polylines[index].raw_params,
+            ),
+            SchPrimitiveKind::Polygon => replay_record(
+                &encode_polygon(&symbol.polygons[index], index_counter),
+                &symbol.polygons[index].raw_params,
+            ),
+            SchPrimitiveKind::Arc => replay_record(
+                &encode_arc(&symbol.arcs[index], index_counter),
+                &symbol.arcs[index].raw_params,
+            ),
+            SchPrimitiveKind::Pie => replay_record(
+                &encode_pie(&symbol.pies[index], index_counter),
+                &symbol.pies[index].raw_params,
+            ),
+            SchPrimitiveKind::Image => replay_record(
+                &encode_image(&symbol.images[index], index_counter),
+                &symbol.images[index].raw_params,
+            ),
+            SchPrimitiveKind::TextFrame => replay_record(
+                &encode_text_frame(&symbol.text_frames[index], index_counter),
+                &symbol.text_frames[index].raw_params,
+            ),
+            SchPrimitiveKind::Bezier => replay_record(
+                &encode_bezier(&symbol.beziers[index], index_counter),
+                &symbol.beziers[index].raw_params,
+            ),
+            SchPrimitiveKind::Ellipse => replay_record(
+                &encode_ellipse(&symbol.ellipses[index], index_counter),
+                &symbol.ellipses[index].raw_params,
+            ),
+            SchPrimitiveKind::RoundRect => replay_record(
+                &encode_round_rect(&symbol.round_rects[index], index_counter),
+                &symbol.round_rects[index].raw_params,
+            ),
+            SchPrimitiveKind::EllipticalArc => replay_record(
+                &encode_elliptical_arc(&symbol.elliptical_arcs[index], index_counter),
+                &symbol.elliptical_arcs[index].raw_params,
+            ),
+            SchPrimitiveKind::Label => replay_record(
+                &encode_label(&symbol.labels[index], index_counter),
+                &symbol.labels[index].raw_params,
+            ),
+            SchPrimitiveKind::Text => replay_record(
+                &encode_text(&symbol.text[index], index_counter),
+                &symbol.text[index].raw_params,
+            ),
         };
         write_text_record(&mut data, &record)?;
         index_counter += 1;
@@ -1473,7 +1706,7 @@ pub fn encode_data_stream(symbol: &Symbol) -> crate::altium::error::AltiumResult
     // Part Number carries OwnerPartId=-1 too and is still a content record
     // with a counter slot, stored before the graphics in authoring order.
     for param in symbol.parameters.iter().filter(|p| is_system_parameter(p)) {
-        let record = encode_parameter(param, 0);
+        let record = replay_record(&encode_parameter(param, 0), &param.raw_params);
         write_text_record(&mut data, &record)?;
     }
 
@@ -1676,15 +1909,43 @@ mod tests {
 
         #[test]
         fn the_limit_is_encoded_bytes_not_characters() {
-            // Windows-1252 is single-byte, so 255 non-ASCII characters fit
-            // where a UTF-8 length check would have wrongly rejected them.
+            // The description is Windows-1252 (single-byte), so 255 non-ASCII
+            // characters fit where a UTF-8 length check would have wrongly
+            // rejected them.
             let mut subject = pin();
-            subject.name = "\u{b5}".repeat(255); // 255 x MICRO SIGN
+            subject.description = "\u{b5}".repeat(255); // 255 x MICRO SIGN
             write_binary_pin(&mut Vec::new(), &subject)
                 .expect("255 encoded bytes is within the prefix");
+            subject.description = "\u{b5}".repeat(256);
+            rejects(
+                write_binary_pin(&mut Vec::new(), &subject),
+                "pin.description",
+            );
 
-            subject.name = "\u{b5}".repeat(256);
+            // The name is stored as UTF-8 bytes once it leaves ASCII, as
+            // Altium stores it, so its limit is the UTF-8 length: 127 micro
+            // signs are 254 bytes, 128 are 256.
+            let mut subject = pin();
+            subject.name = "\u{b5}".repeat(127);
+            write_binary_pin(&mut Vec::new(), &subject).expect("254 UTF-8 bytes fit");
+            subject.name = "\u{b5}".repeat(128);
             rejects(write_binary_pin(&mut Vec::new(), &subject), "pin.name");
+        }
+
+        /// A non-ASCII pin name is stored as its UTF-8 bytes — every one of
+        /// the golden's 52 such pins, `Résistance` included — never the code
+        /// page; an ASCII name stays single-byte.
+        #[test]
+        fn a_non_ascii_pin_name_is_stored_as_utf8_bytes() {
+            let mut subject = pin();
+            subject.name = "R\u{e9}sistance".to_string();
+            let mut data = Vec::new();
+            write_binary_pin(&mut data, &subject).unwrap();
+            let needle = b"\x0bR\xc3\xa9sistance";
+            assert!(
+                data.windows(needle.len()).any(|w| w == needle),
+                "UTF-8 bytes with an 11-byte length prefix: {data:?}"
+            );
         }
 
         #[test]
@@ -2116,6 +2377,165 @@ mod tests {
         );
     }
 
+    /// Every key any golden record carries is one an encoder can emit (or a
+    /// vertex key), so the replay's "a read key the canonical form lacks was
+    /// edited to its default" rule never mistakes an Altium key for one of
+    /// ours — and `MODELLED_RECORD_KEYS` cannot silently fall behind.
+    #[test]
+    fn every_golden_record_key_is_modelled() {
+        let lib = crate::altium::SchLib::open("scripts/samples/symbols.SchLib").unwrap();
+        let mut unmodelled = std::collections::BTreeSet::new();
+        for symbol in lib.iter() {
+            let records: Vec<&Vec<(String, String)>> = symbol
+                .rectangles
+                .iter()
+                .map(|r| &r.raw_params)
+                .chain(symbol.lines.iter().map(|r| &r.raw_params))
+                .chain(symbol.polylines.iter().map(|r| &r.raw_params))
+                .chain(symbol.polygons.iter().map(|r| &r.raw_params))
+                .chain(symbol.arcs.iter().map(|r| &r.raw_params))
+                .chain(symbol.pies.iter().map(|r| &r.raw_params))
+                .chain(symbol.images.iter().map(|r| &r.raw_params))
+                .chain(symbol.text_frames.iter().map(|r| &r.raw_params))
+                .chain(symbol.beziers.iter().map(|r| &r.raw_params))
+                .chain(symbol.ellipses.iter().map(|r| &r.raw_params))
+                .chain(symbol.round_rects.iter().map(|r| &r.raw_params))
+                .chain(symbol.elliptical_arcs.iter().map(|r| &r.raw_params))
+                .chain(symbol.labels.iter().map(|r| &r.raw_params))
+                .chain(symbol.text.iter().map(|r| &r.raw_params))
+                .chain(symbol.parameters.iter().map(|r| &r.raw_params))
+                .collect();
+            assert!(
+                !records.is_empty(),
+                "{}: every record carries its raw segments",
+                symbol.name
+            );
+            for raw in records {
+                assert!(
+                    !raw.is_empty(),
+                    "{}: a read record has raw segments",
+                    symbol.name
+                );
+                for (key, _) in raw {
+                    if !key.is_empty() && !is_modelled_record_key(key) {
+                        unmodelled.insert(key.clone());
+                    }
+                }
+            }
+        }
+        assert!(
+            unmodelled.is_empty(),
+            "golden keys no encoder emits: {unmodelled:?}"
+        );
+    }
+
+    /// The replay's four rules on one rectangle read from a UI-authored
+    /// library: verbatim while unchanged (no `LineWidth` invented), the
+    /// canonical value for an edited field, a cleared flag's key dropped, an
+    /// unmodelled Altium key kept in place, and the positional index renumbered.
+    #[test]
+    fn a_read_record_is_replayed_verbatim_until_edited() {
+        // As the UI stores it: no LineWidth, an unmodelled key in the middle.
+        let raw: Vec<(String, String)> = [
+            ("RECORD", "14"),
+            ("IsNotAccesible", "T"),
+            ("IndexInSheet", "3"),
+            ("OwnerPartId", "1"),
+            ("Location.X", "-20"),
+            ("Location.Y", "-10"),
+            ("Corner.X", "30"),
+            ("Corner.Y", "20"),
+            ("FUTUREKEY", "7"),
+            ("Color", "128"),
+            ("AreaColor", "11599871"),
+            ("IsSolid", "T"),
+            ("UniqueID", "GOHQXBJE"),
+        ]
+        .iter()
+        .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+        .collect();
+        let mut rect = Rectangle::new(-20, -10, 30, 20);
+        rect.filled = true;
+        rect.unique_id = Some("GOHQXBJE".to_string());
+        rect.raw_params = raw;
+
+        let verbatim = replay_record(&encode_rectangle(&rect, 3), &rect.raw_params);
+        assert_eq!(
+            verbatim,
+            "|RECORD=14|IsNotAccesible=T|IndexInSheet=3|OwnerPartId=1|Location.X=-20|Location.Y=-10|Corner.X=30|Corner.Y=20|FUTUREKEY=7|Color=128|AreaColor=11599871|IsSolid=T|UniqueID=GOHQXBJE"
+        );
+
+        // Moved to slot 0, corner edited, fill cleared, line width set.
+        rect.x2 = 35.0;
+        rect.filled = false;
+        rect.line_width = 2;
+        let edited = replay_record(&encode_rectangle(&rect, 0), &rect.raw_params);
+        assert_eq!(
+            edited,
+            "|RECORD=14|IsNotAccesible=T|OwnerPartId=1|Location.X=-20|Location.Y=-10|Corner.X=35|Corner.Y=20|FUTUREKEY=7|Color=128|AreaColor=11599871|UniqueID=GOHQXBJE|LineWidth=2"
+        );
+
+        // No raw segments: the canonical form, LineWidth and all.
+        rect.raw_params.clear();
+        assert!(
+            replay_record(&encode_rectangle(&rect, 0), &rect.raw_params).contains("|LineWidth=2|")
+        );
+        rect.line_width = 1;
+        assert!(
+            replay_record(&encode_rectangle(&rect, 0), &rect.raw_params).contains("|LineWidth=1|")
+        );
+    }
+
+    /// A `%UTF8%` twin goes back with the bytes it was read with — a locale
+    /// artefact of the writing machine — for as long as its plain key is
+    /// unchanged, and in the canonical form once the text is edited.
+    #[test]
+    fn a_utf8_twin_follows_its_plain_key() {
+        let raw: Vec<(String, String)> = [
+            ("RECORD", "4"),
+            ("OwnerPartId", "1"),
+            ("FontID", "1"),
+            ("%UTF8%Text", "R\u{c4}\u{82}\u{c2}\u{a9}sistance"),
+            ("", ""),
+            ("", ""),
+            ("Text", "R\u{c3}\u{a9}sistance"),
+            ("UniqueID", "ADKXLEQV"),
+        ]
+        .iter()
+        .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+        .collect();
+        let mut label = Label {
+            x: 0.0,
+            y: 0.0,
+            text: "R\u{e9}sistance".to_string(),
+            font_id: 1,
+            color: 0,
+            justification: TextJustification::BottomLeft,
+            rotation: 0.0,
+            is_mirrored: false,
+            is_hidden: false,
+            owner_part_id: 1,
+            display_flags: ShapeDisplayFlags::default(),
+            unique_id: Some("ADKXLEQV".to_string()),
+            raw_params: raw,
+        };
+        let replayed = replay_record(&encode_label(&label, 0), &label.raw_params);
+        assert!(
+            replayed.contains(
+                "|%UTF8%Text=R\u{c4}\u{82}\u{c2}\u{a9}sistance|||Text=R\u{c3}\u{a9}sistance|"
+            ),
+            "{replayed}"
+        );
+
+        label.text = "R2".to_string();
+        let edited = replay_record(&encode_label(&label, 0), &label.raw_params);
+        assert!(edited.contains("|||Text=R2|UniqueID=ADKXLEQV"), "{edited}");
+        assert!(
+            !edited.contains("%UTF8%"),
+            "an ASCII edit drops the twin: {edited}"
+        );
+    }
+
     #[test]
     fn a_symbol_with_no_recorded_order_leads_with_the_rectangles() {
         // Populating the lists directly leaves `primitive_order` empty, which is
@@ -2264,6 +2684,7 @@ mod tests {
         symbol.add_pin(Pin::new("B", "2", 15, 0, 5, PinOrientation::Right));
         symbol.add_line(Line::new(-10, 0, 10, 0));
         symbol.add_label(Label {
+            raw_params: Vec::new(),
             x: 0.0,
             y: 12.0,
             text: "hello".to_string(),
@@ -2601,6 +3022,7 @@ mod tests {
     #[test]
     fn test_label_booleans_only_when_true() {
         let mut label = Label {
+            raw_params: Vec::new(),
             x: 0.0,
             y: 0.0,
             text: "R".to_string(),
@@ -2632,6 +3054,7 @@ mod tests {
     #[test]
     fn test_arc_tags_is_not_accessible() {
         let arc = Arc {
+            raw_params: Vec::new(),
             x: 0.0,
             y: 0.0,
             radius: 10.0,
@@ -2656,6 +3079,7 @@ mod tests {
     fn test_colour_omitted_when_zero() {
         // Altium omits Color / AreaColor when 0 (AddNonZero); emits them otherwise.
         let mut arc = Arc {
+            raw_params: Vec::new(),
             x: 0.0,
             y: 0.0,
             radius: 10.0,
@@ -2681,6 +3105,7 @@ mod tests {
 
         let s = encode_text(
             &Text {
+                raw_params: Vec::new(),
                 x: 0.0,
                 y: 0.0,
                 text: "hi".to_string(),
@@ -2731,6 +3156,7 @@ mod tests {
         let line = encode_line(&Line::new(-5, 0, 5, 0), 1);
         let poly_line = encode_polyline(
             &Polyline {
+                raw_params: Vec::new(),
                 points: vec![(0.0, 0.0), (5.0, 5.0)],
                 line_width: 1,
                 color: 0,
@@ -2748,6 +3174,7 @@ mod tests {
         );
         let poly = encode_polygon(
             &Polygon {
+                raw_params: Vec::new(),
                 points: vec![(0.0, 0.0), (5.0, 0.0), (2.5, 5.0)],
                 line_width: 1,
                 line_color: 0,
@@ -2764,6 +3191,7 @@ mod tests {
         );
         let arc = encode_arc(
             &Arc {
+                raw_params: Vec::new(),
                 x: 0.0,
                 y: 0.0,
                 radius: 10.0,
@@ -2781,6 +3209,7 @@ mod tests {
         );
         let label = encode_label(
             &Label {
+                raw_params: Vec::new(),
                 x: 0.0,
                 y: 0.0,
                 text: "R".to_string(),
@@ -2870,6 +3299,7 @@ mod tests {
         // non-zero (the FRACSHAPES golden arc carries `Location.X_Frac=5000`
         // with no `Location.X` key); an on-grid zero still emits `=0`.
         let arc = Arc {
+            raw_params: Vec::new(),
             x: 0.05,
             y: 0.05,
             radius: 4.05,
@@ -2919,6 +3349,7 @@ mod tests {
         );
 
         let mut label = Label {
+            raw_params: Vec::new(),
             x: 0.0,
             y: 0.0,
             text: "caf\u{00E9}".to_string(), // "café" — non-ASCII, so promoted
@@ -2981,6 +3412,7 @@ mod tests {
             p.unique_id = Some("WXYZ7890".to_string());
             symbol.add_parameter(p);
             symbol.add_label(Label {
+                raw_params: Vec::new(),
                 x: 0.0,
                 y: 0.0,
                 text: value.to_string(),

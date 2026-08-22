@@ -954,6 +954,7 @@ mod tests {
         // annotation round-tripped back as a Label (reader: 3 => Text, 4 => Label).
         let mut symbol = Symbol::new("TXT");
         symbol.add_text(Text {
+            raw_params: Vec::new(),
             x: 5.0,
             y: 7.0,
             text: "NOTE".to_string(),
@@ -1388,6 +1389,7 @@ mod tests {
 
         // Add a filled triangle polygon
         let mut polygon = Polygon {
+            raw_params: Vec::new(),
             points: vec![(-30.0, 40.0), (-20.0, 30.0), (-10.0, 40.0)],
             line_width: 2,
             line_color: 0x00_00_FF, // Red border
@@ -1404,6 +1406,7 @@ mod tests {
 
         // Add an unfilled rectangle polygon
         polygon = Polygon {
+            raw_params: Vec::new(),
             points: vec![(0.0, 0.0), (20.0, 0.0), (20.0, 20.0), (0.0, 20.0)],
             line_width: 1,
             line_color: 0x00_80_00, // Green border
@@ -1469,6 +1472,7 @@ mod tests {
         // and NO LineStyle / Transparent tokens.
         let mut sym = Symbol::new("POLY_DEFAULT");
         sym.add_polygon(Polygon {
+            raw_params: Vec::new(),
             points: vec![(0.0, 0.0), (5.0, 0.0), (2.5, 5.0)],
             line_width: 1,
             line_color: 0,
@@ -1625,6 +1629,7 @@ mod tests {
 
         // AreaColor on Arc (Arc has no ::new — build a struct literal).
         let arc = Arc {
+            raw_params: Vec::new(),
             x: 0.0,
             y: 0.0,
             radius: 10.0,
@@ -1927,6 +1932,7 @@ mod tests {
         sym.add_round_rect(RoundRect::new(-5.5, -5.5, 5.5, 5.5, 1.25, 2.75));
         sym.add_ellipse(Ellipse::new(-1.5, 2.5, 7.5, 3.25));
         let arc = Arc {
+            raw_params: Vec::new(),
             x: -3.5,
             y: 4.25,
             radius: 6.75,
@@ -1943,6 +1949,7 @@ mod tests {
         sym.add_arc(arc);
         sym.add_bezier(Bezier::new(-0.5, 0.5, 1.5, 2.5, 3.5, 4.5, 5.5, -6.5));
         sym.add_polyline(Polyline {
+            raw_params: Vec::new(),
             points: vec![(-1.25, 0.0), (2.5, -3.75), (10.0, 0.5)],
             line_width: 1,
             color: 0,
@@ -1957,6 +1964,7 @@ mod tests {
             unique_id: None,
         });
         sym.add_polygon(Polygon {
+            raw_params: Vec::new(),
             points: vec![(-2.5, -2.5), (2.5, -2.5), (0.0, 3.125)],
             line_width: 1,
             line_color: 0,
@@ -1970,6 +1978,7 @@ mod tests {
             unique_id: None,
         });
         let label = Label {
+            raw_params: Vec::new(),
             x: -7.5,
             y: 0.25,
             text: "L".to_string(),

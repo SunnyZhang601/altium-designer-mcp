@@ -410,6 +410,16 @@ impl McpServer {
 
     // ==================== Cross-Library Copy ====================
 
+    /// Whether two paths name the same file. Resolved through the filesystem
+    /// so `./Lib.PcbLib` and an absolute spelling compare equal; a path that
+    /// cannot be resolved (it does not exist yet) is compared textually.
+    fn same_file(a: &str, b: &str) -> bool {
+        match (std::fs::canonicalize(a), std::fs::canonicalize(b)) {
+            (Ok(a), Ok(b)) => a == b,
+            _ => a == b,
+        }
+    }
+
     /// Copies a component from one Altium library to another.
     pub(crate) fn call_copy_component_cross_library(&self, arguments: &Value) -> ToolCallResult {
         let Some(source_filepath) = arguments.get("source_filepath").and_then(Value::as_str) else {
@@ -441,6 +451,15 @@ impl McpServer {
         }
         if let Err(e) = self.validate_path(target_filepath) {
             return ToolCallResult::error(e);
+        }
+        // Source and target being one file makes this a copy within a library,
+        // which copy_component handles — and gives the copy fresh identities,
+        // which the cross-library path (the same component in another file)
+        // deliberately does not.
+        if Self::same_file(source_filepath, target_filepath) {
+            return ToolCallResult::error(
+                "source_filepath and target_filepath are the same file; use copy_component to duplicate a component within a library",
+            );
         }
 
         // Validate new name if provided
@@ -791,6 +810,17 @@ impl McpServer {
         }
         if let Err(e) = self.validate_path(target_filepath) {
             return ToolCallResult::error(e);
+        }
+        // Merging a library into itself duplicates every component — with
+        // on_duplicate=rename, as identity-sharing twins. Nothing sensible
+        // comes of it, so refuse.
+        if let Some(path) = source_paths
+            .iter()
+            .find(|p| Self::same_file(p, target_filepath))
+        {
+            return ToolCallResult::error(format!(
+                "Source library '{path}' is the target library; a library cannot be merged into itself"
+            ));
         }
 
         // Determine file types from extensions
@@ -1784,6 +1814,38 @@ mod tests {
         assert_ne!(copy.rectangles[0].unique_id, orig.rectangles[0].unique_id);
         assert_ne!(copy.designator_unique_id, orig.designator_unique_id);
         assert_eq!(copy.pins.len(), 1, "geometry copied");
+    }
+
+    /// A cross-library copy or merge whose source IS the target is refused —
+    /// it would duplicate components as identity-sharing twins — and the check
+    /// sees through a differently spelled path to the same file.
+    #[test]
+    fn cross_library_tools_refuse_a_source_that_is_the_target() {
+        let dir = test_temp_dir();
+        let server = create_test_server(dir.path());
+        let path = dir.path().join("Self.PcbLib");
+        create_test_pcblib(&path);
+        // A differently spelled path to the same file.
+        let spelled = dir.path().join(".").join("Self.PcbLib");
+
+        let result = server.call_copy_component_cross_library(&json!({
+            "source_filepath": path.to_string_lossy(),
+            "target_filepath": spelled.to_string_lossy(),
+            "component_name": "CHIP_0402",
+            "new_name": "CHIP_0402_COPY",
+        }));
+        assert!(result.is_error);
+        assert!(get_result_text(&result).contains("use copy_component"));
+
+        let result = server.call_merge_libraries(&json!({
+            "source_filepaths": [spelled.to_string_lossy()],
+            "target_filepath": path.to_string_lossy(),
+            "on_duplicate": "rename",
+        }));
+        assert!(result.is_error);
+        assert!(get_result_text(&result).contains("cannot be merged into itself"));
+
+        assert_eq!(PcbLib::open(&path).unwrap().len(), 2, "nothing changed");
     }
 
     #[test]

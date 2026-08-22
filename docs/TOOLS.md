@@ -1119,4 +1119,4 @@ read_pcblib's list for that type), apply only the specified updates.
 | `filepath` | string | yes | Path to the .PcbLib file |
 | `index` | integer | yes | Zero-based index of the primitive within its type array |
 | `primitive_type` | enum | yes | Type of primitive to update. Addressed by `index` into that primitive list. Pads are not here — they have a designator, so use update_pad. (one of: track, arc, region, text, fill, via) |
-| `updates` | object | yes | Properties to update (only specified properties are changed). Valid properties depend on primitive_type. |
+| `updates` | object | yes | Properties to update (only specified properties are changed). Valid properties depend on primitive_type — track: x1, y1, x2, y2, width, layer; arc: x/x1, y/y1, radius, start_angle, end_angle, width, layer; text: x, y, height, rotation, text, layer; fill: x/x1, y/y1, x2, y2, rotation, layer; region: layer; via: x, y, diameter, hole_size, from_layer, to_layer. Any other key is refused. |

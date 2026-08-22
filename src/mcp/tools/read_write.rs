@@ -351,22 +351,19 @@ impl McpServer {
                                 .iter()
                                 .map(|pad| {
                                     let mut pad_json = serde_json::to_value(pad).unwrap();
-                                    // Remove per-layer data if stack_mode is Simple OR all values are uniform
-                                    let should_strip = pad.stack_mode == PadStackMode::Simple
-                                        || Self::pad_has_uniform_per_layer_data(pad);
-                                    if should_strip {
+                                    // A Simple pad's per-layer arrays carry nothing the
+                                    // main size/shape do not, so they go. A stacked pad
+                                    // keeps them — and its stack_mode — even when every
+                                    // layer happens to match: the mode is a stored
+                                    // property Altium shows, and rewriting it to
+                                    // "simple" here silently changed the pad on the next
+                                    // write.
+                                    if pad.stack_mode == PadStackMode::Simple {
                                         if let Value::Object(ref mut obj) = pad_json {
                                             obj.remove("per_layer_sizes");
                                             obj.remove("per_layer_shapes");
                                             obj.remove("per_layer_corner_radii");
                                             obj.remove("per_layer_offsets");
-                                            // Downgrade stack_mode to simple if we stripped uniform data
-                                            if pad.stack_mode != PadStackMode::Simple {
-                                                obj.insert(
-                                                    "stack_mode".to_string(),
-                                                    json!("simple"),
-                                                );
-                                            }
                                         }
                                     }
                                     pad_json
@@ -3909,12 +3906,12 @@ mod tests {
         // ---- read_pcblib / read_schlib ---------------------------------------
 
         #[test]
-        fn read_pcblib_compact_downgrades_a_uniform_full_stack_pad() {
-            // A FullStack pad whose per-layer values all match the primary pair
-            // carries no information: compact mode strips the arrays and
-            // reports the pad as simple. The reader always materialises all 32
-            // layers, so every one of them has to match or the pad is genuinely
-            // non-uniform and must keep its stack.
+        fn read_pcblib_compact_keeps_a_stacked_pad_intact() {
+            // Compact mode strips the per-layer arrays of a Simple pad only.
+            // A FullStack pad keeps its arrays and its stack_mode even when
+            // every layer matches the primary pair: the mode is a stored
+            // property Altium shows, and reporting it as "simple" turned the
+            // pad into a simple one on the next write.
             let dir = test_temp_dir();
             let server = create_test_server(dir.path());
             let path = dir.path().join("Stack.PcbLib");
@@ -3925,11 +3922,14 @@ mod tests {
                 "filepath": path.to_string_lossy(),
                 "footprints": [{
                     "name": "FP",
-                    "pads": [{
-                        "designator": "1", "x": 0.0, "y": 0.0, "width": 1.0, "height": 1.0,
-                        "stack_mode": "full_stack",
-                        "per_layer_sizes": uniform,
-                    }],
+                    "pads": [
+                        {
+                            "designator": "1", "x": 0.0, "y": 0.0, "width": 1.0, "height": 1.0,
+                            "stack_mode": "full_stack",
+                            "per_layer_sizes": uniform,
+                        },
+                        { "designator": "2", "x": 2.0, "y": 0.0, "width": 1.0, "height": 1.0 }
+                    ],
                 }],
             }));
             assert!(!written.is_error, "{}", get_result_text(&written));
@@ -3937,9 +3937,37 @@ mod tests {
             let r = server.call_read_pcblib(&json!({
                 "filepath": path.to_string_lossy(), "compact": true,
             }));
-            let pad_json = &parse_result_json(&r)["footprints"][0]["pads"][0];
-            assert_eq!(pad_json["stack_mode"], "simple");
-            assert!(pad_json.get("per_layer_sizes").is_none());
+            let pads = &parse_result_json(&r)["footprints"][0]["pads"];
+            assert_eq!(
+                pads[0]["stack_mode"], "full_stack",
+                "mode kept: {}",
+                pads[0]
+            );
+            assert_eq!(
+                pads[0]["per_layer_sizes"].as_array().map(Vec::len),
+                Some(32),
+                "arrays kept for a stacked pad: {}",
+                pads[0]
+            );
+            assert_eq!(pads[1]["stack_mode"], "simple");
+            assert!(
+                pads[1].get("per_layer_sizes").is_none(),
+                "a Simple pad's arrays are stripped: {}",
+                pads[1]
+            );
+
+            // And the compact output writes back to the same stack mode.
+            let back = dir.path().join("StackBack.PcbLib");
+            let rewritten = server.call_write_pcblib(&json!({
+                "filepath": back.to_string_lossy(),
+                "footprints": parse_result_json(&r)["footprints"],
+            }));
+            assert!(!rewritten.is_error, "{}", get_result_text(&rewritten));
+            let again = server.call_read_pcblib(&json!({ "filepath": back.to_string_lossy() }));
+            assert_eq!(
+                parse_result_json(&again)["footprints"][0]["pads"][0]["stack_mode"],
+                "full_stack"
+            );
         }
 
         #[test]

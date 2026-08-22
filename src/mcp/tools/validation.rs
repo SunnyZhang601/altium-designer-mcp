@@ -26,41 +26,6 @@ impl McpServer {
         Ok(())
     }
 
-    /// Checks if a pad's per-layer data is uniform (all layers have same values).
-    ///
-    /// When all per-layer values are identical, the data is redundant and can be
-    /// omitted in compact mode, even if the pad was stored with `FullStack` mode.
-    pub(crate) fn pad_has_uniform_per_layer_data(pad: &crate::altium::pcblib::Pad) -> bool {
-        // Check per_layer_sizes - all should match primary width/height
-        let sizes_uniform = pad.per_layer_sizes.as_ref().map_or(true, |sizes| {
-            sizes
-                .iter()
-                .all(|&(w, h)| (w - pad.width).abs() < 0.001 && (h - pad.height).abs() < 0.001)
-        });
-
-        // Check per_layer_shapes - all should match primary shape
-        let shapes_uniform = pad
-            .per_layer_shapes
-            .as_ref()
-            .map_or(true, |shapes| shapes.iter().all(|s| *s == pad.shape));
-
-        // Check per_layer_corner_radii - all should match primary corner_radius_percent
-        let primary_radius = pad.corner_radius_percent.unwrap_or(0);
-        let radii_uniform = pad
-            .per_layer_corner_radii
-            .as_ref()
-            .map_or(true, |radii| radii.iter().all(|&r| r == primary_radius));
-
-        // Check per_layer_offsets - all should be zero (no offset)
-        let offsets_uniform = pad.per_layer_offsets.as_ref().map_or(true, |offsets| {
-            offsets
-                .iter()
-                .all(|&(x, y)| x.abs() < 0.001 && y.abs() < 0.001)
-        });
-
-        sizes_uniform && shapes_uniform && radii_uniform && offsets_uniform
-    }
-
     /// Validates all coordinates in a footprint before writing.
     pub(crate) fn validate_footprint_coordinates(
         footprint: &crate::altium::pcblib::Footprint,
@@ -344,7 +309,7 @@ impl McpServer {
 
 #[cfg(test)]
 mod tests {
-    use crate::altium::pcblib::{Arc, Footprint, Layer, Pad, PadShape, Region, Track};
+    use crate::altium::pcblib::{Arc, Footprint, Layer, Pad, Region, Track};
     use crate::altium::schlib::{Ellipse, Line, Pin, PinOrientation, Rectangle, RoundRect, Symbol};
     use crate::mcp::server::McpServer;
 
@@ -637,36 +602,6 @@ mod tests {
         assert!(McpServer::validate_coordinate(6000.0, "x")
             .unwrap_err()
             .contains("exceeds"));
-    }
-
-    // ---- pad_has_uniform_per_layer_data ------------------------------------
-
-    #[test]
-    fn pad_uniform_when_no_per_layer_data() {
-        let pad = Pad::smd("1", 0.0, 0.0, 1.0, 1.0);
-        assert!(McpServer::pad_has_uniform_per_layer_data(&pad));
-    }
-
-    #[test]
-    fn pad_non_uniform_sizes_shapes_radii_offsets() {
-        let base = Pad::smd("1", 0.0, 0.0, 1.0, 1.0);
-
-        let mut sizes = base.clone();
-        sizes.per_layer_sizes = Some(vec![(2.0, 1.0)]); // width differs from 1.0
-        assert!(!McpServer::pad_has_uniform_per_layer_data(&sizes));
-
-        let mut shapes = base.clone();
-        shapes.per_layer_shapes = Some(vec![PadShape::Round]); // differs from primary
-        assert!(!McpServer::pad_has_uniform_per_layer_data(&shapes));
-
-        let mut radii = base.clone();
-        radii.corner_radius_percent = Some(0);
-        radii.per_layer_corner_radii = Some(vec![50]); // differs from 0
-        assert!(!McpServer::pad_has_uniform_per_layer_data(&radii));
-
-        let mut offsets = base;
-        offsets.per_layer_offsets = Some(vec![(0.5, 0.0)]); // non-zero offset
-        assert!(!McpServer::pad_has_uniform_per_layer_data(&offsets));
     }
 
     // ---- validate_footprint_coordinates ------------------------------------

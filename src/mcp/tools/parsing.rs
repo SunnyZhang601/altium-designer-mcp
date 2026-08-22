@@ -6,7 +6,54 @@
 use serde_json::Value;
 
 use crate::altium::pcblib::Footprint;
+use crate::altium::schlib::Symbol;
 use crate::mcp::server::{ErrorContext, McpServer, ToolCallResult};
+use crate::mcp::tools::allowed_keys;
+
+/// Maps a free-text component type to its reference-designator class letter,
+/// following the conventions of IEEE 315 / ASME Y14.44 (commercial usage).
+///
+/// Used as the fallback when a symbol is written without an explicit
+/// `designator_prefix`. Unknown or unspecified types resolve to `"U"`
+/// (integrated circuit / inseparable assembly), the most common case.
+// The explicit IC/regulator arm shares the `"U"` body with the wildcard
+// fallback; it is kept to document the recognised IC synonyms rather than
+// silently folding them into `_`.
+#[allow(clippy::match_same_arms)]
+pub fn ieee_designator_prefix(component_type: &str) -> &'static str {
+    match component_type.trim().to_ascii_lowercase().as_str() {
+        "resistor" | "res" | "potentiometer" | "pot" | "trimmer" | "rheostat" => "R",
+        "resistor_network" | "resistor_array" | "network" => "RN",
+        "thermistor" | "ntc" | "ptc" => "RT",
+        "varistor" | "mov" => "RV",
+        "capacitor" | "cap" => "C",
+        "inductor" | "coil" | "choke" | "ferrite" | "ferrite_bead" | "bead" => "L",
+        "diode" | "rectifier" | "schottky" | "zener" | "tvs" | "led" => "D",
+        "display" | "lamp" | "indicator" | "lightbulb" => "DS",
+        "transistor" | "mosfet" | "fet" | "bjt" | "igbt" | "jfet" => "Q",
+        "ic" | "integrated_circuit" | "microcircuit" | "opamp" | "mcu" | "regulator"
+        | "voltage_regulator" => "U",
+        "connector" | "header" | "jack" | "receptacle" => "J",
+        "plug" => "P",
+        "socket" => "X",
+        "crystal" | "oscillator" | "resonator" | "xtal" => "Y",
+        "switch" | "button" | "pushbutton" | "dip_switch" | "dipswitch" => "S",
+        "relay" | "contactor" => "K",
+        "transformer" => "T",
+        "fuse" => "F",
+        "filter" => "FL",
+        "battery" | "cell" => "BT",
+        "test_point" | "testpoint" => "TP",
+        "terminal_block" | "terminal" => "TB",
+        "speaker" | "loudspeaker" | "buzzer" => "LS",
+        "microphone" => "MK",
+        "motor" | "fan" | "blower" => "B",
+        "module" | "assembly" | "subassembly" => "A",
+        "mechanical" | "standoff" | "screw" | "mounting" => "MP",
+        "jumper" | "wire" | "cable" => "W",
+        _ => "U",
+    }
+}
 
 /// Reads a JSON integer field as `i32`, returning `None` if it is missing, not
 /// an integer, or outside `i32` range — so an out-of-range value is rejected
@@ -182,10 +229,346 @@ impl McpServer {
 
     // ==================== Primitive Parsing Helpers ====================
 
+    /// Parses one symbol object — the `symbols[]` element of `write_schlib`
+    /// and the `symbol` of `update_component` — into a [`Symbol`], refusing
+    /// unknown keys on every object and validating the geometry. Both tools
+    /// go through here so neither can fall behind the other on a record kind
+    /// or a replay field. The designator is always assigned: explicit
+    /// `designator`, else `designator_prefix`, else `component_type` via the
+    /// IEEE 315 / ASME Y14.44 table, else `U`.
+    ///
+    /// `operation` names the calling tool; `default_name` is the symbol name
+    /// when the object carries none.
+    #[allow(clippy::too_many_lines)] // one straight-line pass over every symbol field
+    #[allow(clippy::unused_self)] // kept as a method beside parse_footprint_json
+    pub(crate) fn parse_symbol_json(
+        &self,
+        sym_json: &Value,
+        keys: &allowed_keys::SchLibKeys,
+        operation: &str,
+        filepath: &str,
+        default_name: &str,
+    ) -> Result<Symbol, ToolCallResult> {
+        use crate::altium::schlib::FootprintModel;
+
+        Self::refuse_unknown(sym_json, &keys.symbol)?;
+        let name = sym_json
+            .get("name")
+            .and_then(Value::as_str)
+            .unwrap_or(default_name);
+        let mut symbol = Symbol::new(name);
+
+        if let Some(desc) = sym_json.get("description").and_then(Value::as_str) {
+            symbol.description = desc.to_string();
+        }
+
+        // Always assign a reference designator. Precedence:
+        //   1. explicit `designator`
+        //   2. explicit `designator_prefix`
+        //   3. `component_type` mapped via IEEE 315 / ASME Y14.44 table
+        //   4. fallback "U" (integrated circuit)
+        // so every symbol carries a `<prefix>?` designator in the SchLib.
+        let designator = sym_json
+            .get("designator")
+            .and_then(Value::as_str)
+            .map_or_else(
+                || {
+                    let prefix = sym_json
+                        .get("designator_prefix")
+                        .and_then(Value::as_str)
+                        .map(str::to_string)
+                        .or_else(|| {
+                            sym_json
+                                .get("component_type")
+                                .and_then(Value::as_str)
+                                .map(|t| ieee_designator_prefix(t).to_string())
+                        })
+                        .unwrap_or_else(|| "U".to_string());
+                    format!("{prefix}?")
+                },
+                str::to_string,
+            );
+        symbol.designator = designator;
+
+        // Designator text position (RECORD=34 Location.X/Y) and identity.
+        // Defaults -5/5 per the AD24 golden; the unique id is reused when
+        // supplied (e.g. a read-modify-write) so the record is deterministic.
+        if let Some(x) = sym_json.get("designator_x").and_then(Value::as_f64) {
+            symbol.designator_x = x;
+        }
+        if let Some(y) = sym_json.get("designator_y").and_then(Value::as_f64) {
+            symbol.designator_y = y;
+        }
+        if let Some(uid) = sym_json.get("designator_unique_id").and_then(Value::as_str) {
+            symbol.designator_unique_id = Some(uid.to_string());
+        }
+
+        // Parse part_count for multi-part symbols (e.g., dual op-amp)
+        if let Some(part_count) = sym_json.get("part_count").and_then(Value::as_u64) {
+            #[allow(clippy::cast_possible_truncation)]
+            {
+                symbol.part_count = part_count.clamp(1, 255) as u32;
+            }
+        }
+
+        // Parse the remaining symbol header fields (mirrors
+        // update_schlib_component): export_schlib emits them, so an
+        // export -> write_schlib round-trip must not reset them to
+        // defaults (e.g. collapsing a two-display-mode symbol to one).
+        if let Some(v) = sym_json.get("display_mode_count").and_then(Value::as_u64) {
+            symbol.display_mode_count = u32::try_from(v).unwrap_or(symbol.display_mode_count);
+        }
+        if let Some(v) = sym_json.get("current_part_id").and_then(Value::as_u64) {
+            symbol.current_part_id = u32::try_from(v).unwrap_or(symbol.current_part_id);
+        }
+        if let Some(v) = sym_json.get("part_id_locked").and_then(Value::as_bool) {
+            symbol.part_id_locked = v;
+        }
+        if let Some(v) = sym_json.get("source_library_name").and_then(Value::as_str) {
+            symbol.source_library_name = v.to_string();
+        }
+        if let Some(v) = sym_json.get("target_file_name").and_then(Value::as_str) {
+            symbol.target_file_name = v.to_string();
+        }
+
+        // Parse pins
+        if let Some(pins) = sym_json.get("pins").and_then(Value::as_array) {
+            for (i, pin_json) in pins.iter().enumerate() {
+                Self::refuse_unknown(pin_json, &keys.pin)?;
+                let pin = Self::parse_schlib_pin(pin_json)
+                    .ok_or_else(|| Self::malformed(operation, filepath, name, "pin", i))?;
+                symbol.add_pin(pin);
+            }
+        }
+
+        // Parse rectangles
+        if let Some(rects) = sym_json.get("rectangles").and_then(Value::as_array) {
+            for (i, rect_json) in rects.iter().enumerate() {
+                Self::refuse_unknown(rect_json, allowed_keys::RECTANGLE)?;
+                let rect = Self::parse_schlib_rectangle(rect_json)
+                    .ok_or_else(|| Self::malformed(operation, filepath, name, "rectangle", i))?;
+                symbol.add_rectangle(rect);
+            }
+        }
+
+        // Parse rounded rectangles
+        if let Some(round_rects) = sym_json.get("round_rects").and_then(Value::as_array) {
+            for (i, round_rect_json) in round_rects.iter().enumerate() {
+                Self::refuse_unknown(round_rect_json, allowed_keys::ROUND_RECT)?;
+                let round_rect = Self::parse_schlib_round_rect(round_rect_json)
+                    .ok_or_else(|| Self::malformed(operation, filepath, name, "round_rect", i))?;
+                symbol.add_round_rect(round_rect);
+            }
+        }
+
+        // Parse lines
+        if let Some(lines) = sym_json.get("lines").and_then(Value::as_array) {
+            for (i, line_json) in lines.iter().enumerate() {
+                Self::refuse_unknown(line_json, allowed_keys::LINE)?;
+                let line = Self::parse_schlib_line(line_json)
+                    .ok_or_else(|| Self::malformed(operation, filepath, name, "line", i))?;
+                symbol.add_line(line);
+            }
+        }
+
+        // Parse polylines
+        if let Some(polylines) = sym_json.get("polylines").and_then(Value::as_array) {
+            for (i, polyline_json) in polylines.iter().enumerate() {
+                Self::refuse_unknown(polyline_json, allowed_keys::POLYLINE)?;
+                let polyline = Self::parse_schlib_polyline(polyline_json)
+                    .ok_or_else(|| Self::malformed(operation, filepath, name, "polyline", i))?;
+                symbol.add_polyline(polyline);
+            }
+        }
+
+        // Parse polygons
+        if let Some(polygons) = sym_json.get("polygons").and_then(Value::as_array) {
+            for (i, polygon_json) in polygons.iter().enumerate() {
+                Self::refuse_unknown(polygon_json, allowed_keys::POLYGON)?;
+                let polygon = Self::parse_schlib_polygon(polygon_json)
+                    .ok_or_else(|| Self::malformed(operation, filepath, name, "polygon", i))?;
+                symbol.add_polygon(polygon);
+            }
+        }
+
+        // Parse arcs
+        if let Some(arcs) = sym_json.get("arcs").and_then(Value::as_array) {
+            for (i, arc_json) in arcs.iter().enumerate() {
+                // SchLib arcs are centre/radius/angle based, NOT layer-based like PcbLib arcs; the
+                // allow-list must match the documented fields in tool_definitions or every arc is
+                // rejected as an "unknown field" (was erroneously copied from the PcbLib arc as ["layer"]).
+                Self::refuse_unknown(arc_json, allowed_keys::ARC)?;
+                let arc = Self::parse_schlib_arc(arc_json)
+                    .ok_or_else(|| Self::malformed(operation, filepath, name, "arc", i))?;
+                symbol.add_arc(arc);
+            }
+        }
+
+        if let Some(pies) = sym_json.get("pies").and_then(Value::as_array) {
+            for (i, pie_json) in pies.iter().enumerate() {
+                Self::refuse_unknown(pie_json, allowed_keys::PIE)?;
+                let pie = Self::parse_schlib_pie(pie_json)
+                    .ok_or_else(|| Self::malformed(operation, filepath, name, "pie", i))?;
+                symbol.add_pie(pie);
+            }
+        }
+
+        if let Some(images) = sym_json.get("images").and_then(Value::as_array) {
+            for (i, image_json) in images.iter().enumerate() {
+                Self::refuse_unknown(image_json, allowed_keys::IMAGE)?;
+                let image = Self::parse_schlib_image(image_json)
+                    .ok_or_else(|| Self::malformed(operation, filepath, name, "image", i))?;
+                symbol.add_image(image);
+            }
+        }
+
+        if let Some(text_frames) = sym_json.get("text_frames").and_then(Value::as_array) {
+            for (i, frame_json) in text_frames.iter().enumerate() {
+                Self::refuse_unknown(frame_json, allowed_keys::TEXT_FRAME)?;
+                let text_frame = Self::parse_schlib_text_frame(frame_json)
+                    .ok_or_else(|| Self::malformed(operation, filepath, name, "text_frame", i))?;
+                symbol.add_text_frame(text_frame);
+            }
+        }
+
+        if let Some(beziers) = sym_json.get("beziers").and_then(Value::as_array) {
+            for (i, bezier_json) in beziers.iter().enumerate() {
+                Self::refuse_unknown(bezier_json, allowed_keys::BEZIER)?;
+                let bezier = Self::parse_schlib_bezier(bezier_json)
+                    .ok_or_else(|| Self::malformed(operation, filepath, name, "bezier", i))?;
+                symbol.add_bezier(bezier);
+            }
+        }
+
+        if let Some(ell_arcs) = sym_json.get("elliptical_arcs").and_then(Value::as_array) {
+            for (i, ell_arc_json) in ell_arcs.iter().enumerate() {
+                Self::refuse_unknown(ell_arc_json, allowed_keys::ELLIPTICAL_ARC)?;
+                let ell_arc = Self::parse_schlib_elliptical_arc(ell_arc_json).ok_or_else(|| {
+                    Self::malformed(operation, filepath, name, "elliptical_arc", i)
+                })?;
+                symbol.add_elliptical_arc(ell_arc);
+            }
+        }
+
+        // Parse ellipses
+        if let Some(ellipses) = sym_json.get("ellipses").and_then(Value::as_array) {
+            for (i, ellipse_json) in ellipses.iter().enumerate() {
+                Self::refuse_unknown(ellipse_json, allowed_keys::ELLIPSE)?;
+                let ellipse = Self::parse_schlib_ellipse(ellipse_json)
+                    .ok_or_else(|| Self::malformed(operation, filepath, name, "ellipse", i))?;
+                symbol.add_ellipse(ellipse);
+            }
+        }
+
+        // Parse labels
+        if let Some(labels) = sym_json.get("labels").and_then(Value::as_array) {
+            for (i, label_json) in labels.iter().enumerate() {
+                Self::refuse_unknown(label_json, allowed_keys::LABEL)?;
+                let label = Self::parse_schlib_label(label_json)
+                    .ok_or_else(|| Self::malformed(operation, filepath, name, "label", i))?;
+                symbol.add_label(label);
+            }
+        }
+
+        // Parse text annotations
+        if let Some(texts) = sym_json.get("text").and_then(Value::as_array) {
+            for (i, text_json) in texts.iter().enumerate() {
+                Self::refuse_unknown(text_json, allowed_keys::TEXT)?;
+                let text = Self::parse_schlib_text(text_json)
+                    .ok_or_else(|| Self::malformed(operation, filepath, name, "text", i))?;
+                symbol.add_text(text);
+            }
+        }
+
+        // Parse parameters
+        if let Some(params) = sym_json.get("parameters").and_then(Value::as_array) {
+            for (i, param_json) in params.iter().enumerate() {
+                Self::refuse_unknown(param_json, allowed_keys::PARAMETER)?;
+                let param = Self::parse_schlib_parameter(param_json)
+                    .ok_or_else(|| Self::malformed(operation, filepath, name, "parameter", i))?;
+                symbol.add_parameter(param);
+            }
+        }
+
+        // Parse footprint references
+        if let Some(footprints) = sym_json.get("footprints").and_then(Value::as_array) {
+            for (i, fp_json) in footprints.iter().enumerate() {
+                // A footprint reference is a model link, not an embedded
+                // footprint: name, description, library_path, and the
+                // read-preserved identity a replay carries back.
+                Self::refuse_unknown(fp_json, &keys.footprint)?;
+                let fp_name = fp_json.get("name").and_then(Value::as_str).ok_or_else(|| {
+                    Self::malformed(operation, filepath, name, "footprint link", i)
+                })?;
+                {
+                    let mut fp = FootprintModel::new(fp_name);
+                    if let Some(desc) = fp_json.get("description").and_then(Value::as_str) {
+                        fp.description = desc.to_string();
+                    }
+                    // Optional PcbLib path -> ModelDatafile0, so Altium can
+                    // resolve the footprint instead of reporting "not found".
+                    if let Some(lib_path) = fp_json.get("library_path").and_then(Value::as_str) {
+                        fp.library_path = Some(lib_path.to_string());
+                    }
+                    fp.is_current = fp_json
+                        .get("is_current")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false);
+                    fp.unique_id = fp_json
+                        .get("unique_id")
+                        .and_then(Value::as_str)
+                        .map(str::to_string);
+                    symbol.add_footprint(fp);
+                }
+            }
+        }
+
+        // The interleaved record order `read_schlib` reported; replaying it
+        // replaces the grouped order the add_* calls accumulated, so a
+        // read-modify-write keeps the source's record order.
+        if let Some(order) = sym_json.get("primitive_order") {
+            match serde_json::from_value(order.clone()) {
+                Ok(kinds) => symbol.primitive_order = kinds,
+                Err(e) => {
+                    tracing::debug!(error = %e, "invalid primitive_order; using default order");
+                }
+            }
+        }
+
+        // Out-of-range or non-finite geometry is refused here so both tools
+        // report it the same way.
+        if let Err(e) = Self::validate_symbol_coordinates(&symbol) {
+            return Err(ToolCallResult::error(e));
+        }
+
+        Ok(symbol)
+    }
+
     /// Refuses a JSON object carrying a key outside `keys` (see
     /// [`check_unknown_fields`](Self::check_unknown_fields)).
     fn refuse_unknown(json: &Value, keys: &[&str]) -> Result<(), ToolCallResult> {
         Self::check_unknown_fields(json, keys).map_err(ToolCallResult::error)
+    }
+
+    /// The error for an object its parser could not build: a required field
+    /// missing or of the wrong type. Named and indexed like a malformed pad,
+    /// so a bad record is refused rather than silently left out of the file.
+    fn malformed(
+        operation: &str,
+        filepath: &str,
+        component: &str,
+        kind: &str,
+        index: usize,
+    ) -> ToolCallResult {
+        ToolCallResult::error_with_context(
+            ErrorContext::new(
+                operation,
+                format!("Malformed {kind}: a required field is missing or invalid"),
+            )
+            .with_filepath(filepath)
+            .with_component(component)
+            .with_details(format!("Failed to parse {kind} at index {index}")),
+        )
     }
 
     /// Parses one footprint object — the `footprints[]` element of
@@ -200,7 +583,7 @@ impl McpServer {
     pub(crate) fn parse_footprint_json(
         &self,
         fp_json: &Value,
-        keys: &crate::mcp::tools::allowed_keys::PcbLibKeys,
+        keys: &allowed_keys::PcbLibKeys,
         operation: &str,
         filepath: &str,
         default_name: &str,
@@ -310,21 +693,21 @@ impl McpServer {
 
         // Parse regions
         if let Some(regions) = fp_json.get("regions").and_then(Value::as_array) {
-            for region_json in regions {
+            for (i, region_json) in regions.iter().enumerate() {
                 Self::refuse_unknown(region_json, &keys.region)?;
-                if let Some(region) = Self::parse_region(region_json) {
-                    footprint.add_region(region);
-                }
+                let region = Self::parse_region(region_json)
+                    .ok_or_else(|| Self::malformed(operation, filepath, name, "region", i))?;
+                footprint.add_region(region);
             }
         }
 
         // Parse text
         if let Some(texts) = fp_json.get("text").and_then(Value::as_array) {
-            for text_json in texts {
+            for (i, text_json) in texts.iter().enumerate() {
                 Self::refuse_unknown(text_json, &keys.text)?;
-                if let Some(text) = Self::parse_text(text_json) {
-                    footprint.add_text(text);
-                }
+                let text = Self::parse_text(text_json)
+                    .ok_or_else(|| Self::malformed(operation, filepath, name, "text", i))?;
+                footprint.add_text(text);
             }
         }
 

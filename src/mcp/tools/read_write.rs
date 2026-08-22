@@ -5,51 +5,6 @@ use serde_json::{json, Value};
 use crate::mcp::server::{ErrorContext, McpServer, ToolCallResult};
 use crate::mcp::tools::allowed_keys;
 
-/// Maps a free-text component type to its reference-designator class letter,
-/// following the conventions of IEEE 315 / ASME Y14.44 (commercial usage).
-///
-/// Used as the fallback when a symbol is written without an explicit
-/// `designator_prefix`. Unknown or unspecified types resolve to `"U"`
-/// (integrated circuit / inseparable assembly), the most common case.
-// The explicit IC/regulator arm shares the `"U"` body with the wildcard
-// fallback; it is kept to document the recognised IC synonyms rather than
-// silently folding them into `_`.
-#[allow(clippy::match_same_arms)]
-fn ieee_designator_prefix(component_type: &str) -> &'static str {
-    match component_type.trim().to_ascii_lowercase().as_str() {
-        "resistor" | "res" | "potentiometer" | "pot" | "trimmer" | "rheostat" => "R",
-        "resistor_network" | "resistor_array" | "network" => "RN",
-        "thermistor" | "ntc" | "ptc" => "RT",
-        "varistor" | "mov" => "RV",
-        "capacitor" | "cap" => "C",
-        "inductor" | "coil" | "choke" | "ferrite" | "ferrite_bead" | "bead" => "L",
-        "diode" | "rectifier" | "schottky" | "zener" | "tvs" | "led" => "D",
-        "display" | "lamp" | "indicator" | "lightbulb" => "DS",
-        "transistor" | "mosfet" | "fet" | "bjt" | "igbt" | "jfet" => "Q",
-        "ic" | "integrated_circuit" | "microcircuit" | "opamp" | "mcu" | "regulator"
-        | "voltage_regulator" => "U",
-        "connector" | "header" | "jack" | "receptacle" => "J",
-        "plug" => "P",
-        "socket" => "X",
-        "crystal" | "oscillator" | "resonator" | "xtal" => "Y",
-        "switch" | "button" | "pushbutton" | "dip_switch" | "dipswitch" => "S",
-        "relay" | "contactor" => "K",
-        "transformer" => "T",
-        "fuse" => "F",
-        "filter" => "FL",
-        "battery" | "cell" => "BT",
-        "test_point" | "testpoint" => "TP",
-        "terminal_block" | "terminal" => "TB",
-        "speaker" | "loudspeaker" | "buzzer" => "LS",
-        "microphone" => "MK",
-        "motor" | "fan" | "blower" => "B",
-        "module" | "assembly" | "subassembly" => "A",
-        "mechanical" | "standoff" | "screw" | "mounting" => "MP",
-        "jumper" | "wire" | "cable" => "W",
-        _ => "U",
-    }
-}
-
 /// Computes a pin's connection-tip coordinate from its body-attach end `(x,y)`,
 /// `length`, and `orientation`, mirroring how the pin is drawn: the tip is
 /// `length` units from `(x,y)` in the `orientation` direction.
@@ -285,14 +240,6 @@ fn body_3d_summary(fp: &crate::altium::pcblib::Footprint, assumed_height: bool) 
         "note": "No 3D body written. Set component_bodies[].overall_height to the real \
                  part height, or pass auto_3d_body:true for a flagged 1.0 mm placeholder.",
     })
-}
-
-macro_rules! check_keys {
-    ($json:expr, $keys:expr) => {
-        if let Err(e) = McpServer::check_unknown_fields($json, $keys) {
-            return crate::mcp::server::ToolCallResult::error(e);
-        }
-    };
 }
 
 impl McpServer {
@@ -852,7 +799,7 @@ impl McpServer {
     /// Writes symbols to a `SchLib` file.
     #[allow(clippy::too_many_lines)]
     pub(crate) fn call_write_schlib(&self, arguments: &Value) -> ToolCallResult {
-        use crate::altium::schlib::{FootprintModel, SchLib, Symbol};
+        use crate::altium::schlib::SchLib;
 
         let Some(filepath) = arguments.get("filepath").and_then(Value::as_str) else {
             return ToolCallResult::error("Missing required parameter: filepath");
@@ -945,291 +892,16 @@ impl McpServer {
 
         let keys = allowed_keys::SchLibKeys::new();
         for sym_json in symbols_json {
-            check_keys!(sym_json, &keys.symbol);
-            let name = sym_json
-                .get("name")
-                .and_then(Value::as_str)
-                .unwrap_or("Unnamed");
-            let mut symbol = Symbol::new(name);
-
-            if let Some(desc) = sym_json.get("description").and_then(Value::as_str) {
-                symbol.description = desc.to_string();
-            }
-
-            // Always assign a reference designator. Precedence:
-            //   1. explicit `designator`
-            //   2. explicit `designator_prefix`
-            //   3. `component_type` mapped via IEEE 315 / ASME Y14.44 table
-            //   4. fallback "U" (integrated circuit)
-            // so every symbol carries a `<prefix>?` designator in the SchLib.
-            let designator = sym_json
-                .get("designator")
-                .and_then(Value::as_str)
-                .map_or_else(
-                    || {
-                        let prefix = sym_json
-                            .get("designator_prefix")
-                            .and_then(Value::as_str)
-                            .map(str::to_string)
-                            .or_else(|| {
-                                sym_json
-                                    .get("component_type")
-                                    .and_then(Value::as_str)
-                                    .map(|t| ieee_designator_prefix(t).to_string())
-                            })
-                            .unwrap_or_else(|| "U".to_string());
-                        format!("{prefix}?")
-                    },
-                    str::to_string,
-                );
-            symbol.designator = designator;
-
-            // Designator text position (RECORD=34 Location.X/Y) and identity.
-            // Defaults -5/5 per the AD24 golden; the unique id is reused when
-            // supplied (e.g. a read-modify-write) so the record is deterministic.
-            if let Some(x) = sym_json.get("designator_x").and_then(Value::as_f64) {
-                symbol.designator_x = x;
-            }
-            if let Some(y) = sym_json.get("designator_y").and_then(Value::as_f64) {
-                symbol.designator_y = y;
-            }
-            if let Some(uid) = sym_json.get("designator_unique_id").and_then(Value::as_str) {
-                symbol.designator_unique_id = Some(uid.to_string());
-            }
-
-            // Parse part_count for multi-part symbols (e.g., dual op-amp)
-            if let Some(part_count) = sym_json.get("part_count").and_then(Value::as_u64) {
-                #[allow(clippy::cast_possible_truncation)]
-                {
-                    symbol.part_count = part_count.clamp(1, 255) as u32;
-                }
-            }
-
-            // Parse the remaining symbol header fields (mirrors
-            // update_schlib_component): export_schlib emits them, so an
-            // export -> write_schlib round-trip must not reset them to
-            // defaults (e.g. collapsing a two-display-mode symbol to one).
-            if let Some(v) = sym_json.get("display_mode_count").and_then(Value::as_u64) {
-                symbol.display_mode_count = u32::try_from(v).unwrap_or(symbol.display_mode_count);
-            }
-            if let Some(v) = sym_json.get("current_part_id").and_then(Value::as_u64) {
-                symbol.current_part_id = u32::try_from(v).unwrap_or(symbol.current_part_id);
-            }
-            if let Some(v) = sym_json.get("part_id_locked").and_then(Value::as_bool) {
-                symbol.part_id_locked = v;
-            }
-            if let Some(v) = sym_json.get("source_library_name").and_then(Value::as_str) {
-                symbol.source_library_name = v.to_string();
-            }
-            if let Some(v) = sym_json.get("target_file_name").and_then(Value::as_str) {
-                symbol.target_file_name = v.to_string();
-            }
-
-            // Parse pins
-            if let Some(pins) = sym_json.get("pins").and_then(Value::as_array) {
-                for pin_json in pins {
-                    check_keys!(pin_json, &keys.pin);
-                    if let Some(pin) = Self::parse_schlib_pin(pin_json) {
-                        symbol.add_pin(pin);
-                    }
-                }
-            }
-
-            // Parse rectangles
-            if let Some(rects) = sym_json.get("rectangles").and_then(Value::as_array) {
-                for rect_json in rects {
-                    check_keys!(rect_json, allowed_keys::RECTANGLE);
-                    if let Some(rect) = Self::parse_schlib_rectangle(rect_json) {
-                        symbol.add_rectangle(rect);
-                    }
-                }
-            }
-
-            // Parse rounded rectangles
-            if let Some(round_rects) = sym_json.get("round_rects").and_then(Value::as_array) {
-                for round_rect_json in round_rects {
-                    check_keys!(round_rect_json, allowed_keys::ROUND_RECT);
-                    if let Some(round_rect) = Self::parse_schlib_round_rect(round_rect_json) {
-                        symbol.add_round_rect(round_rect);
-                    }
-                }
-            }
-
-            // Parse lines
-            if let Some(lines) = sym_json.get("lines").and_then(Value::as_array) {
-                for line_json in lines {
-                    check_keys!(line_json, allowed_keys::LINE);
-                    if let Some(line) = Self::parse_schlib_line(line_json) {
-                        symbol.add_line(line);
-                    }
-                }
-            }
-
-            // Parse polylines
-            if let Some(polylines) = sym_json.get("polylines").and_then(Value::as_array) {
-                for polyline_json in polylines {
-                    check_keys!(polyline_json, allowed_keys::POLYLINE);
-                    if let Some(polyline) = Self::parse_schlib_polyline(polyline_json) {
-                        symbol.add_polyline(polyline);
-                    }
-                }
-            }
-
-            // Parse polygons
-            if let Some(polygons) = sym_json.get("polygons").and_then(Value::as_array) {
-                for polygon_json in polygons {
-                    check_keys!(polygon_json, allowed_keys::POLYGON);
-                    if let Some(polygon) = Self::parse_schlib_polygon(polygon_json) {
-                        symbol.add_polygon(polygon);
-                    }
-                }
-            }
-
-            // Parse arcs
-            if let Some(arcs) = sym_json.get("arcs").and_then(Value::as_array) {
-                for arc_json in arcs {
-                    // SchLib arcs are centre/radius/angle based, NOT layer-based like PcbLib arcs; the
-                    // allow-list must match the documented fields in tool_definitions or every arc is
-                    // rejected as an "unknown field" (was erroneously copied from the PcbLib arc as ["layer"]).
-                    check_keys!(arc_json, allowed_keys::ARC);
-                    if let Some(arc) = Self::parse_schlib_arc(arc_json) {
-                        symbol.add_arc(arc);
-                    }
-                }
-            }
-
-            if let Some(pies) = sym_json.get("pies").and_then(Value::as_array) {
-                for pie_json in pies {
-                    check_keys!(pie_json, allowed_keys::PIE);
-                    if let Some(pie) = Self::parse_schlib_pie(pie_json) {
-                        symbol.add_pie(pie);
-                    }
-                }
-            }
-
-            if let Some(images) = sym_json.get("images").and_then(Value::as_array) {
-                for image_json in images {
-                    check_keys!(image_json, allowed_keys::IMAGE);
-                    if let Some(image) = Self::parse_schlib_image(image_json) {
-                        symbol.add_image(image);
-                    }
-                }
-            }
-
-            if let Some(text_frames) = sym_json.get("text_frames").and_then(Value::as_array) {
-                for frame_json in text_frames {
-                    check_keys!(frame_json, allowed_keys::TEXT_FRAME);
-                    if let Some(text_frame) = Self::parse_schlib_text_frame(frame_json) {
-                        symbol.add_text_frame(text_frame);
-                    }
-                }
-            }
-
-            if let Some(beziers) = sym_json.get("beziers").and_then(Value::as_array) {
-                for bezier_json in beziers {
-                    check_keys!(bezier_json, allowed_keys::BEZIER);
-                    if let Some(bezier) = Self::parse_schlib_bezier(bezier_json) {
-                        symbol.add_bezier(bezier);
-                    }
-                }
-            }
-
-            if let Some(ell_arcs) = sym_json.get("elliptical_arcs").and_then(Value::as_array) {
-                for ell_arc_json in ell_arcs {
-                    check_keys!(ell_arc_json, allowed_keys::ELLIPTICAL_ARC);
-                    if let Some(ell_arc) = Self::parse_schlib_elliptical_arc(ell_arc_json) {
-                        symbol.add_elliptical_arc(ell_arc);
-                    }
-                }
-            }
-
-            // Parse ellipses
-            if let Some(ellipses) = sym_json.get("ellipses").and_then(Value::as_array) {
-                for ellipse_json in ellipses {
-                    check_keys!(ellipse_json, allowed_keys::ELLIPSE);
-                    if let Some(ellipse) = Self::parse_schlib_ellipse(ellipse_json) {
-                        symbol.add_ellipse(ellipse);
-                    }
-                }
-            }
-
-            // Parse labels
-            if let Some(labels) = sym_json.get("labels").and_then(Value::as_array) {
-                for label_json in labels {
-                    check_keys!(label_json, allowed_keys::LABEL);
-                    if let Some(label) = Self::parse_schlib_label(label_json) {
-                        symbol.add_label(label);
-                    }
-                }
-            }
-
-            // Parse text annotations
-            if let Some(texts) = sym_json.get("text").and_then(Value::as_array) {
-                for text_json in texts {
-                    check_keys!(text_json, allowed_keys::TEXT);
-                    if let Some(text) = Self::parse_schlib_text(text_json) {
-                        symbol.add_text(text);
-                    }
-                }
-            }
-
-            // Parse parameters
-            if let Some(params) = sym_json.get("parameters").and_then(Value::as_array) {
-                for param_json in params {
-                    check_keys!(param_json, allowed_keys::PARAMETER);
-                    if let Some(param) = Self::parse_schlib_parameter(param_json) {
-                        symbol.add_parameter(param);
-                    }
-                }
-            }
-
-            // Parse footprint references
-            if let Some(footprints) = sym_json.get("footprints").and_then(Value::as_array) {
-                for fp_json in footprints {
-                    // A footprint reference is a model link, not an embedded
-                    // footprint: name, description, library_path, and the
-                    // read-preserved identity a replay carries back.
-                    check_keys!(fp_json, &keys.footprint);
-                    if let Some(fp_name) = fp_json.get("name").and_then(Value::as_str) {
-                        let mut fp = FootprintModel::new(fp_name);
-                        if let Some(desc) = fp_json.get("description").and_then(Value::as_str) {
-                            fp.description = desc.to_string();
-                        }
-                        // Optional PcbLib path -> ModelDatafile0, so Altium can
-                        // resolve the footprint instead of reporting "not found".
-                        if let Some(lib_path) = fp_json.get("library_path").and_then(Value::as_str)
-                        {
-                            fp.library_path = Some(lib_path.to_string());
-                        }
-                        fp.is_current = fp_json
-                            .get("is_current")
-                            .and_then(Value::as_bool)
-                            .unwrap_or(false);
-                        fp.unique_id = fp_json
-                            .get("unique_id")
-                            .and_then(Value::as_str)
-                            .map(str::to_string);
-                        symbol.add_footprint(fp);
-                    }
-                }
-            }
-
-            // The interleaved record order `read_schlib` reported; replaying it
-            // replaces the grouped order the add_* calls accumulated, so a
-            // read-modify-write keeps the source's record order.
-            if let Some(order) = sym_json.get("primitive_order") {
-                match serde_json::from_value(order.clone()) {
-                    Ok(kinds) => symbol.primitive_order = kinds,
-                    Err(e) => {
-                        tracing::debug!(error = %e, "invalid primitive_order; using default order");
-                    }
-                }
-            }
-
-            // Validate coordinates before adding
-            if let Err(e) = Self::validate_symbol_coordinates(&symbol) {
-                return ToolCallResult::error(e);
-            }
+            let symbol = match self.parse_symbol_json(
+                sym_json,
+                &keys,
+                "write_schlib",
+                filepath,
+                "Unnamed",
+            ) {
+                Ok(symbol) => symbol,
+                Err(result) => return result,
+            };
 
             written_names.insert(symbol.name.clone());
             library.add(symbol);
@@ -1797,9 +1469,9 @@ impl McpServer {
 
 #[cfg(test)]
 mod tests {
-    use super::ieee_designator_prefix;
     use super::{body_3d_summary, pin_tip, symbol_geometry};
     use crate::altium::schlib::{Pin, PinOrientation, Rectangle, Symbol};
+    use crate::mcp::tools::parsing::ieee_designator_prefix;
 
     #[test]
     fn segment_rect_intersection_detects_silk_over_pad_geometry() {
@@ -2766,6 +2438,213 @@ mod tests {
                 first.len(),
                 "a save must not grow the file"
             );
+        }
+
+        /// The `SchLib` in-place twin: every golden symbol read through
+        /// `read_schlib` and handed back to `update_component` as its own
+        /// replacement — one save per symbol, each re-reading the last — ends
+        /// identical to the library-level save (IDs the golden lacks masked).
+        #[test]
+        fn update_component_replays_every_golden_symbol_byte_for_byte() {
+            use crate::altium::SchLib;
+
+            let dir = test_temp_dir();
+            let samples = std::path::Path::new("scripts/samples")
+                .canonicalize()
+                .unwrap();
+            let server =
+                crate::mcp::server::McpServer::new(vec![dir.path().to_path_buf(), samples.clone()]);
+            let src = samples.join("symbols.SchLib");
+
+            let baseline = dir.path().join("Baseline.SchLib");
+            SchLib::open(&src).unwrap().save(&baseline).unwrap();
+            let work = dir.path().join("Work.SchLib");
+            std::fs::copy(&src, &work).unwrap();
+
+            let read = server.call_read_schlib(&json!({ "filepath": src.to_string_lossy() }));
+            assert!(!read.is_error, "{}", get_result_text(&read));
+            let symbols = parse_result_json(&read)["symbols"].clone();
+            // Every third symbol is enough saves to surface per-save drift
+            // on all of them while keeping the test under a quarter minute.
+            for symbol in symbols.as_array().unwrap().iter().step_by(3) {
+                let updated = server.call_update_component(&json!({
+                    "filepath": work.to_string_lossy(),
+                    "component_name": symbol["name"],
+                    "symbol": symbol,
+                }));
+                assert!(
+                    !updated.is_error,
+                    "{}: {}",
+                    symbol["name"],
+                    get_result_text(&updated)
+                );
+            }
+
+            let golden_ids: std::collections::HashSet<Vec<u8>> = component_streams(&src)
+                .values()
+                .flat_map(|streams| streams.values())
+                .flat_map(|bytes| unique_ids(bytes))
+                .collect();
+            let (expected, ours) = (component_streams(&baseline), component_streams(&work));
+            assert_eq!(
+                expected.keys().collect::<Vec<_>>(),
+                ours.keys().collect::<Vec<_>>(),
+                "symbol storages differ"
+            );
+            for (name, e) in &expected {
+                let o = &ours[name];
+                assert_eq!(
+                    e.keys().collect::<Vec<_>>(),
+                    o.keys().collect::<Vec<_>>(),
+                    "{name}: streams differ"
+                );
+                for (stream, a) in e {
+                    let a = mask_generated_ids(a, &golden_ids);
+                    let b = o.get(stream).map(|b| mask_generated_ids(b, &golden_ids));
+                    assert_same_stream(&format!("{name}/{stream}"), Some(&a), b.as_ref());
+                }
+            }
+        }
+
+        /// `update_component` parses a symbol with `write_schlib`'s parser: a
+        /// typo on any object is refused, and the designator is derived the
+        /// same way when the replacement carries none.
+        #[test]
+        fn update_component_parses_exactly_what_write_schlib_does() {
+            let dir = test_temp_dir();
+            let server = create_test_server(dir.path());
+            let lib = dir.path().join("Upd.SchLib");
+            let written = server.call_write_schlib(&json!({
+                "filepath": lib.to_string_lossy(),
+                "symbols": [{ "name": "S", "designator": "U?" }],
+            }));
+            assert!(!written.is_error, "{}", get_result_text(&written));
+
+            for (kind, symbol) in [
+                ("symbol", json!({ "name": "S", "descripton": "x" })),
+                (
+                    "pin",
+                    json!({ "name": "S", "pins": [{ "name": "A", "designator": "1", "x": 0, "y": 0, "lenght": 10 }] }),
+                ),
+                (
+                    "rectangle",
+                    json!({ "name": "S", "rectangles": [{ "x1": 0, "y1": 0, "x2": 10, "y2": 10, "fillcolor": 1 }] }),
+                ),
+                (
+                    "polygon",
+                    json!({ "name": "S", "polygons": [{ "points": [{ "x": 0, "y": 0 }, { "x": 5, "y": 0 }, { "x": 0, "y": 5 }], "filed": true }] }),
+                ),
+                (
+                    "parameter",
+                    json!({ "name": "S", "parameters": [{ "name": "Value", "value": "1k", "hiden": true }] }),
+                ),
+                (
+                    "footprint",
+                    json!({ "name": "S", "footprints": [{ "name": "R0402", "library_pat": "x.PcbLib" }] }),
+                ),
+            ] {
+                let result = server.call_update_component(&json!({
+                    "filepath": lib.to_string_lossy(),
+                    "component_name": "S",
+                    "symbol": symbol,
+                }));
+                let text = get_result_text(&result);
+                assert!(result.is_error, "{kind}: a typo was accepted: {text}");
+                assert!(text.contains("Unknown field"), "{kind}: {text}");
+            }
+
+            let result = server.call_update_component(&json!({
+                "filepath": lib.to_string_lossy(),
+                "component_name": "S",
+                "symbol": { "name": "S", "component_type": "resistor" },
+            }));
+            assert!(!result.is_error, "{}", get_result_text(&result));
+            let back = server.call_read_schlib(&json!({ "filepath": lib.to_string_lossy() }));
+            assert_eq!(parse_result_json(&back)["symbols"][0]["designator"], "R?");
+        }
+
+        /// A record its parser cannot build is refused and named, like a
+        /// malformed pad — never silently left out of the file.
+        #[test]
+        fn malformed_records_are_refused_not_dropped() {
+            let dir = test_temp_dir();
+            let server = create_test_server(dir.path());
+            let pad = json!({ "designator": "1", "x": 0.0, "y": 0.0, "width": 1.0, "height": 1.0 });
+            let pcb = dir.path().join("Bad.PcbLib");
+            for (kind, footprint) in [
+                (
+                    "region",
+                    json!({ "name": "B", "pads": [pad], "regions": [{ "layer": "Top Overlay" }] }),
+                ),
+                (
+                    "text",
+                    json!({ "name": "B", "pads": [pad], "text": [{ "x": 0.0, "y": 0.0 }] }),
+                ),
+            ] {
+                let r = server.call_write_pcblib(&json!({
+                    "filepath": pcb.to_string_lossy(),
+                    "footprints": [footprint],
+                }));
+                let text = get_result_text(&r);
+                assert!(
+                    r.is_error,
+                    "{kind}: a malformed record was accepted: {text}"
+                );
+                assert!(
+                    text.contains(&format!("Failed to parse {kind} at index 0")),
+                    "{text}"
+                );
+                assert!(text.contains("Malformed"), "{text}");
+            }
+
+            let sch = dir.path().join("Bad.SchLib");
+            let empty = json!([{}]);
+            for (kind, symbol) in [
+                ("pin", json!({ "name": "B", "pins": [{ "name": "A" }] })),
+                ("rectangle", json!({ "name": "B", "rectangles": empty })),
+                ("round_rect", json!({ "name": "B", "round_rects": empty })),
+                ("line", json!({ "name": "B", "lines": empty })),
+                ("polyline", json!({ "name": "B", "polylines": empty })),
+                (
+                    "polygon",
+                    json!({ "name": "B", "polygons": [{ "points": [{ "x": 0, "y": 0 }] }] }),
+                ),
+                ("arc", json!({ "name": "B", "arcs": empty })),
+                ("pie", json!({ "name": "B", "pies": empty })),
+                ("image", json!({ "name": "B", "images": empty })),
+                ("text_frame", json!({ "name": "B", "text_frames": empty })),
+                ("bezier", json!({ "name": "B", "beziers": empty })),
+                (
+                    "elliptical_arc",
+                    json!({ "name": "B", "elliptical_arcs": empty }),
+                ),
+                ("ellipse", json!({ "name": "B", "ellipses": empty })),
+                ("label", json!({ "name": "B", "labels": empty })),
+                ("text", json!({ "name": "B", "text": empty })),
+                (
+                    "parameter",
+                    json!({ "name": "B", "parameters": [{ "value": "1k" }] }),
+                ),
+                (
+                    "footprint link",
+                    json!({ "name": "B", "footprints": [{ "description": "no name" }] }),
+                ),
+            ] {
+                let r = server.call_write_schlib(&json!({
+                    "filepath": sch.to_string_lossy(),
+                    "symbols": [symbol],
+                }));
+                let text = get_result_text(&r);
+                assert!(
+                    r.is_error,
+                    "{kind}: a malformed record was accepted: {text}"
+                );
+                assert!(
+                    text.contains(&format!("Failed to parse {kind} at index 0")),
+                    "{text}"
+                );
+            }
+            assert!(!pcb.exists() && !sch.exists(), "nothing was written");
         }
 
         /// From scratch the designator is still added by default, and

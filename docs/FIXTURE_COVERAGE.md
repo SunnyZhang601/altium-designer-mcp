@@ -124,8 +124,20 @@ not say which name was at fault.
 
 **SchLib, not yet attempted:** `*_Frac` coordinates on the shapes that still lack
 them. (Parameter "area colour" appeared here in error — `parse_parameter` reads no
-such key, and no authored parameter record carries one.)
+such key, and no authored parameter record carries one.) **Record kinds the golden
+does not contain at all** — the tool-layer replay tests can only hold these to the
+structs, not to Altium: an elliptical arc (RECORD=11; also the reason `EllipticalArc`
+carries no display flags in the model — nothing to verify them against), a text
+annotation (RECORD=3; same for `Text`), and a footprint model link (RECORD=45, with
+its `ImplementationList`/`MapDefiner` children) — the `FootprintModel` replay of
+`unique_id`/`is_current` is unit-tested only.
 
-**PcbLib:** region net and the cavity/subpoly params, raw-outline precision for ComponentBody. Pad thermal-relief / power-plane is
+**PcbLib:** region net and the cavity/subpoly params, raw-outline precision for ComponentBody.
+A **non-embedded STEP reference** (`MODEL.EMBED=FALSE` + `MODEL.NAME`, and whatever
+`/Library/ModelsNoEmbed` holds for it) — `write_pcblib`'s `step_model.embed: false`
+now writes the MODEL group with a fresh MODELID, but the form is unverified against
+Altium. A **text beyond U+00FF** (Ω, CJK) so a golden pins `WideStrings` as UTF-16
+code units (today only AltiumSharp and the Latin-1 `10µF` of `TEXT_WIN1252` do).
+Pad thermal-relief / power-plane is
 🚫 **FINAL** on the scripting side (native crash on a fresh library pad in every sequence
 tried — see the Pad row); a golden would need a non-scripted authoring route.

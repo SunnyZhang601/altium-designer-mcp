@@ -180,9 +180,14 @@ Every object is checked: footprints and symbols, each primitive kind, 3D-model a
 component-body objects, footprint links. The accepted keys are the fields the read tools
 emit for that object plus its authoring-only spellings (`step_model`, `vertices`, `hidden`,
 `designator_prefix`, …), so anything a read returned can be passed straight back
-(`src/mcp/tools/allowed_keys.rs`). A footprint is parsed by one routine whichever tool
-receives it (`parse_footprint_json`, `src/mcp/tools/parsing.rs`), so `update_component`
-accepts exactly what `write_pcblib` does and reports a malformed primitive the same way.
+(`src/mcp/tools/allowed_keys.rs`). A footprint or symbol is parsed by one routine whichever
+tool receives it (`parse_footprint_json` / `parse_symbol_json`, `src/mcp/tools/parsing.rs`),
+so `update_component` accepts exactly what `write_pcblib` / `write_schlib` do.
+
+A record the parser cannot build — a required field missing or of the wrong type — is
+likewise refused, never silently left out: the error names the kind and index
+(`Failed to parse region at index 2`, `Failed to parse footprint link at index 0`) in the
+structured context above, and nothing is written.
 
 ---
 

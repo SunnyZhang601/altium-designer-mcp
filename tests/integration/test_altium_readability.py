@@ -28,6 +28,7 @@ import contextlib
 import io
 import json
 import os
+import shutil
 import sys
 import tempfile
 
@@ -143,7 +144,20 @@ def _generate(binary, out_dir):
             "write_schlib", {"filepath": sch, "symbols": [symbol], "append": False})
         if wp.get("_isError") or ws.get("_isError"):
             raise RuntimeError(f"generation failed: pcb={wp} sch={ws}")
-        return pcb, sch
+        # Empty libraries: what delete_component leaves behind once the last
+        # component is gone. Nothing but the header streams remain, a state
+        # the populated files never exercise, so the oracle checks it opens.
+        empty_pcb = os.path.join(out_dir, "Empty.PcbLib")
+        empty_sch = os.path.join(out_dir, "Empty.SchLib")
+        shutil.copyfile(pcb, empty_pcb)
+        shutil.copyfile(sch, empty_sch)
+        dp = client.call_tool(
+            "delete_component", {"filepath": empty_pcb, "component_names": ["RESC1005X40N"]})
+        ds = client.call_tool(
+            "delete_component", {"filepath": empty_sch, "component_names": ["Resistor"]})
+        if dp.get("_isError") or ds.get("_isError"):
+            raise RuntimeError(f"emptying failed: pcb={dp} sch={ds}")
+        return pcb, sch, empty_pcb, empty_sch
     finally:
         client.stop()
 
@@ -180,6 +194,8 @@ class Scoreboard:
 
 
 def run(board, kind, path, expected_part, required_streams):
+    """Checks one generated library; ``expected_part`` is ``None`` for a
+    library that is meant to be empty."""
     print(f"\n=== {kind}: {os.path.basename(path)} ===")
     try:
         count, records, warnings = _read_with_pyaltiumlib(path)
@@ -187,8 +203,11 @@ def run(board, kind, path, expected_part, required_streams):
         board.check(f"{kind}:opens", False, f"pyaltiumlib raised {e!r}")
         return
     board.check(f"{kind}:opens", True)
-    board.check(f"{kind}:component_count==1", count == 1, f"got {count}")
-    board.check(f"{kind}:part_named", expected_part in records, f"parts={list(records)}")
+    if expected_part is None:
+        board.check(f"{kind}:component_count==0", count == 0, f"got {count}")
+    else:
+        board.check(f"{kind}:component_count==1", count == 1, f"got {count}")
+        board.check(f"{kind}:part_named", expected_part in records, f"parts={list(records)}")
     board.check(f"{kind}:no_parser_warnings", not warnings,
                 f"{len(warnings)} warning(s): {warnings[:4]}")
     streams = _ole_streams(path)
@@ -212,13 +231,17 @@ def main():
     binary = find_binary()
     print(f"Using binary: {binary}")
     out = tempfile.mkdtemp(prefix="altium-oracle-")
-    pcb, sch = _generate(binary, out)
+    pcb, sch, empty_pcb, empty_sch = _generate(binary, out)
 
     board = Scoreboard()
     run(board, "pcblib", pcb, "RESC1005X40N",
         ["FileVersionInfo", "Library/ComponentParamsTOC",
          "Library/LayerKindMapping", "Library/PadViaLibrary"])
     run(board, "schlib", sch, "Resistor", ["Storage"])
+    run(board, "pcblib-empty", empty_pcb, None,
+        ["FileVersionInfo", "Library/ComponentParamsTOC",
+         "Library/LayerKindMapping", "Library/PadViaLibrary"])
+    run(board, "schlib-empty", empty_sch, None, ["Storage"])
     return board.summary()
 
 

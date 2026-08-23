@@ -847,7 +847,7 @@ mod tests {
     }
 
     /// A parameter name matches without regard to case, as Altium and
-    /// manage_schlib_parameters treat it: `MANUFACTURER` updates
+    /// `manage_schlib_parameters` treat it: `MANUFACTURER` updates
     /// `Manufacturer` rather than adding a case-twin beside it.
     #[test]
     fn schlib_update_parameters_matches_names_without_regard_to_case() {

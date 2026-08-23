@@ -1231,7 +1231,8 @@ impl McpServer {
                      or external processing. JSON includes full component data and, for a PcbLib, \
                      the embedded 3D models the bodies reference (`embedded_models`, base64 STEP \
                      data keyed by model GUID) so an import restores them; CSV provides a summary \
-                     table of component names and basic info."
+                     table: name, description (and a symbol's designator), one count column \
+                     per primitive kind, and the external 3D model / footprint link count."
                         .to_string(),
                 ),
                 input_schema: json!({

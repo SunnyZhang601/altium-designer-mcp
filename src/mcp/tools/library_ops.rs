@@ -4,6 +4,48 @@ use serde_json::{json, Value};
 
 use crate::mcp::server::{McpServer, ToolCallResult};
 
+/// The footprint kinds a CSV export counts, in reading order — every kind,
+/// pads first (a test holds this to `PrimitiveKind::WRITE_ORDER`).
+const PCB_CSV_KINDS: [crate::altium::pcblib::PrimitiveKind;
+    crate::altium::pcblib::PrimitiveKind::COUNT] = {
+    use crate::altium::pcblib::PrimitiveKind as K;
+    [
+        K::Pad,
+        K::Via,
+        K::Track,
+        K::Arc,
+        K::Text,
+        K::Region,
+        K::Fill,
+        K::ComponentBody,
+    ]
+};
+
+/// The symbol record kinds a CSV export counts, in reading order — every
+/// kind, pins first (a test holds this to `SchPrimitiveKind::WRITE_ORDER`).
+const SCH_CSV_KINDS: [crate::altium::schlib::SchPrimitiveKind;
+    crate::altium::schlib::SchPrimitiveKind::COUNT] = {
+    use crate::altium::schlib::SchPrimitiveKind as K;
+    [
+        K::Pin,
+        K::Rectangle,
+        K::RoundRect,
+        K::Line,
+        K::Polyline,
+        K::Polygon,
+        K::Arc,
+        K::EllipticalArc,
+        K::Pie,
+        K::Ellipse,
+        K::Bezier,
+        K::Image,
+        K::TextFrame,
+        K::Label,
+        K::IeeeSymbol,
+        K::Parameter,
+    ]
+};
+
 impl McpServer {
     // ==================== Library Management Tools ====================
 
@@ -1009,24 +1051,29 @@ impl McpServer {
 
             ToolCallResult::text(serde_json::to_string_pretty(&result).unwrap())
         } else {
-            // CSV export - summary table
+            // CSV export - summary table: a count per primitive kind, every kind.
+            let kind_columns: Vec<String> = PCB_CSV_KINDS
+                .iter()
+                .map(|kind| format!("{}_count", kind.name()))
+                .collect();
             let mut csv_lines: Vec<String> = Vec::new();
-            csv_lines.push("name,description,pad_count,track_count,arc_count,region_count,text_count,external_3d_model,embedded_3d_bodies".to_string());
+            csv_lines.push(format!(
+                "name,description,{},external_3d_model",
+                kind_columns.join(",")
+            ));
 
             for fp in library.iter() {
                 let has_external_model = if fp.model_3d.is_some() { "yes" } else { "no" };
-                let embedded_body_count = fp.component_bodies.len();
+                let counts: Vec<String> = PCB_CSV_KINDS
+                    .iter()
+                    .map(|kind| fp.count_of(*kind).to_string())
+                    .collect();
                 csv_lines.push(format!(
-                    "{},{},{},{},{},{},{},{},{}",
+                    "{},{},{},{}",
                     crate::util::escape_csv_field(&fp.name),
                     crate::util::escape_csv_field(&fp.description),
-                    fp.pads.len(),
-                    fp.tracks.len(),
-                    fp.arcs.len(),
-                    fp.regions.len(),
-                    fp.text.len(),
-                    has_external_model,
-                    embedded_body_count
+                    counts.join(","),
+                    has_external_model
                 ));
             }
 
@@ -1084,22 +1131,28 @@ impl McpServer {
 
             ToolCallResult::text(serde_json::to_string_pretty(&result).unwrap())
         } else {
-            // CSV export - summary table
+            // CSV export - summary table: a count per record kind, every kind.
+            let kind_columns: Vec<String> = SCH_CSV_KINDS
+                .iter()
+                .map(|kind| format!("{}_count", kind.name()))
+                .collect();
             let mut csv_lines: Vec<String> = Vec::new();
-            csv_lines.push(
-                "name,description,designator,pin_count,rectangle_count,line_count,footprint_count"
-                    .to_string(),
-            );
+            csv_lines.push(format!(
+                "name,description,designator,{},footprint_count",
+                kind_columns.join(",")
+            ));
 
             for symbol in library.iter() {
+                let counts: Vec<String> = SCH_CSV_KINDS
+                    .iter()
+                    .map(|kind| symbol.count_of(*kind).to_string())
+                    .collect();
                 csv_lines.push(format!(
-                    "{},{},{},{},{},{},{}",
+                    "{},{},{},{},{}",
                     crate::util::escape_csv_field(&symbol.name),
                     crate::util::escape_csv_field(&symbol.description),
                     crate::util::escape_csv_field(&symbol.designator),
-                    symbol.pins.len(),
-                    symbol.rectangles.len(),
-                    symbol.lines.len(),
+                    counts.join(","),
                     symbol.footprints.len()
                 ));
             }
@@ -1914,8 +1967,45 @@ mod tests {
         let csv = parsed["csv"].as_str().unwrap();
         let lines: Vec<&str> = csv.lines().collect();
         assert_eq!(lines.len(), 3, "header + 2 rows");
-        assert!(lines[0].starts_with("name,description,pad_count"));
-        assert!(lines[1].starts_with("CHIP_0402,0402 chip resistor,2,"));
+        assert_eq!(
+            lines[0],
+            concat!(
+                "name,description,pad_count,via_count,track_count,arc_count,text_count,",
+                "region_count,fill_count,component_body_count,external_3d_model"
+            )
+        );
+        assert_eq!(lines[1], "CHIP_0402,0402 chip resistor,2,0,0,0,0,0,0,0,no");
+    }
+
+    /// The CSV counts every kind: the column lists are held to the kind
+    /// enums, so a kind added to the model cannot be missing from the table.
+    #[test]
+    fn csv_columns_cover_every_kind() {
+        use crate::altium::pcblib::PrimitiveKind;
+        use crate::altium::schlib::SchPrimitiveKind;
+        use std::collections::BTreeSet;
+
+        use super::{PCB_CSV_KINDS, SCH_CSV_KINDS};
+
+        let pcb: BTreeSet<&str> = PCB_CSV_KINDS.iter().map(|k| k.name()).collect();
+        let every_pcb: BTreeSet<&str> = PrimitiveKind::WRITE_ORDER
+            .iter()
+            .map(|k| k.name())
+            .collect();
+        assert_eq!(pcb, every_pcb);
+        assert_eq!(PCB_CSV_KINDS.len(), PrimitiveKind::COUNT, "each kind once");
+
+        let sch: BTreeSet<&str> = SCH_CSV_KINDS.iter().map(|k| k.name()).collect();
+        let every_sch: BTreeSet<&str> = SchPrimitiveKind::WRITE_ORDER
+            .iter()
+            .map(|k| k.name())
+            .collect();
+        assert_eq!(sch, every_sch);
+        assert_eq!(
+            SCH_CSV_KINDS.len(),
+            SchPrimitiveKind::COUNT,
+            "each kind once"
+        );
     }
 
     #[test]
@@ -1946,9 +2036,22 @@ mod tests {
         assert!(!result.is_error);
         let parsed = parse_result_json(&result);
         let csv = parsed["csv"].as_str().unwrap();
-        assert!(csv
-            .lines()
-            .any(|l| l.starts_with("RESISTOR,Generic resistor,R?,2,1,")));
+        let lines: Vec<&str> = csv.lines().collect();
+        assert_eq!(
+            lines[0],
+            concat!(
+                "name,description,designator,pin_count,rectangle_count,round_rect_count,",
+                "line_count,polyline_count,polygon_count,arc_count,elliptical_arc_count,",
+                "pie_count,ellipse_count,bezier_count,image_count,text_frame_count,",
+                "label_count,ieee_symbol_count,parameter_count,footprint_count"
+            )
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.starts_with("RESISTOR,Generic resistor,R?,2,1,0,0,")),
+            "{csv}"
+        );
     }
 
     #[test]

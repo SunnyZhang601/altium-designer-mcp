@@ -283,6 +283,28 @@ pub struct Polygon {
     pub raw_params: Vec<(String, String)>,
 }
 
+impl Polygon {
+    /// Creates a filled polygon through `points`, with the same defaults as a
+    /// rectangle (dark-red border, light-yellow fill, not accessible).
+    #[must_use]
+    pub fn new(points: Vec<(f64, f64)>) -> Self {
+        Self {
+            points,
+            line_width: 1,
+            line_color: 0x00_00_80,
+            fill_color: 0xB0_FF_FF,
+            line_style: 0,
+            filled: true,
+            transparent: false,
+            is_not_accessible: true,
+            owner_part_id: 1,
+            display_flags: ShapeDisplayFlags::default(),
+            unique_id: None,
+            raw_params: Vec::new(),
+        }
+    }
+}
+
 /// An arc or circle.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Arc {

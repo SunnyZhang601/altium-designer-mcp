@@ -892,6 +892,11 @@ pub struct EllipticalArc {
     /// Owner part ID.
     #[serde(default = "default_owner_part")]
     pub owner_part_id: i32,
+    /// Universal display/lock flags; omitted from JSON when all default. The
+    /// ELLARC golden stores a locked arc as `GraphicallyLocked=T` right after
+    /// `OwnerPartId`, as every other graphic does.
+    #[serde(default, flatten)]
+    pub display_flags: ShapeDisplayFlags,
     /// Altium unique ID (8-char). Preserved on read so a round-trip keeps the
     /// shape identity; a from-scratch shape generates a fresh one on write (#113).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -918,6 +923,7 @@ impl EllipticalArc {
         end_angle: impl Into<f64>,
     ) -> Self {
         Self {
+            display_flags: ShapeDisplayFlags::default(),
             raw_params: Vec::new(),
             x: x.into(),
             y: y.into(),

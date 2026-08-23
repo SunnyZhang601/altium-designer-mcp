@@ -41,11 +41,12 @@ fn samples_pcblib_pad_shapes() {
     let lib = PcbLib::open(sample("footprints.PcbLib")).expect("failed to open footprints.PcbLib");
 
     // Twelve per-primitive-family footprints plus the coverage-enrichment ones
-    // (TEXT_STYLE, REGION_CUTOUT, TEXT_SPECIAL, MULTILAYER, EMBSTEP, PRIMPROPS).
+    // (TEXT_STYLE, REGION_CUTOUT, TEXT_SPECIAL, MULTILAYER, EMBSTEP, PRIMPROPS,
+    // and batch 5's STEP_REF, MECH20, TEXT_WIDE_ONLY).
     // Note: PAD_THERMAL remains a documented negative — the thermal-relief /
     // power-plane setters crash AD24's scripting engine on a fresh library pad in
     // every sequence tried (batch 4b final bisect); see GenerateSamples.pas.
-    assert_eq!(lib.len(), 22, "expected exactly twenty-two footprints");
+    assert_eq!(lib.len(), 25, "expected exactly twenty-five footprints");
     let names = lib.names();
     for expected in [
         "PAD_SHAPES",
@@ -70,6 +71,9 @@ fn samples_pcblib_pad_shapes() {
         "MULTILAYER",
         "EMBSTEP",
         "PRIMPROPS",
+        "STEP_REF",
+        "MECH20",
+        "TEXT_WIDE_ONLY",
     ] {
         assert!(
             names.iter().any(|n| n == expected),
@@ -1316,9 +1320,10 @@ fn samples_pcblib_embstep() {
     // CommonPrimitiveData layer byte 57 (also V7_LAYER=MECHANICAL1).
     assert_eq!(body.layer, Layer::Mechanical1, "body layer");
 
-    // The referenced model must actually exist in the library's embedded-model
-    // store, resolved through the same lookup the reader uses (case-insensitive).
-    assert_eq!(lib.model_count(), 1, "the library embeds exactly one model");
+    // The referenced model must actually exist in the library's model store,
+    // resolved through the same lookup the reader uses (case-insensitive). The
+    // store holds two entries: this embedded one and STEP_REF's referenced one.
+    assert_eq!(lib.model_count(), 2, "EMBSTEP's model and STEP_REF's");
     let model = lib
         .get_model(&body.model_id)
         .expect("the body's MODELID resolves to an embedded model");
@@ -2160,4 +2165,106 @@ fn samples_manual_identifier_survives_a_write_read_cycle() {
             b.identifier
         );
     }
+}
+
+/// `STEP_REF` (batch 5): the same STEP model attached with `IPCB_Model.Embed`
+/// cleared. A script-authored non-embedded model is NOT the form a UI-authored
+/// library showed (an empty `MODELID` and no store entry): Altium still gives
+/// the body a `MODELID`, lists the model in `/Library/Models/Data` with
+/// `EMBED=FALSE`, and stores its bytes all the same. Both forms exist on disk
+/// and both read; the writer reproduces whichever it read.
+#[test]
+fn samples_pcblib_step_ref_is_a_referenced_model_with_a_store_entry() {
+    let lib = PcbLib::open(sample("footprints.PcbLib")).expect("failed to open footprints.PcbLib");
+    let fp = lib.get("STEP_REF").expect("STEP_REF footprint not found");
+    assert_eq!(fp.component_bodies.len(), 1, "one body");
+    let body = &fp.component_bodies[0];
+    assert!(!body.embedded, "MODEL.EMBED=FALSE reads as not embedded");
+    assert!(
+        body.model_id.starts_with('{') && body.model_id.len() == 38,
+        "a referenced model still carries a MODELID: {:?}",
+        body.model_id
+    );
+    assert_eq!(
+        body.model_name, "minimal.step",
+        "MODEL.NAME is the file name"
+    );
+    assert_eq!(body.model_checksum, 1_975_055, "the same STEP as EMBSTEP's");
+    assert_eq!(body.layer, Layer::Mechanical1);
+
+    let model = lib
+        .get_model(&body.model_id)
+        .expect("the referenced model has a store entry");
+    assert_eq!(model.name, "minimal.step");
+    assert_eq!(
+        model.compressed_size, 189,
+        "its bytes are stored regardless"
+    );
+    assert_eq!(model.data.len(), 267);
+    // EMBSTEP's embedded copy is a distinct entry with its own id.
+    let embedded = &lib.get("EMBSTEP").expect("EMBSTEP").component_bodies[0];
+    assert_ne!(embedded.model_id, body.model_id);
+}
+
+/// `MECH20` (batch 5): one primitive of every layered kind on Mechanical 20.
+/// Altium stores each under header byte 72 (the last the legacy byte can
+/// name) with the real layer in the V7 id (`0x01020014`) or, for the region
+/// and the body, the `V7_LAYER=MECHANICAL20` token — the pair hand-authored
+/// tracks had shown, now seen on every kind. Every one reads as Mechanical 20
+/// with nothing carried: the writer stores the layer the same way.
+#[test]
+fn samples_pcblib_mech20_every_kind_resolves_past_the_legacy_sixteen() {
+    let lib = PcbLib::open(sample("footprints.PcbLib")).expect("failed to open footprints.PcbLib");
+    let fp = lib.get("MECH20").expect("MECH20 footprint not found");
+
+    assert_eq!(fp.tracks.len(), 1);
+    assert_eq!(fp.tracks[0].layer, Layer::Mechanical20, "track");
+    assert_eq!(fp.tracks[0].raw_layer_id, None, "nothing to carry");
+    assert_eq!(fp.arcs.len(), 1);
+    assert_eq!(fp.arcs[0].layer, Layer::Mechanical20, "arc");
+    assert_eq!(fp.arcs[0].raw_layer_id, None);
+    assert_eq!(fp.text.len(), 1);
+    assert_eq!(fp.text[0].layer, Layer::Mechanical20, "text");
+    assert_eq!(fp.text[0].text, "M20");
+    assert_eq!(fp.text[0].raw_layer_id, None);
+    assert_eq!(fp.fills.len(), 1);
+    assert_eq!(fp.fills[0].layer, Layer::Mechanical20, "fill");
+    assert_eq!(fp.fills[0].raw_layer_id, None);
+    assert_eq!(fp.regions.len(), 1);
+    assert_eq!(fp.regions[0].layer, Layer::Mechanical20, "region");
+    assert_eq!(
+        fp.regions[0].v7_layer, None,
+        "the MECHANICAL20 token follows from the layer"
+    );
+    assert_eq!(fp.pads.len(), 1);
+    assert_eq!(fp.pads[0].layer, Layer::Mechanical20, "pad");
+    assert_eq!(fp.pads[0].designator, "M");
+    assert_eq!(fp.pads[0].raw_layer_id, None);
+    assert_eq!(fp.component_bodies.len(), 1);
+    assert_eq!(fp.component_bodies[0].layer, Layer::Mechanical20, "body");
+    assert_eq!(fp.component_bodies[0].raw_layer_id, None);
+    assert_eq!(fp.component_bodies[0].v7_layer, None);
+}
+
+/// `TEXT_WIDE_ONLY` (batch 5): `WideStrings` is the authoritative form of a
+/// text and `ENCODEDTEXT` holds its UTF-16 code units. The second text has a
+/// character the Data stream cannot hold — U+0094, which Altium narrowed to
+/// `?` — so only the wide form carries it, the shape a UI-typed Ω has.
+#[test]
+fn samples_pcblib_text_wide_only_reads_the_wide_form() {
+    let lib = PcbLib::open(sample("footprints.PcbLib")).expect("failed to open footprints.PcbLib");
+    let fp = lib
+        .get("TEXT_WIDE_ONLY")
+        .expect("TEXT_WIDE_ONLY footprint not found");
+    assert_eq!(fp.text.len(), 2, "two texts");
+    let by_y = |y: f64| {
+        fp.text
+            .iter()
+            .find(|t| approx_eq(t.y, y, 1e-6))
+            .unwrap_or_else(|| panic!("no text at y = {y} mm"))
+    };
+    // Latin-1 characters narrow and widen losslessly.
+    assert_eq!(by_y(0.0).text, "10 \u{ce}\u{a9}");
+    // U+0094 is `?` in the Data stream and 148 in ENCODEDTEXT1; the wide form wins.
+    assert_eq!(by_y(2.54).text, "\u{94}Q\u{bb}");
 }

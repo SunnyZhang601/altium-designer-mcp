@@ -871,6 +871,7 @@ pub(super) fn parse_elliptical_arc(props: &HashMap<String, String>) -> Option<El
         color,
         fill_color,
         owner_part_id,
+        display_flags: read_display_flags(props),
         unique_id: props.get("uniqueid").cloned(),
     })
 }

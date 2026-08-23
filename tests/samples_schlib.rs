@@ -8,7 +8,7 @@
 
 use altium_designer_mcp::altium::schlib::{
     Ellipse, Label, Parameter, Pin, PinElectricalType, PinOrientation, PinSymbol, Polygon,
-    Rectangle, RoundRect, SchLib, ShapeDisplayFlags, Symbol, TextJustification,
+    Rectangle, RoundRect, SchLib, SchPrimitiveKind, ShapeDisplayFlags, Symbol, TextJustification,
 };
 use std::path::PathBuf;
 
@@ -57,8 +57,9 @@ fn samples_schlib_structure() {
     // Fifteen per-primitive-family symbols plus the coverage-enrichment symbols
     // (SHAPESTYLE, SHAPESTYLE2, SHAPECOLOR, LOCKFLAGS, JUSTIFY, FRACPINS,
     // BEZIERSYM, PIESYM, IMAGESYM, TEXTFRAMESYM, EMBIMGSYM, SWAPPIN, FRACSHAPES,
-    // DISPMODE) added to GenerateSamples.pas and regenerated on-site.
-    assert_eq!(lib.len(), 84, "expected exactly eighty-four symbols");
+    // DISPMODE, and batch 5's ELLARC, IMPLCHAIN, FRACSHAPES2) added to
+    // GenerateSamples.pas and regenerated on-site.
+    assert_eq!(lib.len(), 87, "expected exactly eighty-seven symbols");
 
     let names = lib.names();
     for expected in [
@@ -91,6 +92,9 @@ fn samples_schlib_structure() {
         "DISPMODE",
         "SHAPECOLOR",
         "SHAPESTYLE2",
+        "ELLARC",
+        "IMPLCHAIN",
+        "FRACSHAPES2",
         "LOCKFLAGS2",
     ] {
         assert!(
@@ -1991,4 +1995,222 @@ fn samples_manual_i18n5_survives_a_write_read_cycle() {
             s.name
         );
     }
+}
+
+/// `ELLARC` (batch 5): the first golden elliptical arcs (RECORD=11). The
+/// second is off-grid — every coordinate and both radii carry a `_Frac` key —
+/// and graphically locked: `GraphicallyLocked=T` sits right after
+/// `OwnerPartId`, as on every other graphic, which is what settled that the
+/// record carries the universal display flags.
+#[test]
+fn samples_schlib_ellarc() {
+    let lib = SchLib::open(sample("symbols.SchLib")).expect("failed to open symbols.SchLib");
+    let sym = lib.get("ELLARC").expect("ELLARC symbol not found");
+    assert_eq!(
+        sym.elliptical_arcs.len(),
+        2,
+        "ELLARC has two elliptical arcs"
+    );
+
+    let plain = &sym.elliptical_arcs[0];
+    assert!(
+        approx_eq(plain.x, -6.0) && approx_eq(plain.y, 0.0),
+        "centre"
+    );
+    assert!(approx_eq(plain.radius, 5.0) && approx_eq(plain.secondary_radius, 3.0));
+    assert!(approx_eq(plain.start_angle, 0.0) && approx_eq(plain.end_angle, 270.0));
+    assert_eq!(plain.line_width, 1);
+    assert!(!plain.display_flags.graphically_locked);
+
+    let locked = &sym.elliptical_arcs[1];
+    assert!(
+        approx_eq(locked.x, 6.05) && approx_eq(locked.y, 0.05),
+        "off-grid centre, got ({}, {})",
+        locked.x,
+        locked.y
+    );
+    assert!(approx_eq(locked.radius, 5.05), "Radius + Radius_Frac");
+    assert!(
+        approx_eq(locked.secondary_radius, 3.05),
+        "SecondaryRadius + SecondaryRadius_Frac"
+    );
+    assert!(approx_eq(locked.start_angle, 45.0) && approx_eq(locked.end_angle, 315.0));
+    assert!(
+        locked.display_flags.graphically_locked,
+        "GraphicallyLocked=T"
+    );
+    assert!(!locked.display_flags.disabled && !locked.display_flags.dimmed);
+}
+
+/// `IMPLCHAIN` (batch 5): footprint model links as Altium writes the chain —
+/// `RECORD=44`, then per link `RECORD=45` + `46` + `48`. The current link has
+/// a datafile (`DatafileCount=1` with the path, entity and kind); a name-only
+/// link has NO datafile keys at all, and an empty description is omitted.
+/// The keys of a footprint link as stored, in order.
+fn link_keys(f: &altium_designer_mcp::altium::schlib::FootprintModel) -> Vec<&str> {
+    f.raw_params.iter().map(|(k, _)| k.as_str()).collect()
+}
+
+#[test]
+fn samples_schlib_implchain() {
+    let lib = SchLib::open(sample("symbols.SchLib")).expect("failed to open symbols.SchLib");
+    let sym = lib.get("IMPLCHAIN").expect("IMPLCHAIN symbol not found");
+    assert_eq!(sym.footprints.len(), 3, "three footprint links");
+
+    let current = &sym.footprints[0];
+    assert_eq!(current.name, "SOIC-8");
+    assert_eq!(current.description, "Narrow body");
+    assert_eq!(current.library_path.as_deref(), Some("Footprints.PcbLib"));
+    assert!(current.is_current, "IsCurrent=T");
+    assert!(link_keys(current).contains(&"DatafileCount"));
+    assert!(link_keys(current).contains(&"ModelDatafileEntity0"));
+
+    let plain = &sym.footprints[1];
+    assert_eq!(plain.name, "SOIC-8-WIDE");
+    assert_eq!(plain.description, "");
+    assert_eq!(plain.library_path, None);
+    assert!(!plain.is_current, "IsCurrent omitted, never F");
+    assert_eq!(
+        link_keys(plain),
+        [
+            "RECORD",
+            "OwnerIndex",
+            "IndexInSheet",
+            "ModelName",
+            "ModelType",
+            "UniqueID"
+        ],
+        "a name-only link: no datafile group, no Description"
+    );
+
+    let described = &sym.footprints[2];
+    assert_eq!(described.name, "DIP-8");
+    assert_eq!(described.description, "Through-hole");
+    assert!(!described.is_current);
+    assert!(!link_keys(described).contains(&"DatafileCount"));
+    for link in &sym.footprints {
+        assert!(link.unique_id.as_ref().is_some_and(|id| id.len() == 8));
+    }
+}
+
+/// `FRACSHAPES2` (batch 5): the off-grid shapes `FRACSHAPES` did not cover,
+/// every coordinate authored at `MilsToCoord(n) + 5000` (+0.05 units). The
+/// negatives show AD24's convention again — truncation toward zero with a
+/// signed fraction (`Location.X=-14|Location.X_Frac=-95000` = −14.95).
+#[test]
+#[allow(clippy::too_many_lines)] // one assertion block per off-grid shape kind
+fn samples_schlib_fracshapes2() {
+    let lib = SchLib::open(sample("symbols.SchLib")).expect("failed to open symbols.SchLib");
+    let sym = lib
+        .get("FRACSHAPES2")
+        .expect("FRACSHAPES2 symbol not found");
+
+    assert_eq!(sym.ellipses.len(), 1);
+    let ellipse = &sym.ellipses[0];
+    assert!(
+        approx_eq(ellipse.x, -14.95) && approx_eq(ellipse.y, 10.05),
+        "ellipse centre"
+    );
+    assert!(
+        approx_eq(ellipse.radius_x, 3.05) && approx_eq(ellipse.radius_y, 2.05),
+        "ellipse radii"
+    );
+
+    assert_eq!(sym.pies.len(), 1);
+    let pie = &sym.pies[0];
+    assert!(
+        approx_eq(pie.x, -4.95) && approx_eq(pie.y, 10.05),
+        "pie centre"
+    );
+    assert!(approx_eq(pie.radius, 3.05), "pie radius");
+    assert!(approx_eq(pie.start_angle, 30.0) && approx_eq(pie.end_angle, 210.0));
+
+    assert_eq!(sym.round_rects.len(), 1);
+    let rr = &sym.round_rects[0];
+    assert!(
+        approx_eq(rr.x1, 5.05) && approx_eq(rr.y1, 8.05),
+        "round-rect corner 1"
+    );
+    assert!(
+        approx_eq(rr.x2, 15.05) && approx_eq(rr.y2, 13.05),
+        "round-rect corner 2"
+    );
+    assert!(
+        approx_eq(rr.corner_x_radius, 1.05) && approx_eq(rr.corner_y_radius, 1.05),
+        "CornerXRadius_Frac / CornerYRadius_Frac"
+    );
+
+    assert_eq!(sym.lines.len(), 1);
+    let line = &sym.lines[0];
+    assert!(
+        approx_eq(line.x1, -14.95) && approx_eq(line.y1, 0.05),
+        "line start"
+    );
+    assert!(
+        approx_eq(line.x2, -4.95) && approx_eq(line.y2, 3.05),
+        "line end"
+    );
+
+    assert_eq!(sym.polylines.len(), 1);
+    let pts = &sym.polylines[0].points;
+    assert_eq!(pts.len(), 3);
+    assert!(
+        approx_eq(pts[0].0, -2.95) && approx_eq(pts[0].1, 0.05),
+        "X1_Frac/Y1_Frac"
+    );
+    assert!(
+        approx_eq(pts[1].0, 0.05) && approx_eq(pts[1].1, 3.05),
+        "frac-only X2"
+    );
+    assert!(approx_eq(pts[2].0, 3.05) && approx_eq(pts[2].1, 0.05));
+
+    assert_eq!(sym.polygons.len(), 1);
+    let pts = &sym.polygons[0].points;
+    assert_eq!(pts.len(), 3);
+    assert!(approx_eq(pts[0].0, 5.05) && approx_eq(pts[0].1, 0.05));
+    assert!(approx_eq(pts[1].0, 15.05) && approx_eq(pts[1].1, 0.05));
+    assert!(approx_eq(pts[2].0, 10.05) && approx_eq(pts[2].1, 4.05));
+
+    assert_eq!(sym.beziers.len(), 1);
+    let bezier = &sym.beziers[0];
+    assert!(
+        approx_eq(bezier.x1, -14.95) && approx_eq(bezier.y1, -7.95),
+        "bezier p1"
+    );
+    assert!(
+        approx_eq(bezier.x2, -11.95) && approx_eq(bezier.y2, -3.95),
+        "bezier p2"
+    );
+    assert!(
+        approx_eq(bezier.x3, -7.95) && approx_eq(bezier.y3, -11.95),
+        "bezier p3"
+    );
+    assert!(
+        approx_eq(bezier.x4, -4.95) && approx_eq(bezier.y4, -7.95),
+        "bezier p4"
+    );
+
+    assert_eq!(sym.labels.len(), 1);
+    let label = &sym.labels[0];
+    assert!(
+        approx_eq(label.x, 5.05) && approx_eq(label.y, -7.95),
+        "label anchor"
+    );
+    assert_eq!(label.text, "FRAC");
+
+    assert_eq!(
+        sym.primitive_order,
+        [
+            SchPrimitiveKind::Ellipse,
+            SchPrimitiveKind::Pie,
+            SchPrimitiveKind::RoundRect,
+            SchPrimitiveKind::Line,
+            SchPrimitiveKind::Polyline,
+            SchPrimitiveKind::Polygon,
+            SchPrimitiveKind::Bezier,
+            SchPrimitiveKind::Label,
+            SchPrimitiveKind::Parameter,
+        ],
+        "authoring order, the Comment parameter last"
+    );
 }

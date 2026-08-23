@@ -308,6 +308,80 @@ end;
 
 { ==== PcbLib COVERAGE-ENRICHMENT HELPERS (verified AD24 names) ============== }
 
+{ SMD pad on an explicit layer (batch 5): the only pad helper whose layer is a
+  parameter, for a pad on a mechanical layer past the legacy sixteen. }
+procedure AddPadOnLayer(Comp : IPCB_LibComponent; X : Integer; Y : Integer;
+                        Nm : String; Lay : TLayer);
+var
+    Pad : IPCB_Pad;
+begin
+    Pad := PCBServer.PCBObjectFactory(ePadObject, eNoDimension, eCreate_Default);
+    if Pad = nil then Exit;
+    Pad.Name     := Nm;
+    Pad.X        := MilsToCoord(X);
+    Pad.Y        := MilsToCoord(Y);
+    Pad.Mode     := ePadMode_Simple;
+    Pad.Layer    := Lay;
+    Pad.HoleSize := 0;
+    Pad.TopShape := eRectangular;
+    Pad.TopXSize := MilsToCoord(40);
+    Pad.TopYSize := MilsToCoord(40);
+    Comp.AddPCBObject(Pad);
+    PCBServer.SendMessageToRobots(Comp.I_ObjectAddress, c_Broadcast,
+                                  PCBM_BoardRegisteration, Pad.I_ObjectAddress);
+end;
+
+{ Extruded body on an explicit layer (batch 5), otherwise AddExtrudedBox. }
+procedure AddExtrudedBoxOnLayer(Comp : IPCB_LibComponent; CX : Integer; CY : Integer;
+                                WMils : Integer; HMils : Integer; OverallMils : Integer;
+                                Lay : TLayer);
+var
+    Body  : IPCB_ComponentBody;
+    Cont  : IPCB_Contour;
+    HalfW : Integer;
+    HalfH : Integer;
+begin
+    HalfW := WMils div 2;
+    HalfH := HMils div 2;
+    Body := PCBServer.PCBObjectFactory(eComponentBodyObject, eNoDimension, eCreate_Default);
+    if Body = nil then Exit;
+    Body.BodyProjection := eBoardSide_Top;
+    Body.Layer          := Lay;
+    Body.StandoffHeight := 0;
+    Body.OverallHeight  := MilsToCoord(OverallMils);
+    Cont := Body.MainContour.Replicate;
+    Cont.Count := 4;
+    Cont.X[1] := MilsToCoord(CX - HalfW);  Cont.Y[1] := MilsToCoord(CY - HalfH);
+    Cont.X[2] := MilsToCoord(CX + HalfW);  Cont.Y[2] := MilsToCoord(CY - HalfH);
+    Cont.X[3] := MilsToCoord(CX + HalfW);  Cont.Y[3] := MilsToCoord(CY + HalfH);
+    Cont.X[4] := MilsToCoord(CX - HalfW);  Cont.Y[4] := MilsToCoord(CY + HalfH);
+    Body.SetOutlineContour(Cont);
+    Comp.AddPCBObject(Body);
+    PCBServer.SendMessageToRobots(Comp.I_ObjectAddress, c_Broadcast,
+                                  PCBM_BoardRegisteration, Body.I_ObjectAddress);
+end;
+
+{ Body whose STEP model is REFERENCED, not embedded (batch 5): IPCB_Model.Embed
+  (a documented Boolean member) cleared before the model is attached, so the
+  golden pins the form a UI-authored library showed for a non-embedded model
+  (empty MODELID, MODEL.EMBED=FALSE, MODEL.NAME carrying the path). }
+procedure AddBodyStepRef(Comp : IPCB_LibComponent; AFilePath : String);
+var
+    Body  : IPCB_ComponentBody;
+    Model : IPCB_Model;
+begin
+    Body := PCBServer.PCBObjectFactory(eComponentBodyObject, eNoDimension, eCreate_Default);
+    if Body = nil then Exit;
+    Model := Body.ModelFactory_FromFilename(AFilePath, False);
+    if Model = nil then Exit;
+    Model.Embed := False;
+    Body.SetState_FromModel;
+    Body.Model := Model;
+    Comp.AddPCBObject(Body);
+    PCBServer.SendMessageToRobots(Comp.I_ObjectAddress, c_Broadcast,
+                                  PCBM_BoardRegisteration, Body.I_ObjectAddress);
+end;
+
 { TrueType text with Bold + Italic + Mirror. VERIFIED IPCB_Text members:
   UseTTFonts (True=TrueType), FontName, Bold, Italic, MirrorFlag. }
 procedure AddTextStyled(Comp : IPCB_LibComponent; X : Integer; Y : Integer;
@@ -762,6 +836,7 @@ var
     Via      : IPCB_Via;
     Arc      : IPCB_Arc;
     Fill     : IPCB_Fill;
+    M20      : Integer;
 begin
     // CreateNewDocumentFromDocumentKind creates + focuses a blank doc and returns its
     // IServerDocument (Client.OpenNewDocumentOfKind, used in the v0, does not exist).
@@ -1363,6 +1438,66 @@ begin
     except
     end;
 
+    // STEP_REF (batch 5): the same STEP model referenced by path, not embedded.
+    try
+        Comp := PCBServer.CreatePCBLibComp;
+        Comp.Name := 'STEP_REF';
+        Lib.RegisterComponent(Comp);
+        PCBServer.PreProcess;
+        AddBodyStepRef(Comp, OUT_DIR + 'minimal.step');
+        PCBServer.PostProcess;
+    except
+    end;
+
+    // MECH20 (batch 5): one primitive of every layered kind on Mechanical 20, a
+    // layer past the sixteen the legacy header byte can name. AD has no
+    // eMechanical17..32 constants; LayerUtils.MechanicalLayer(N) (proven in
+    // AddExtrudedBox for 13) returns the layer id that IPCB_Primitive.Layer takes.
+    // Hand-authored tracks showed byte 72 + V7 id 0x01020014; this settles the
+    // pair for pads, arcs, text, fills, regions and bodies too.
+    try
+        Comp := PCBServer.CreatePCBLibComp;
+        Comp.Name := 'MECH20';
+        Lib.RegisterComponent(Comp);
+        PCBServer.PreProcess;
+        M20 := LayerUtils.MechanicalLayer(20);
+        AddTrack(Comp, -50, 0, 50, 0, 10, M20);
+        AddArc(Comp, 0, 60, 20, 0, 180, 10, M20);
+        AddText(Comp, 0, 100, 'M20', 50, 0, M20);
+        AddFill(Comp, -50, 140, 50, 160, M20, 0);
+        AddRegionBox(Comp, -50, 180, 50, 220, M20);
+        AddPadOnLayer(Comp, 100, 0, 'M', M20);
+        AddExtrudedBoxOnLayer(Comp, 100, 100, 40, 40, 20, M20);
+        PCBServer.PostProcess;
+    except
+    end;
+
+    // TEXT_WIDE_ONLY (batch 5): a text whose WideStrings carries a code unit
+    // the Data stream cannot — the shape a UI-typed Ω has (Data byte '?',
+    // ENCODEDTEXT 937) — so a golden pins WideStrings as the authoritative
+    // form and ENCODEDTEXT as UTF-16 code units of the text as Altium holds
+    // it (AltiumSharp and the Latin-1 10µF of TEXT_WIN1252 were the only
+    // witnesses). Chr(N) yields the Unicode character N, not a byte: Chr(148)
+    // is U+0094, which every ANSI page narrows to '?' while WideStrings keeps
+    // 148. DOCUMENTED NEGATIVES (two runs, 2026-08-23): (1) a source LITERAL
+    // beyond Latin-1 in a TEXT reaches Altium as its UTF-8 bytes widened
+    // through the machine's page ('10 Ω' -> 49,48,32,206,169), assigned
+    // directly or through a String parameter alike, unlike a component NAME;
+    // (2) Chr(N) for N > 255 truncates modulo 256 (TEXT_LONG); (3) a control
+    // the writing page leaves undefined (Chr(152) on a Windows-1250 machine)
+    // narrows to its IDENTITY byte there but to '?' elsewhere — page-dependent,
+    // so it is not authored. Text beyond U+00FF needs a hand-authored fixture.
+    try
+        Comp := PCBServer.CreatePCBLibComp;
+        Comp.Name := 'TEXT_WIDE_ONLY';
+        Lib.RegisterComponent(Comp);
+        PCBServer.PreProcess;
+        AddText(Comp, 0,   0, '10 ' + Chr(206) + Chr(169), 50, 0, eTopOverlay);
+        AddText(Comp, 0, 100, Chr(148) + 'Q' + Chr(187), 50, 0, eTopOverlay);
+        PCBServer.PostProcess;
+    except
+    end;
+
     // PRIMPROPS: the descriptive properties the plain primitives never set.
     // Only the named region is authored today; the body and via probes are
     // staged behind comments so a crash or a compile error names one interface
@@ -1422,6 +1557,205 @@ begin
     // documented "Save As to a path" (the second arg is the document kind).
     Doc.SetModified(True);
     Doc.DoSafeChangeFileNameAndSave(OUT_DIR + 'footprints.PcbLib', 'PCBLIB');
+end;
+
+{ Elliptical arc (RECORD=11, batch 5): factory eEllipticalArc; ISch_EllipticalArc
+  carries Radius + SecondaryRadius + StartAngle/EndAngle + LineWidth over the
+  graphical base. Off-grid when Frac is set (the +5000 idiom of AddRectFrac),
+  so the record carries Location/Radius/SecondaryRadius _Frac keys. }
+procedure AddEllipticalArc(Comp : ISch_Component; CX : Integer; CY : Integer;
+                           RX : Integer; RY : Integer; AStart : Double; AEnd : Double;
+                           Frac : Boolean; Locked : Boolean);
+var
+    EA  : ISch_EllipticalArc;
+    Off : Integer;
+begin
+    EA := SchServer.SchObjectFactory(eEllipticalArc, eCreate_Default);
+    if EA = nil then Exit;
+    Off := 0;
+    if Frac then Off := 5000;
+    EA.Location        := Point(MilsToCoord(CX) + Off, MilsToCoord(CY) + Off);
+    EA.Radius          := MilsToCoord(RX) + Off;
+    EA.SecondaryRadius := MilsToCoord(RY) + Off;
+    EA.StartAngle      := AStart;
+    EA.EndAngle        := AEnd;
+    EA.LineWidth       := eSmall;
+    EA.Color           := $000000;
+    EA.GraphicallyLocked := Locked;
+    EA.OwnerPartId          := 1;
+    EA.OwnerPartDisplayMode := Comp.DisplayMode;
+    Comp.AddSchObject(EA);
+    SchServer.RobotManager.SendMessage(Comp.I_ObjectAddress, c_BroadCast,
+                                       SCHM_PrimitiveRegistration, EA.I_ObjectAddress);
+end;
+
+{ Footprint model link (RECORD=45 with its 44/46/48 chain, batch 5). The
+  component's own AddSchImplementation returns the registered ISch_Implementation;
+  AddDataFileLink(EntityName, Location, FileKind) is what gives it DatafileCount=1
+  and the ModelDatafile*0 keys. IntegratedModel/DatabaseModel are the two flags a
+  UI-authored link carries (`IntegratedModel=T|DatabaseModel=T`). }
+procedure AddImplementation(Comp : ISch_Component; AName : String; ADesc : String;
+                            APath : String; ACurrent : Boolean; AIntegrated : Boolean);
+var
+    Impl : ISch_Implementation;
+begin
+    Impl := Comp.AddSchImplementation;
+    if Impl = nil then Exit;
+    Impl.ModelName   := AName;
+    Impl.ModelType   := 'PCBLIB';
+    Impl.Description := ADesc;
+    Impl.IsCurrent   := ACurrent;
+    if AIntegrated then
+    begin
+        Impl.IntegratedModel := True;
+        Impl.DatabaseModel   := True;
+    end;
+    if APath <> '' then
+        Impl.AddDataFileLink(AName, APath, 'PCBLib');
+end;
+
+{ Off-grid shapes of every kind that FRACSHAPES (rect + arc) did not cover, each
+  carrying the +5000 internal-unit remainder (0.5 mil) on every coordinate so
+  the record emits the corresponding _Frac keys: ellipse, pie, round rectangle,
+  line, polyline, polygon, bezier and label. }
+procedure AddFracShapes(Comp : ISch_Component);
+var
+    E   : ISch_Ellipse;
+    Pie : ISch_Pie;
+    RR  : ISch_RoundRectangle;
+    L   : ISch_Line;
+    PL  : ISch_Polyline;
+    Pol : ISch_Polygon;
+    Bez : ISch_Bezier;
+    Txt : ISch_Label;
+begin
+    E := SchServer.SchObjectFactory(eEllipse, eCreate_Default);
+    if E <> nil then
+    begin
+        E.Location        := Point(MilsToCoord(-150) + 5000, MilsToCoord(100) + 5000);
+        E.Radius          := MilsToCoord(30) + 5000;
+        E.SecondaryRadius := MilsToCoord(20) + 5000;
+        E.LineWidth       := eSmall;
+        E.Color           := $000000;
+        E.AreaColor       := $B0FFFF;
+        E.IsSolid         := True;
+        E.Transparent     := False;
+        E.OwnerPartId     := 1;
+        E.OwnerPartDisplayMode := Comp.DisplayMode;
+        Comp.AddSchObject(E);
+        SchServer.RobotManager.SendMessage(Comp.I_ObjectAddress, c_BroadCast, SCHM_PrimitiveRegistration, E.I_ObjectAddress);
+    end;
+
+    Pie := SchServer.SchObjectFactory(ePie, eCreate_Default);
+    if Pie <> nil then
+    begin
+        Pie.Location   := Point(MilsToCoord(-50) + 5000, MilsToCoord(100) + 5000);
+        Pie.Radius     := MilsToCoord(30) + 5000;
+        Pie.LineWidth  := eSmall;
+        Pie.Color      := $000000;
+        Pie.StartAngle := 30;
+        Pie.EndAngle   := 210;
+        Pie.AreaColor  := $00FFFF;
+        Pie.IsSolid    := True;
+        Pie.OwnerPartId := 1;
+        Pie.OwnerPartDisplayMode := Comp.DisplayMode;
+        Comp.AddSchObject(Pie);
+        SchServer.RobotManager.SendMessage(Comp.I_ObjectAddress, c_BroadCast, SCHM_PrimitiveRegistration, Pie.I_ObjectAddress);
+    end;
+
+    RR := SchServer.SchObjectFactory(eRoundRectangle, eCreate_Default);
+    if RR <> nil then
+    begin
+        RR.Location      := Point(MilsToCoord(50) + 5000, MilsToCoord(80) + 5000);
+        RR.Corner        := Point(MilsToCoord(150) + 5000, MilsToCoord(130) + 5000);
+        RR.CornerXRadius := MilsToCoord(10) + 5000;
+        RR.CornerYRadius := MilsToCoord(10) + 5000;
+        RR.LineWidth     := eSmall;
+        RR.Color         := $000000;
+        RR.AreaColor     := $B0FFFF;
+        RR.IsSolid       := True;
+        RR.Transparent   := False;
+        RR.OwnerPartId   := 1;
+        RR.OwnerPartDisplayMode := Comp.DisplayMode;
+        Comp.AddSchObject(RR);
+        SchServer.RobotManager.SendMessage(Comp.I_ObjectAddress, c_BroadCast, SCHM_PrimitiveRegistration, RR.I_ObjectAddress);
+    end;
+
+    L := SchServer.SchObjectFactory(eLine, eCreate_Default);
+    if L <> nil then
+    begin
+        L.Location  := Point(MilsToCoord(-150) + 5000, MilsToCoord(0) + 5000);
+        L.Corner    := Point(MilsToCoord(-50) + 5000, MilsToCoord(30) + 5000);
+        L.LineWidth := eSmall;
+        L.Color     := $000000;
+        L.OwnerPartId := 1;
+        L.OwnerPartDisplayMode := Comp.DisplayMode;
+        Comp.AddSchObject(L);
+        SchServer.RobotManager.SendMessage(Comp.I_ObjectAddress, c_BroadCast, SCHM_PrimitiveRegistration, L.I_ObjectAddress);
+    end;
+
+    PL := SchServer.SchObjectFactory(ePolyline, eCreate_Default);
+    if PL <> nil then
+    begin
+        PL.LineWidth := eSmall;
+        PL.Color     := $000000;
+        PL.ClearAllVertices;
+        PL.InsertVertex(1);  PL.Vertex[1] := Point(MilsToCoord(-30) + 5000, MilsToCoord(0) + 5000);
+        PL.InsertVertex(2);  PL.Vertex[2] := Point(MilsToCoord(0) + 5000,   MilsToCoord(30) + 5000);
+        PL.InsertVertex(3);  PL.Vertex[3] := Point(MilsToCoord(30) + 5000,  MilsToCoord(0) + 5000);
+        PL.OwnerPartId := 1;
+        PL.OwnerPartDisplayMode := Comp.DisplayMode;
+        Comp.AddSchObject(PL);
+        SchServer.RobotManager.SendMessage(Comp.I_ObjectAddress, c_BroadCast, SCHM_PrimitiveRegistration, PL.I_ObjectAddress);
+    end;
+
+    Pol := SchServer.SchObjectFactory(ePolygon, eCreate_Default);
+    if Pol <> nil then
+    begin
+        Pol.ClearAllVertices;
+        Pol.InsertVertex(1);  Pol.Vertex[1] := Point(MilsToCoord(50) + 5000,  MilsToCoord(0) + 5000);
+        Pol.InsertVertex(2);  Pol.Vertex[2] := Point(MilsToCoord(150) + 5000, MilsToCoord(0) + 5000);
+        Pol.InsertVertex(3);  Pol.Vertex[3] := Point(MilsToCoord(100) + 5000, MilsToCoord(40) + 5000);
+        Pol.LineWidth   := eSmall;
+        Pol.Color       := $000000;
+        Pol.AreaColor   := $B0FFFF;
+        Pol.IsSolid     := True;
+        Pol.OwnerPartId := 1;
+        Pol.OwnerPartDisplayMode := Comp.DisplayMode;
+        Comp.AddSchObject(Pol);
+        SchServer.RobotManager.SendMessage(Comp.I_ObjectAddress, c_BroadCast, SCHM_PrimitiveRegistration, Pol.I_ObjectAddress);
+    end;
+
+    Bez := SchServer.SchObjectFactory(eBezier, eCreate_Default);
+    if Bez <> nil then
+    begin
+        Bez.LineWidth := eSmall;
+        Bez.Color     := $000000;
+        Bez.ClearAllVertices;
+        Bez.InsertVertex(1);  Bez.SetState_Vertex(1, Point(MilsToCoord(-150) + 5000, MilsToCoord(-80) + 5000));
+        Bez.InsertVertex(2);  Bez.SetState_Vertex(2, Point(MilsToCoord(-120) + 5000, MilsToCoord(-40) + 5000));
+        Bez.InsertVertex(3);  Bez.SetState_Vertex(3, Point(MilsToCoord(-80) + 5000,  MilsToCoord(-120) + 5000));
+        Bez.InsertVertex(4);  Bez.SetState_Vertex(4, Point(MilsToCoord(-50) + 5000,  MilsToCoord(-80) + 5000));
+        Bez.OwnerPartId := 1;
+        Bez.OwnerPartDisplayMode := Comp.DisplayMode;
+        Comp.AddSchObject(Bez);
+        SchServer.RobotManager.SendMessage(Comp.I_ObjectAddress, c_BroadCast, SCHM_PrimitiveRegistration, Bez.I_ObjectAddress);
+    end;
+
+    Txt := SchServer.SchObjectFactory(eLabel, eCreate_Default);
+    if Txt <> nil then
+    begin
+        Txt.Location      := Point(MilsToCoord(50) + 5000, MilsToCoord(-80) + 5000);
+        Txt.Orientation   := eRotate0;
+        Txt.FontID        := 1;
+        Txt.Justification := eJustify_BottomLeft;
+        Txt.Color         := $000000;
+        Txt.Text          := 'FRAC';
+        Txt.OwnerPartId   := 1;
+        Txt.OwnerPartDisplayMode := Comp.DisplayMode;
+        Comp.AddSchObject(Txt);
+        SchServer.RobotManager.SendMessage(Comp.I_ObjectAddress, c_BroadCast, SCHM_PrimitiveRegistration, Txt.I_ObjectAddress);
+    end;
 end;
 
 { Adds one pin to a symbol at (0, Y) mils, pointing left (body to the right), with the
@@ -3048,6 +3382,43 @@ begin
             AddLabelFlagged(Comp, -150, -80, 'MIRRORED');
             AddParameterProps(Comp, 'Rating', '10V', 50, -80);
         end;
+    except
+    end;
+
+    // ELLARC (batch 5): elliptical arcs (RECORD=11), on-grid and off-grid, so the
+    // record kind has a golden at all — its display flags and _Frac keys had
+    // nothing to be verified against.
+    try
+        Comp := NewSymbol(Lib, 'ELLARC', 'Elliptical arcs', 1);
+        if Comp <> nil then
+        begin
+            AddEllipticalArc(Comp, -60, 0, 50, 30, 0, 270, False, False);
+            AddEllipticalArc(Comp,  60, 0, 50, 30, 45, 315, True, True);
+        end;
+    except
+    end;
+
+    // IMPLCHAIN (batch 5): footprint model links (RECORD=44/45/46/48). Three
+    // links: the current one with a datafile path, a plain non-current one,
+    // and one flagged the way a UI-authored link is (IntegratedModel +
+    // DatabaseModel), so the replay of that form has a golden.
+    try
+        Comp := NewSymbol(Lib, 'IMPLCHAIN', 'Footprint model links', 1);
+        if Comp <> nil then
+        begin
+            AddPinEx(Comp, -300, 0, 200, eRotate180, eElectricPassive, '1', 'A', True, True, False);
+            AddImplementation(Comp, 'SOIC-8', 'Narrow body', 'Footprints.PcbLib', True, False);
+            AddImplementation(Comp, 'SOIC-8-WIDE', '', '', False, False);
+            AddImplementation(Comp, 'DIP-8', 'Through-hole', '', False, True);
+        end;
+    except
+    end;
+
+    // FRACSHAPES2 (batch 5): the off-grid shapes FRACSHAPES did not cover.
+    try
+        Comp := NewSymbol(Lib, 'FRACSHAPES2', 'Off-grid shapes, every other kind', 1);
+        if Comp <> nil then
+            AddFracShapes(Comp);
     except
     end;
 

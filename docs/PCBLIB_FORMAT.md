@@ -302,11 +302,12 @@ Every sub-block is length-prefixed:
 
 Mechanical 17-32 have no header byte of their own. Altium stores a primitive on one of them
 under byte **72** (Mechanical 16, the last the byte can hold) and names the real layer in the
-[V7 layer id](#v7-layer-ids) — a hand-authored `Mechanical 20` track is `72` + `0x01020014` —
-or, for a region or body, in the `V7_LAYER` token (`MECHANICAL20`). The reader lets a V7 id or
-token past sixteen decide for a mechanical byte, and the writer stores such a layer the same
-way. Bytes 186-201 are accepted on read for files earlier versions of this crate wrote; they are
-never written.
+[V7 layer id](#v7-layer-ids) — `72` + `0x01020014` for Mechanical 20 — or, for a region or
+body, in the `V7_LAYER` token (`MECHANICAL20`). The `MECH20` golden shows the pair on every
+kind: pad, track, arc, text, fill, region and body. The reader lets a V7 id or token past
+sixteen decide for a mechanical byte, and the writer stores such a layer the same way. Bytes
+186-201 are accepted on read for files earlier versions of this crate wrote; they are never
+written.
 
 A header byte the table does not map reads as Multi-Layer and is carried as the primitive's
 `raw_layer_id`, so a rewrite stores the byte as read rather than `74`; moving the primitive to a
@@ -826,7 +827,7 @@ snap-point or reserved blocks, and there is no `MODEL.SNAPCOUNT` parameter.
 | `BODYOPACITY3D` | 3D body opacity | `1.000` |
 | `IDENTIFIER` | Body name as comma-separated decimal Unicode code points (`µΩ电` = `181,937,30005`; empty stays empty) | `` |
 | `TEXTURE`, `TEXTURECENTERX/Y`, `TEXTURESIZEX/Y`, `TEXTUREROTATION` | Texture fields, round-tripped verbatim (a UI-authored body can carry a rotation of `9.00000000000000E+0001`, leading space included); from-scratch defaults `0mil` and a zero rotation | |
-| `MODELID` | Model GUID; **empty** for a STEP reference the library does not embed (`MODELID=` followed by `MODEL.CHECKSUM=0`, `MODEL.EMBED=FALSE`, `MODEL.NAME=test_0805.step` — UI-authored) | `{GUID}` |
+| `MODELID` | Model GUID. A STEP reference the library does not embed takes one of two forms: UI-authored, **empty** (`MODELID=` followed by `MODEL.CHECKSUM=0`, `MODEL.EMBED=FALSE`, `MODEL.NAME=test_0805.step`, no `/Library/Models` entry); script-authored (`IPCB_Model.Embed := False`, the `STEP_REF` golden), a GUID with a `/Library/Models/Data` entry of `EMBED=FALSE` whose bytes are stored all the same. Both read; the writer reproduces the form it read | `{GUID}` |
 | `MODEL.CHECKSUM` | Model integrity checksum (round-tripped verbatim, see below) | `0` |
 | `MODEL.EMBED` | `TRUE` / `FALSE` | |
 | `MODEL.NAME` | Model filename | `RESC1005X04L.step` |

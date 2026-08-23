@@ -349,14 +349,14 @@ impl McpServer {
         };
 
         // Parse layer names (supports both "TopLayer" and "Top Layer" formats)
-        let Some(from_layer) = Self::parse_layer_name(from_layer_str) else {
+        let Some(from_layer) = crate::altium::pcblib::Layer::parse(from_layer_str) else {
             return ToolCallResult::error(format!(
                 "Invalid from_layer: '{from_layer_str}'. Use format like 'Top Layer', 'Bottom Layer', \
                  'Top Overlay', 'Mechanical 1', etc."
             ));
         };
 
-        let Some(to_layer) = Self::parse_layer_name(to_layer_str) else {
+        let Some(to_layer) = crate::altium::pcblib::Layer::parse(to_layer_str) else {
             return ToolCallResult::error(format!(
                 "Invalid to_layer: '{to_layer_str}'. Use format like 'Top Layer', 'Bottom Layer', \
                  'Top Overlay', 'Mechanical 1', etc."
@@ -416,45 +416,6 @@ impl McpServer {
         }
 
         ToolCallResult::text(serde_json::to_string_pretty(&result).unwrap())
-    }
-
-    /// Parses a layer name string, supporting both camelCase and spaced formats.
-    pub(crate) fn parse_layer_name(s: &str) -> Option<crate::altium::pcblib::Layer> {
-        use crate::altium::pcblib::Layer;
-
-        // First try direct parsing (handles "Top Layer" format)
-        if let Some(layer) = Layer::parse(s) {
-            return Some(layer);
-        }
-
-        // Convert camelCase to spaced format and try again
-        let spaced = match s {
-            "TopLayer" => "Top Layer",
-            "BottomLayer" => "Bottom Layer",
-            "TopOverlay" => "Top Overlay",
-            "BottomOverlay" => "Bottom Overlay",
-            "TopPaste" => "Top Paste",
-            "BottomPaste" => "Bottom Paste",
-            "TopSolder" => "Top Solder",
-            "BottomSolder" => "Bottom Solder",
-            "MultiLayer" => "Multi-Layer",
-            "KeepOutLayer" | "KeepOut" => "Keep-Out Layer",
-            s if s.starts_with("MidLayer") => {
-                let num = s.strip_prefix("MidLayer")?;
-                return Layer::parse(&format!("Mid-Layer {num}"));
-            }
-            s if s.starts_with("Mechanical") => {
-                let num = s.strip_prefix("Mechanical")?;
-                return Layer::parse(&format!("Mechanical {num}"));
-            }
-            s if s.starts_with("InternalPlane") => {
-                let num = s.strip_prefix("InternalPlane")?;
-                return Layer::parse(&format!("Internal Plane {num}"));
-            }
-            _ => return None,
-        };
-
-        Layer::parse(spaced)
     }
 }
 
@@ -939,25 +900,42 @@ mod tests {
         assert!(get_result_text(&result).contains("Invalid symbol_filter regex"));
     }
 
+    /// `rename_layer` resolves layer names exactly as every other tool does,
+    /// through `Layer::parse`: Altium's spelling, the camel-case alias, any
+    /// case.
     #[test]
-    fn parse_layer_name_accepts_both_formats() {
-        assert_eq!(
-            McpServer::parse_layer_name("Top Layer"),
-            Some(crate::altium::pcblib::Layer::TopLayer)
-        );
-        assert_eq!(
-            McpServer::parse_layer_name("BottomOverlay"),
-            Some(crate::altium::pcblib::Layer::BottomOverlay)
-        );
-        assert_eq!(
-            McpServer::parse_layer_name("Mechanical7"),
-            Some(crate::altium::pcblib::Layer::Mechanical7)
-        );
-        assert_eq!(
-            McpServer::parse_layer_name("MidLayer3"),
-            Some(crate::altium::pcblib::Layer::MidLayer3)
-        );
-        assert_eq!(McpServer::parse_layer_name("NotALayer"), None);
+    fn rename_layer_accepts_every_layer_spelling() {
+        let dir = test_temp_dir();
+        let server = create_test_server(dir.path());
+        let path = dir.path().join("Spellings.PcbLib");
+        let mut lib = PcbLib::new();
+        let mut fp = Footprint::new("FP");
+        fp.add_track(Track::new(0.0, 0.0, 1.0, 0.0, 0.1, Layer::Mechanical13));
+        lib.add(fp);
+        lib.save(&path).unwrap();
+
+        for (from, to, expected) in [
+            ("mechanical13", "TopCourtyard", Layer::TopCourtyard),
+            ("Top Courtyard", "top-assembly", Layer::TopAssembly),
+            ("TopAssembly", "Mechanical 20", Layer::Mechanical20),
+        ] {
+            let result = server.call_batch_update(&json!({
+                "filepath": path.to_string_lossy(),
+                "operation": "rename_layer",
+                "parameters": { "from_layer": from, "to_layer": to },
+            }));
+            assert!(
+                !result.is_error,
+                "{from} -> {to}: {}",
+                get_result_text(&result)
+            );
+            let lib = PcbLib::open(&path).unwrap();
+            assert_eq!(
+                lib.get("FP").unwrap().tracks[0].layer,
+                expected,
+                "{from} -> {to}"
+            );
+        }
     }
 
     #[test]
@@ -1434,42 +1412,6 @@ mod tests {
                 block_save(&path, false);
                 assert!(r.is_error, "{operation}: {}", get_result_text(&r));
             }
-        }
-
-        // ---- parse_layer_name ----------------------------------------------------
-
-        #[test]
-        fn layer_names_are_accepted_in_camel_case_as_well_as_spaced() {
-            // The spaced form is Altium's own spelling; the camelCase form is
-            // what a caller reading the serde representation would reach for.
-            let cases = [
-                ("TopLayer", Layer::TopLayer),
-                ("BottomLayer", Layer::BottomLayer),
-                ("TopOverlay", Layer::TopOverlay),
-                ("BottomOverlay", Layer::BottomOverlay),
-                ("TopPaste", Layer::TopPaste),
-                ("BottomPaste", Layer::BottomPaste),
-                ("TopSolder", Layer::TopSolder),
-                ("BottomSolder", Layer::BottomSolder),
-                ("MultiLayer", Layer::MultiLayer),
-                ("KeepOutLayer", Layer::KeepOut),
-                ("KeepOut", Layer::KeepOut),
-                ("MidLayer1", Layer::MidLayer1),
-                ("Mechanical1", Layer::Mechanical1),
-            ];
-            for (name, expected) in cases {
-                assert_eq!(
-                    McpServer::parse_layer_name(name),
-                    Some(expected),
-                    "{name} should resolve"
-                );
-            }
-
-            // Numbered families resolve through the same suffix path.
-            assert!(McpServer::parse_layer_name("InternalPlane1").is_some());
-            // A prefix with no number behind it is not a layer.
-            assert_eq!(McpServer::parse_layer_name("MidLayer"), None);
-            assert_eq!(McpServer::parse_layer_name("Nowhere"), None);
         }
     }
 }

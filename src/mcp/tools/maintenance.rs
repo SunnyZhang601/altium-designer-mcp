@@ -881,50 +881,6 @@ impl McpServer {
             ));
         };
 
-        // Parse layer from string if provided
-        // Use Layer::parse for exact Altium names (e.g., "Top Overlay")
-        // Also support common aliases for convenience
-        let parse_layer = |s: &str| -> Option<Layer> {
-            // First try exact parse (handles all Altium layer names like "Top Overlay")
-            if let Some(layer) = Layer::parse(s) {
-                return Some(layer);
-            }
-            // Fall back to common aliases (case-insensitive)
-            match s.to_lowercase().replace([' ', '-'], "").as_str() {
-                "toplayer" | "top" => Some(Layer::TopLayer),
-                "bottomlayer" | "bottom" => Some(Layer::BottomLayer),
-                "topoverlay" | "topsilk" => Some(Layer::TopOverlay),
-                "bottomoverlay" | "bottomsilk" => Some(Layer::BottomOverlay),
-                "multilayer" => Some(Layer::MultiLayer),
-                "topsolder" => Some(Layer::TopSolder),
-                "bottomsolder" => Some(Layer::BottomSolder),
-                "toppaste" => Some(Layer::TopPaste),
-                "bottompaste" => Some(Layer::BottomPaste),
-                "topassembly" => Some(Layer::TopAssembly),
-                "bottomassembly" => Some(Layer::BottomAssembly),
-                "top3dbody" => Some(Layer::Top3DBody),
-                "bottom3dbody" => Some(Layer::Bottom3DBody),
-                "keepout" | "keepoutlayer" => Some(Layer::KeepOut),
-                s if s.starts_with("mechanical") => {
-                    // Numbered families delegate to Layer::parse via the
-                    // canonical Altium name, so the Layer enum stays the single
-                    // source of truth: a variant added there is picked up here
-                    // automatically, and out-of-range numbers fall out as None.
-                    let num: u8 = s.strip_prefix("mechanical")?.parse().ok()?;
-                    Layer::parse(&format!("Mechanical {num}"))
-                }
-                s if s.starts_with("midlayer") => {
-                    let num: u8 = s.strip_prefix("midlayer")?.parse().ok()?;
-                    Layer::parse(&format!("Mid-Layer {num}"))
-                }
-                s if s.starts_with("internalplane") => {
-                    let num: u8 = s.strip_prefix("internalplane")?.parse().ok()?;
-                    Layer::parse(&format!("Internal Plane {num}"))
-                }
-                _ => None,
-            }
-        };
-
         let mut changes: Vec<Value> = Vec::new();
 
         match primitive_type {
@@ -959,7 +915,7 @@ impl McpServer {
                     track.width = width;
                 }
                 if let Some(layer_str) = updates.get("layer").and_then(Value::as_str) {
-                    if let Some(layer) = parse_layer(layer_str) {
+                    if let Some(layer) = Layer::parse(layer_str) {
                         changes.push(json!({"property": "layer", "old": format!("{:?}", track.layer), "new": layer_str}));
                         track.layer = layer;
                         // A header byte carried from the read names the old
@@ -1015,7 +971,7 @@ impl McpServer {
                     arc.width = width;
                 }
                 if let Some(layer_str) = updates.get("layer").and_then(Value::as_str) {
-                    if let Some(layer) = parse_layer(layer_str) {
+                    if let Some(layer) = Layer::parse(layer_str) {
                         changes.push(json!({"property": "layer", "old": format!("{:?}", arc.layer), "new": layer_str}));
                         arc.layer = layer;
                         // A header byte carried from the read names the old
@@ -1061,7 +1017,7 @@ impl McpServer {
                     text.text = content.to_string();
                 }
                 if let Some(layer_str) = updates.get("layer").and_then(Value::as_str) {
-                    if let Some(layer) = parse_layer(layer_str) {
+                    if let Some(layer) = Layer::parse(layer_str) {
                         changes.push(json!({"property": "layer", "old": format!("{:?}", text.layer), "new": layer_str}));
                         text.layer = layer;
                         // A header byte carried from the read names the old
@@ -1113,7 +1069,7 @@ impl McpServer {
                     fill.rotation = rotation;
                 }
                 if let Some(layer_str) = updates.get("layer").and_then(Value::as_str) {
-                    if let Some(layer) = parse_layer(layer_str) {
+                    if let Some(layer) = Layer::parse(layer_str) {
                         changes.push(json!({"property": "layer", "old": format!("{:?}", fill.layer), "new": layer_str}));
                         fill.layer = layer;
                         // A header byte carried from the read names the old
@@ -1136,7 +1092,7 @@ impl McpServer {
 
                 // Regions mainly have vertices and layer
                 if let Some(layer_str) = updates.get("layer").and_then(Value::as_str) {
-                    if let Some(layer) = parse_layer(layer_str) {
+                    if let Some(layer) = Layer::parse(layer_str) {
                         changes.push(json!({"property": "layer", "old": format!("{:?}", region.layer), "new": layer_str}));
                         region.layer = layer;
                         // A replayed V7_LAYER token names the layer the region
@@ -1197,7 +1153,7 @@ impl McpServer {
                 }
                 for (key, is_from) in [("from_layer", true), ("to_layer", false)] {
                     if let Some(layer_str) = updates.get(key).and_then(Value::as_str) {
-                        let Some(layer) = parse_layer(layer_str) else {
+                        let Some(layer) = Layer::parse(layer_str) else {
                             return ToolCallResult::error(format!("Invalid layer: {layer_str}"));
                         };
                         let old = if is_from {

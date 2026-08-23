@@ -265,10 +265,13 @@ Additional layers supported:
 |-------|-------|
 | Mid-Layer 1–30 | Internal copper layers |
 | Internal Plane 1–16 | Power/ground planes |
-| Mechanical 1–16 | User-defined mechanical layers |
+| Mechanical 1–32 | User-defined mechanical layers |
 | Drill Guide | Drill hole markers |
 | Drill Drawing | Drill chart/table |
 | Keep-Out Layer | Routing exclusion zones |
+
+A layer may be named as Altium spells it (`Top Overlay`, `Mechanical 13`) or in camel
+case (`TopOverlay`, `Mechanical13`), in any case; every tool accepts the same spellings.
 
 ---
 

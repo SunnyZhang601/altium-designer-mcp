@@ -138,7 +138,12 @@ def _generate(binary, out_dir):
             ],
             "rectangles": [{"x1": -20, "y1": -50, "x2": 20, "y2": 50}],
             "lines": [{"x1": -20, "y1": 0, "x2": 20, "y2": 0}],
-            "text": [{"x": -20, "y": 60, "text": "R"}],
+            # A text string on a symbol is a label (RECORD=4). An IEEE symbol
+            # (RECORD=3) is deliberately absent: pyaltiumlib has no reader for
+            # it and would log "unsupported RecordID", which this oracle treats
+            # as a failure; the IEEESYM golden covers that record against
+            # Altium itself.
+            "labels": [{"x": -20, "y": 60, "text": "R"}],
         }
         ws = client.call_tool(
             "write_schlib", {"filepath": sch, "symbols": [symbol], "append": False})

@@ -93,6 +93,7 @@ distinction stays visible: this is not an authoring gap waiting on an Altium run
 | Parameter | Value etc.; ✅ justification + orientation (`JUSTIFY`: `Justification=8` on Value, `Justification=4` + `Orientation=1` on the hidden Tol); ✅ autoposition + justification from the hand-authored `manual/parameters.SchLib`; ✅ show_name + read_only_state + is_mirrored + param_type (`SHAPESTYLE2` — `is_mirrored` was not modelled at all until this fixture exposed it) | 🚫 is_rule / is_system_parameter / is_configurable / text anchors — read-only or never written into a library |
 | EllipticalArc | ✅ authored (`ELLARC`: radius 5 / secondary 3, 0–270°); ✅ `_Frac` on centre and both radii; ✅ GraphicallyLocked (`GraphicallyLocked=T` after `OwnerPartId`, as on every graphic) | 🚫 Disabled/Dimmed (not persisted on library shapes) |
 | FootprintModel | ✅ the RECORD=44/45/46/48 chain (`IMPLCHAIN`: current link with a datafile — `DatafileCount=1`, `ModelDatafile0`, entity, kind, `IsCurrent=T` — a name-only link with none of them and no `Description`, and a described non-current one) | 🚫 `IntegratedModel`/`DatabaseModel` (settable, not persisted from a script — hand-authored evidence only) |
+| IeeeSymbol | ✅ authored (`IEEESYM`: a dot, a mirrored rotated clock, a locked coloured active-low input at scale 20 — `Symbol`, `ScaleFactor`, `Orientation`, `Mirror`, `Color`, `GraphicallyLocked`, no `UniqueID`) | 🚫 Disabled/Dimmed (not persisted on library shapes) |
 
 ### Cross-cutting (both formats)
 
@@ -124,15 +125,13 @@ identifier in a modal dialog, so several may go in one run provided that dialog 
 rather than waited out — otherwise keep it to one unproven interface, or a timeout will
 not say which name was at fault.
 
-**SchLib:** a RECORD=3 — an IEEE symbol, the one record kind the golden still lacks. AD24's
-scripting API has no factory or interface for it (`TIeeeSymbol` exists only as a pin
-decoration), so it needs a hand-authored library; see the RECORD=3 note in
-`SCHLIB_FORMAT.md`. `IntegratedModel`/`DatabaseModel` on a footprint link: settable by
-script (`ISch_Implementation`), but AD24 does not persist them from a script — the
-UI-authored form (`IntegratedModel=T|DatabaseModel=T`) is known from a hand-authored
-library and replayed verbatim, not from a golden. *(Batch 5 closed: RECORD=11 with its
-`_Frac` keys and `GraphicallyLocked`, the RECORD=44/45/46/48 chain incl. a name-only
-link, and `_Frac` on every other shape kind — `ELLARC`, `IMPLCHAIN`, `FRACSHAPES2`.)*
+**SchLib:** `IntegratedModel`/`DatabaseModel` on a footprint link: settable by script
+(`ISch_Implementation`), but AD24 does not persist them from a script — the UI-authored form
+(`IntegratedModel=T|DatabaseModel=T`) is known from a hand-authored library and replayed
+verbatim, not from a golden. *(Batch 5 closed: RECORD=11 with its `_Frac` keys and
+`GraphicallyLocked`, the RECORD=44/45/46/48 chain incl. a name-only link, and `_Frac` on every
+other shape kind — `ELLARC`, `IMPLCHAIN`, `FRACSHAPES2`. Batch 6 closed: RECORD=3, which the
+golden settled as Altium's IEEE symbol — `IEEESYM`, factory `eSymbol`.)*
 
 **PcbLib:** region net and the cavity/subpoly params, raw-outline precision for ComponentBody.
 A **text beyond U+00FF** (Ω, CJK) is 🚫 not scriptable: a source literal reaches Altium as

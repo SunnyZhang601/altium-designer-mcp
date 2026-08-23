@@ -414,7 +414,7 @@ pub struct Symbol {
     pub labels: Vec<Label>,
     /// Text annotations.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub text: Vec<Text>,
+    pub ieee_symbols: Vec<IeeeSymbol>,
     /// Parameters (Value, Part Number, etc.).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub parameters: Vec<Parameter>,
@@ -506,8 +506,8 @@ pub enum SchPrimitiveKind {
     EllipticalArc,
     /// [`Symbol::labels`].
     Label,
-    /// [`Symbol::text`].
-    Text,
+    /// [`Symbol::ieee_symbols`].
+    IeeeSymbol,
     /// [`Symbol::parameters`].
     Parameter,
 }
@@ -532,7 +532,7 @@ impl SchPrimitiveKind {
         Self::RoundRect,
         Self::EllipticalArc,
         Self::Label,
-        Self::Text,
+        Self::IeeeSymbol,
         Self::Parameter,
     ];
 }
@@ -601,7 +601,6 @@ impl Symbol {
             round_rects,
             elliptical_arcs,
             labels,
-            text,
             parameters,
             footprints,
         );
@@ -724,9 +723,9 @@ impl Symbol {
     }
 
     /// Adds a text annotation to the symbol.
-    pub fn add_text(&mut self, text: Text) {
-        self.text.push(text);
-        self.primitive_order.push(SchPrimitiveKind::Text);
+    pub fn add_ieee_symbol(&mut self, symbol: IeeeSymbol) {
+        self.ieee_symbols.push(symbol);
+        self.primitive_order.push(SchPrimitiveKind::IeeeSymbol);
     }
 
     /// The symbol's content records in the order they are written, as
@@ -779,7 +778,7 @@ impl Symbol {
             SchPrimitiveKind::RoundRect => self.round_rects.len(),
             SchPrimitiveKind::EllipticalArc => self.elliptical_arcs.len(),
             SchPrimitiveKind::Label => self.labels.len(),
-            SchPrimitiveKind::Text => self.text.len(),
+            SchPrimitiveKind::IeeeSymbol => self.ieee_symbols.len(),
             SchPrimitiveKind::Parameter => self.parameters.len(),
         }
     }
@@ -1051,35 +1050,29 @@ mod tests {
     }
 
     #[test]
-    fn roundtrip_text_annotation_stays_text_not_label() {
-        // Regression: encode_text emitted RECORD=4 (the Label id), so a Text
-        // annotation round-tripped back as a Label (reader: 3 => Text, 4 => Label).
-        let mut symbol = Symbol::new("TXT");
-        symbol.add_text(Text {
-            raw_params: Vec::new(),
-            x: 5.0,
-            y: 7.0,
-            text: "NOTE".to_string(),
-            font_id: 1,
-            color: 0,
-            justification: TextJustification::BottomLeft,
-            rotation: 0.0,
-            is_mirrored: false,
-            is_hidden: false,
-            owner_part_id: 1,
-            unique_id: None,
-        });
+    fn roundtrip_ieee_symbol() {
+        // RECORD=3 is Altium's IEEE symbol; it reads back as one, glyph,
+        // scale, rotation and mirror intact, and never as a label.
+        let mut symbol = Symbol::new("IEEE");
+        let mut clock = IeeeSymbol::new(3, 5.0, 7.0);
+        clock.rotation = 90.0;
+        clock.is_mirrored = true;
+        clock.scale_factor = 20.0;
+        clock.color = 0xFF_00_00;
+        symbol.add_ieee_symbol(clock);
 
         let data = writer::encode_data_stream(&symbol).expect("encode");
-        let mut decoded = Symbol::new("TXT");
+        let mut decoded = Symbol::new("IEEE");
         reader::parse_data_stream(&mut decoded, &data);
-
-        assert_eq!(decoded.text.len(), 1, "the Text survives as a Text");
-        assert_eq!(decoded.text[0].text, "NOTE");
-        assert!(
-            decoded.labels.is_empty(),
-            "the Text must NOT be mis-read as a Label"
-        );
+        assert!(decoded.labels.is_empty(), "not a label");
+        assert_eq!(decoded.ieee_symbols.len(), 1);
+        let back = &decoded.ieee_symbols[0];
+        assert_eq!(back.symbol, 3);
+        assert!((back.x - 5.0).abs() < 1e-9 && (back.y - 7.0).abs() < 1e-9);
+        assert!((back.scale_factor - 20.0).abs() < 1e-9);
+        assert!((back.rotation - 90.0).abs() < 1e-9);
+        assert!(back.is_mirrored);
+        assert_eq!(back.color, 0xFF_00_00);
     }
 
     #[test]

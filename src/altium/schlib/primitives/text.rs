@@ -52,58 +52,9 @@ pub struct Label {
     pub raw_params: Vec<(String, String)>,
 }
 
-/// A text annotation (RECORD=3).
-///
-/// Similar to Label but uses different record format and positioning.
-/// Used for general text annotations on schematic symbols.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Text {
-    /// X position.
-    #[serde(serialize_with = "crate::altium::serde_round::serialize")]
-    pub x: f64,
-    /// Y position.
-    #[serde(serialize_with = "crate::altium::serde_round::serialize")]
-    pub y: f64,
-    /// Text content.
-    pub text: String,
-    /// Font ID (1-based index into library fonts).
-    #[serde(default = "default_font_id")]
-    pub font_id: u8,
-    /// Text colour (BGR format).
-    #[serde(default)]
-    pub color: u32,
-    /// Text justification.
-    #[serde(default = "default_justification")]
-    pub justification: TextJustification,
-    /// Rotation in degrees.
-    #[serde(default, serialize_with = "crate::altium::serde_round::serialize")]
-    pub rotation: f64,
-    /// Whether the text is mirrored horizontally.
-    #[serde(default)]
-    pub is_mirrored: bool,
-    /// Whether the text is hidden.
-    #[serde(default)]
-    pub is_hidden: bool,
-    /// Owner part ID.
-    #[serde(default = "default_owner_part")]
-    pub owner_part_id: i32,
-    /// Altium unique ID (8-char). Preserved on read so a round-trip keeps the
-    /// shape identity; a from-scratch shape generates a fresh one on write (#113).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub unique_id: Option<String>,
-    /// The record exactly as read: every `key=value` segment in stored order
-    /// (an empty segment as `("", "")`), so the writer replays it verbatim
-    /// where the field behind a segment is unchanged and emits only the keys
-    /// Altium wrote — the UI omits `LineWidth=1` on a rectangle, a script
-    /// does not. Empty for a record built from scratch, which emits the
-    /// canonical form.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub raw_params: Vec<(String, String)>,
-}
-
 /// A bordered multi-line text box — `SchLib` `RECORD=28`.
 ///
-/// Distinct from [`Label`] / [`Text`]: the text lives inside a frame rectangle
+/// Distinct from [`Label`]: the text lives inside a frame rectangle
 /// (Location + Corner) with its own border, fill and text colours, a text
 /// margin, word-wrap and clip-to-rect behaviour. Coordinates are `f64`
 /// schematic units (see `super::coord`).
@@ -440,8 +391,8 @@ mod tests {
     // bytes than it was read with.
 
     #[test]
-    fn an_omitted_label_or_text_field_takes_altiums_own_default() {
-        use super::{Label, Text, TextJustification};
+    fn an_omitted_label_field_takes_altiums_own_default() {
+        use super::{Label, TextJustification};
 
         let label: Label = serde_json::from_str(r#"{"x":0,"y":0,"text":"L"}"#)
             .expect("a minimal label should deserialise");
@@ -450,11 +401,6 @@ mod tests {
         // SchLib anchors bottom-left, unlike the shared enum's MiddleCenter —
         // defaulting to the shared value would shift every label on save.
         assert_eq!(label.justification, TextJustification::BottomLeft);
-
-        let text: Text = serde_json::from_str(r#"{"x":0,"y":0,"text":"T"}"#)
-            .expect("a minimal text should deserialise");
-        assert_eq!(text.font_id, 1);
-        assert_eq!(text.justification, TextJustification::BottomLeft);
     }
 
     #[test]

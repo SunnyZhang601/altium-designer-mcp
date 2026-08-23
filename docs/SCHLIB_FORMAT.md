@@ -180,8 +180,8 @@ Every record type this crate models:
 |----|------|-------------|
 | 1 | Component | Symbol header (name, description, part count) |
 | 2 | Pin | Pin in text form (rare — skipped on read; binary pins are used instead) |
-| 3 | Text | Text annotation (general-purpose text) |
-| 4 | Label | Text label |
+| 3 | IeeeSymbol | IEEE symbol glyph (a dot, a clock, an active-low input, …) |
+| 4 | Label | Text string — the only free text on a symbol |
 | 5 | Bezier | Cubic Bezier curve (4 control points) |
 | 6 | Polyline | Multiple connected line segments |
 | 7 | Polygon | Filled polygon |
@@ -531,15 +531,10 @@ does not mark a parameter as system.
 All shape records carry the [common fields](#common-text-record-fields) in addition to the tables
 below; every coordinate accepts a `_Frac` companion.
 
-### Text (RECORD=3) and Label (RECORD=4)
+### Label (RECORD=4)
 
-Two distinct record types sharing one field set. This crate reads/writes RECORD=3 as a
-general-purpose text annotation and RECORD=4 as a label.
-
-> **Caveat (unsettled):** Altium's own record table has RECORD=3 as the **IEEE symbol** (a
-> graphic with `Symbol`/`ScaleFactor`), and RECORD=4 as the text string. Treating RECORD=3
-> as text is this crate's reading, not verified against Altium: no golden carries one,
-> because AD24's scripting API cannot place an IEEE symbol. See `TODO.md` § A.
+Altium's text string: the only free text a symbol carries (the `RECORD=3` this crate once
+read as a "text annotation" is the [IEEE symbol](#ieee-symbol-record3) below).
 
 | Property | Type | Description |
 |----------|------|-------------|
@@ -564,6 +559,38 @@ Keys in golden order: `Orientation` and `Justification` sit between the coordina
 | 0 | Bottom Left | 3 | Middle Left | 6 | Top Left |
 | 1 | Bottom Centre | 4 | Middle Centre | 7 | Top Centre |
 | 2 | Bottom Right | 5 | Middle Right | 8 | Top Right |
+
+### IEEE Symbol (RECORD=3)
+
+One of Altium's standard logic and signal glyphs placed at a point with a scale, a
+quarter-turn rotation and an optional mirror. Settled by the `IEEESYM` golden (batch 6):
+the record carries exactly these keys, in this order, and **no `UniqueID`** — Altium never
+gives this record one, so none is written.
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `Symbol` | int | The glyph (`TIeeeSymbol`, table below); always written |
+| `Location.X` / `Location.Y` | coord | Anchor position; omit at 0 |
+| `ScaleFactor` | coord | Glyph size in schematic units (`10` for a 100 mil placement); always written |
+| `Orientation` | int | 0-3 = 0°/90°/180°/270°; omit at 0 |
+| `LineWidth` | int | Always written (`1` at the default) |
+| `Mirror` | bool | Emit only when `T` (note: `Mirror`, not a label's `IsMirrored`) |
+| `Color` | int | Line colour (BGR; omit at 0) |
+
+Golden records: `|RECORD=3|IsNotAccesible=T|OwnerPartId=1|Symbol=1|Location.X=-10|ScaleFactor=10|LineWidth=1`
+(a dot), `…|Symbol=3|ScaleFactor=10|Orientation=1|LineWidth=1|Mirror=T` (a mirrored, rotated
+clock) and `…|OwnerPartId=1|GraphicallyLocked=T|Symbol=4|Location.X=10|ScaleFactor=20|LineWidth=1|Color=16711680`
+(a locked, larger, coloured active-low input) — the display flags sit after `OwnerPartId` as
+on every graphic.
+
+**`TIeeeSymbol` values** (AD24): 0 none, 1 Dot, 2 Right-Left Signal Flow, 3 Clock,
+4 Active Low Input, 5 Analog Signal In, 6 Not Logic Connection, 7 Shift Right, 8 Postponed
+Output, 9 Open Collector, 10 Hi-Z, 11 High Current, 12 Pulse, 13 Schmitt, 14 Delay, 15 Group
+Line, 16 Group Binary, 17 Active Low Output, 18 Pi, 19 Greater Equal, 20 Less Equal, 21 Sigma,
+22 Open Collector Pull Up, 23 Open Emitter, 24 Open Emitter Pull Up, 25 Digital Signal In,
+26 And, 27 Invertor, 28 Or, 29 Xor, 30 Shift Left, 31 Input Output, 32 Open Circuit Output,
+33 Left-Right Signal Flow, 34 Bidirectional Signal Flow. The JSON `symbol` field carries the
+id as stored, so a value this table does not name round-trips unchanged.
 
 ### Bezier (RECORD=5)
 
@@ -866,7 +893,7 @@ parameters keep the `-1` sentinel and consume no slot):
 13. Rounded rectangles (RECORD=10)
 14. Elliptical arcs (RECORD=11)
 15. Labels (RECORD=4)
-16. Text annotations (RECORD=3)
+16. IEEE symbols (RECORD=3)
 17. User parameters (RECORD=41, `OwnerPartId >= 1`) — after the graphic content, matching the
     golden stream order (JUSTIFY stores labels at slots 0-3, user parameters at 4-5)
 18. Designator (RECORD=34, when non-empty)

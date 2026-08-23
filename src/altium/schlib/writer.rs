@@ -22,8 +22,9 @@
 
 use super::coord;
 use super::primitives::{
-    Arc, Bezier, Ellipse, EllipticalArc, FootprintModel, Image, Label, Line, Parameter, Pie, Pin,
-    Polygon, Polyline, Rectangle, RoundRect, ShapeDisplayFlags, Text, TextFrame, TextJustification,
+    Arc, Bezier, Ellipse, EllipticalArc, FootprintModel, IeeeSymbol, Image, Label, Line, Parameter,
+    Pie, Pin, Polygon, Polyline, Rectangle, RoundRect, ShapeDisplayFlags, TextFrame,
+    TextJustification,
 };
 use super::{SchPrimitiveKind, Symbol};
 use crate::altium::framing::{write_cstring_param_block, write_pascal_string};
@@ -408,6 +409,7 @@ const MODELLED_RECORD_KEYS: &[&str] = &[
     "Location.Y",
     "Location.Y_Frac",
     "LocationCount",
+    "Mirror",
     "Name",
     "%UTF8%Name",
     "NotAutoPosition",
@@ -419,12 +421,15 @@ const MODELLED_RECORD_KEYS: &[&str] = &[
     "Radius",
     "Radius_Frac",
     "ReadOnlyState",
+    "ScaleFactor",
+    "ScaleFactor_Frac",
     "SecondaryRadius",
     "SecondaryRadius_Frac",
     "ShowBorder",
     "ShowName",
     "StartAngle",
     "StartLineShape",
+    "Symbol",
     "Text",
     "%UTF8%Text",
     "TextColor",
@@ -1471,37 +1476,29 @@ fn encode_label(label: &Label, index: usize) -> String {
     )
 }
 
-/// Encodes a text annotation record. Token order mirrors [`encode_label`]
-/// (the golden's RECORD=3/4 records share the layout).
-fn encode_text(text: &Text, index: usize) -> String {
+/// Encodes an IEEE symbol record (`RECORD=3`). Key order as the `IEEESYM`
+/// golden stores it: `Symbol`, the location, `ScaleFactor`, `Orientation`,
+/// `LineWidth`, `Mirror`, `Color` — and no `UniqueID`, which Altium never
+/// gives this record.
+fn encode_ieee_symbol(symbol: &IeeeSymbol, index: usize) -> String {
     #[allow(clippy::cast_possible_truncation)]
-    let orientation = (text.rotation / 90.0).round() as i32 % 4;
-    let justification = justification_to_id(text.justification);
-    // Altium emits IsMirrored / IsHidden only when true — never `=F`.
-    let is_mirrored = if text.is_mirrored {
-        "|IsMirrored=T"
-    } else {
-        ""
-    };
-    let is_hidden = if text.is_hidden { "|IsHidden=T" } else { "" };
-    #[allow(clippy::cast_sign_loss)] // orientation is %4-bounded, non-negative
-    let orientation_token = nonzero("Orientation", orientation.rem_euclid(4) as u32);
+    let orientation = ((symbol.rotation / 90.0).round() as i32).rem_euclid(4);
+    #[allow(clippy::cast_sign_loss)] // rem_euclid(4) is non-negative
+    let orientation_token = nonzero("Orientation", orientation as u32);
+    let mirror = if symbol.is_mirrored { "|Mirror=T" } else { "" };
     format!(
-        // RECORD=3 is the Text-annotation id (the reader dispatches 3 -> parse_text,
-        // 4 -> parse_label); emitting 4 here made a Text round-trip back as a Label.
-        "|RECORD=3|IsNotAccesible=T{}|OwnerPartId={}{}{}{}{}{}|FontID={}|{}{}{}|UniqueID={}",
+        "|RECORD=3|IsNotAccesible=T{}|OwnerPartId={}{}|Symbol={}{}{}{}{}|LineWidth={}{}{}",
         index_in_sheet(index),
-        text.owner_part_id,
-        coord_param("Location.X", text.x),
-        coord_param("Location.Y", text.y),
+        symbol.owner_part_id,
+        write_display_flags(symbol.display_flags),
+        symbol.symbol,
+        coord_param("Location.X", symbol.x),
+        coord_param("Location.Y", symbol.y),
+        coord_param("ScaleFactor", symbol.scale_factor),
         orientation_token,
-        nonzero("Justification", u32::from(justification)),
-        nonzero("Color", text.color),
-        text.font_id,
-        text_field("Text", &text.text),
-        is_hidden,
-        is_mirrored,
-        text.unique_id.clone().unwrap_or_else(generate_unique_id)
+        symbol.line_width,
+        mirror,
+        nonzero("Color", symbol.color),
     )
 }
 
@@ -1711,9 +1708,9 @@ pub fn encode_data_stream(symbol: &Symbol) -> crate::altium::error::AltiumResult
                 &encode_label(&symbol.labels[index], index_counter),
                 &symbol.labels[index].raw_params,
             ),
-            SchPrimitiveKind::Text => replay_record(
-                &encode_text(&symbol.text[index], index_counter),
-                &symbol.text[index].raw_params,
+            SchPrimitiveKind::IeeeSymbol => replay_record(
+                &encode_ieee_symbol(&symbol.ieee_symbols[index], index_counter),
+                &symbol.ieee_symbols[index].raw_params,
             ),
         };
         write_text_record(&mut data, &record)?;
@@ -2436,7 +2433,7 @@ mod tests {
                 .chain(symbol.round_rects.iter().map(|r| &r.raw_params))
                 .chain(symbol.elliptical_arcs.iter().map(|r| &r.raw_params))
                 .chain(symbol.labels.iter().map(|r| &r.raw_params))
-                .chain(symbol.text.iter().map(|r| &r.raw_params))
+                .chain(symbol.ieee_symbols.iter().map(|r| &r.raw_params))
                 .chain(symbol.parameters.iter().map(|r| &r.raw_params))
                 .collect();
             assert!(
@@ -3137,25 +3134,28 @@ mod tests {
             "non-zero arc Color must be emitted"
         );
 
-        let s = encode_text(
-            &Text {
-                raw_params: Vec::new(),
-                x: 0.0,
-                y: 0.0,
-                text: "hi".to_string(),
-                font_id: 1,
-                color: 0,
-                justification: TextJustification::BottomLeft,
-                rotation: 0.0,
-                is_mirrored: false,
-                is_hidden: false,
-                owner_part_id: 1,
-                unique_id: Some("ABCD1234".to_string()),
-            },
-            1,
+        // An IEEE symbol as the IEEESYM golden stores a plain dot: no
+        // Orientation, Mirror or Color at their defaults, and no UniqueID ever.
+        let s = encode_ieee_symbol(&IeeeSymbol::new(1, -10.0, 0.0), 0);
+        assert_eq!(
+            s,
+            "|RECORD=3|IsNotAccesible=T|OwnerPartId=1|Symbol=1|Location.X=-10|ScaleFactor=10|LineWidth=1"
         );
-        assert!(!s.contains("Color="), "zero text Color omitted: {s}");
-        assert!(!s.contains("=F"), "text never emits a boolean =F: {s}");
+        let mut clock = IeeeSymbol::new(3, 0.0, 0.0);
+        clock.rotation = 90.0;
+        clock.is_mirrored = true;
+        assert_eq!(
+            encode_ieee_symbol(&clock, 1),
+            "|RECORD=3|IsNotAccesible=T|IndexInSheet=1|OwnerPartId=1|Symbol=3|ScaleFactor=10|Orientation=1|LineWidth=1|Mirror=T"
+        );
+        let mut locked = IeeeSymbol::new(4, 10.0, 0.0);
+        locked.scale_factor = 20.0;
+        locked.color = 16_711_680;
+        locked.display_flags.graphically_locked = true;
+        assert_eq!(
+            encode_ieee_symbol(&locked, 2),
+            "|RECORD=3|IsNotAccesible=T|IndexInSheet=2|OwnerPartId=1|GraphicallyLocked=T|Symbol=4|Location.X=10|ScaleFactor=20|LineWidth=1|Color=16711680"
+        );
     }
 
     #[test]

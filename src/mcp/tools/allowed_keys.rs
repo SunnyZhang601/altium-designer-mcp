@@ -363,23 +363,20 @@ graphic_keys!(
     ]
 );
 
-/// A text annotation (record 3) carries no display flags; `hidden` is the
-/// authoring spelling of `is_hidden`.
-pub const TEXT: &[&str] = &[
-    "x",
-    "y",
-    "text",
-    "color",
-    "font_id",
-    "is_hidden",
-    "is_mirrored",
-    "justification",
-    "rotation",
-    "owner_part_id",
-    "unique_id",
-    "raw_params",
-    "hidden",
-];
+graphic_keys!(
+    /// An IEEE symbol (record 3).
+    IEEE_SYMBOL = [
+        "x",
+        "y",
+        "symbol",
+        "scale_factor",
+        "rotation",
+        "is_mirrored",
+        "line_width",
+        "color",
+        "owner_part_id",
+    ]
+);
 
 #[cfg(test)]
 mod tests {
@@ -529,13 +526,10 @@ mod tests {
             beziers => BEZIER,
             ellipses => ELLIPSE,
             elliptical_arcs => ELLIPTICAL_ARC,
+            ieee_symbols => IEEE_SYMBOL,
             labels => LABEL,
             parameters => PARAMETER,
         );
-        // The golden carries no RECORD=3 — an IEEE symbol, which AD24's
-        // scripting API cannot place — so that list is held to its struct by
-        // construction only.
-        assert!(symbols.iter().all(|s| s.text.is_empty()));
     }
 
     /// The same for the golden `PcbLib` — true by construction for the

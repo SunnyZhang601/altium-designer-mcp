@@ -330,9 +330,19 @@ impl McpServer {
             )?;
         }
 
-        for (i, text) in symbol.text.iter().enumerate() {
-            Self::validate_schlib_coordinate(text.x, &format!("Symbol '{name}' text {i} x"))?;
-            Self::validate_schlib_coordinate(text.y, &format!("Symbol '{name}' text {i} y"))?;
+        for (i, ieee) in symbol.ieee_symbols.iter().enumerate() {
+            Self::validate_schlib_coordinate(
+                ieee.x,
+                &format!("Symbol '{name}' ieee_symbol {i} x"),
+            )?;
+            Self::validate_schlib_coordinate(
+                ieee.y,
+                &format!("Symbol '{name}' ieee_symbol {i} y"),
+            )?;
+            Self::validate_schlib_coordinate(
+                ieee.scale_factor,
+                &format!("Symbol '{name}' ieee_symbol {i} scale_factor"),
+            )?;
         }
 
         for (i, param) in symbol.parameters.iter().enumerate() {
@@ -446,9 +456,9 @@ mod tests {
                 "elliptical_arc 0 radius",
             ),
             (
-                "text",
-                json!([{ "x": FAR, "y": 0, "text": "T" }]),
-                "text 0 x",
+                "ieee_symbols",
+                json!([{ "x": FAR, "y": 0, "symbol": 1 }]),
+                "ieee_symbol 0 x",
             ),
         ];
 
@@ -483,7 +493,7 @@ mod tests {
         let server = create_test_server(dir.path());
         let path = dir.path().join("Corners.SchLib");
 
-        let cases: [(&str, serde_json::Value, &str); 16] = [
+        let cases: [(&str, serde_json::Value, &str); 17] = [
             (
                 // Pin coordinates are integers, so this mirrors FAR rather
                 // than casting it.
@@ -574,9 +584,14 @@ mod tests {
                 "elliptical_arc 0 secondary_radius",
             ),
             (
-                "text",
-                json!([{ "x": 0, "y": FAR, "text": "T" }]),
-                "text 0 y",
+                "ieee_symbols",
+                json!([{ "x": 0, "y": FAR, "symbol": 1 }]),
+                "ieee_symbol 0 y",
+            ),
+            (
+                "ieee_symbols",
+                json!([{ "x": 0, "y": 0, "symbol": 1, "scale_factor": FAR }]),
+                "ieee_symbol 0 scale_factor",
             ),
         ];
 

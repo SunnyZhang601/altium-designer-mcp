@@ -46,9 +46,9 @@ footprints, or use limit/offset for pagination.
 ## `read_schlib`
 
 Read an Altium .SchLib file and return its contents including symbols with their primitives (pins, rectangles, round_rects, lines, polylines, polygons, arcs, pies,
-images, text_frames, beziers, ellipses, elliptical_arcs, labels, text), parameters and footprint links. Coordinates are in schematic units (10 units = 1 grid square, not
-mm). Fields such as unique_id, primitive_order, header_params, raw_params, all_pin_count and extra_streams are fidelity carriers: pass them back unchanged to write_schlib
-or update_component and the rewrite is byte-identical to the source; omit them when authoring from scratch. Each symbol is the same JSON shape get_component,
+images, text_frames, beziers, ellipses, elliptical_arcs, labels, ieee_symbols), parameters and footprint links. Coordinates are in schematic units (10 units = 1 grid
+square, not mm). Fields such as unique_id, primitive_order, header_params, raw_params, all_pin_count and extra_streams are fidelity carriers: pass them back unchanged to
+write_schlib or update_component and the rewrite is byte-identical to the source; omit them when authoring from scratch. Each symbol is the same JSON shape get_component,
 export_library and write_schlib use; a list with no entries and an optional field with no value are omitted rather than empty/null. For large libraries, use
 component_name to fetch specific symbols, or use limit/offset for pagination.
 

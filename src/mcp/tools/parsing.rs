@@ -500,13 +500,13 @@ impl McpServer {
             }
         }
 
-        // Parse text annotations
-        if let Some(texts) = sym_json.get("text").and_then(Value::as_array) {
-            for (i, text_json) in texts.iter().enumerate() {
-                Self::refuse_unknown(text_json, allowed_keys::TEXT)?;
-                let text = Self::parse_schlib_text(text_json)
-                    .ok_or_else(|| Self::malformed(operation, filepath, name, "text", i))?;
-                symbol.add_text(text);
+        // Parse IEEE symbols
+        if let Some(symbols) = sym_json.get("ieee_symbols").and_then(Value::as_array) {
+            for (i, symbol_json) in symbols.iter().enumerate() {
+                Self::refuse_unknown(symbol_json, allowed_keys::IEEE_SYMBOL)?;
+                let ieee_symbol = Self::parse_schlib_ieee_symbol(symbol_json)
+                    .ok_or_else(|| Self::malformed(operation, filepath, name, "IEEE symbol", i))?;
+                symbol.add_ieee_symbol(ieee_symbol);
             }
         }
 
@@ -3027,63 +3027,49 @@ impl McpServer {
         })
     }
 
-    /// Parses a schematic text annotation from JSON.
-    #[allow(clippy::cast_possible_truncation)]
-    pub(crate) fn parse_schlib_text(json: &Value) -> Option<crate::altium::schlib::Text> {
-        use crate::altium::schlib::{Text, TextJustification};
+    /// Parses a schematic IEEE symbol (RECORD=3) from JSON. `symbol` is
+    /// Altium's `TIeeeSymbol` id (1 Dot, 3 Clock, …); see
+    /// `docs/SCHLIB_FORMAT.md` for the table.
+    pub(crate) fn parse_schlib_ieee_symbol(
+        json: &Value,
+    ) -> Option<crate::altium::schlib::IeeeSymbol> {
+        use crate::altium::schlib::IeeeSymbol;
 
         let x = json_f64(json, "x")?;
         let y = json_f64(json, "y")?;
-        let text = json.get("text").and_then(Value::as_str)?.to_string();
-
-        let font_id = json.get("font_id").and_then(Value::as_u64).unwrap_or(1) as u8;
-        let color = json
-            .get("color")
+        let symbol = json
+            .get("symbol")
             .and_then(Value::as_u64)
-            .unwrap_or(0x00_00_80) as u32;
-        let rotation = json.get("rotation").and_then(Value::as_f64).unwrap_or(0.0);
+            .and_then(|v| u32::try_from(v).ok())?;
+        let scale_factor = json_f64(json, "scale_factor").unwrap_or(10.0);
+        let rotation = json_f64(json, "rotation").unwrap_or(0.0);
         let is_mirrored = json
             .get("is_mirrored")
             .and_then(Value::as_bool)
             .unwrap_or(false);
-        let is_hidden = json
-            .get("is_hidden")
-            .or_else(|| json.get("hidden"))
-            .and_then(Value::as_bool)
-            .unwrap_or(false);
+        let line_width = json
+            .get("line_width")
+            .and_then(Value::as_u64)
+            .and_then(|v| u8::try_from(v).ok())
+            .unwrap_or(1);
+        let color = json
+            .get("color")
+            .and_then(Value::as_u64)
+            .and_then(|v| u32::try_from(v).ok())
+            .unwrap_or(0);
         let owner_part_id = json_i32(json, "owner_part_id").unwrap_or(1);
 
-        let justification = json.get("justification").and_then(Value::as_str).map_or(
-            TextJustification::BottomLeft,
-            |s| {
-                match s.to_lowercase().replace(['-', '_'], "").as_str() {
-                    "bottomcenter" | "bottomcentre" => TextJustification::BottomCenter,
-                    "bottomright" => TextJustification::BottomRight,
-                    "middleleft" | "centerleft" | "centreleft" => TextJustification::MiddleLeft,
-                    "middlecenter" | "middlecentre" | "center" | "centre" => {
-                        TextJustification::MiddleCenter
-                    }
-                    "middleright" | "centerright" | "centreright" => TextJustification::MiddleRight,
-                    "topleft" => TextJustification::TopLeft,
-                    "topcenter" | "topcentre" => TextJustification::TopCenter,
-                    "topright" => TextJustification::TopRight,
-                    _ => TextJustification::BottomLeft, // "bottomleft" and unknown values
-                }
-            },
-        );
-
-        Some(Text {
+        Some(IeeeSymbol {
             x,
             y,
-            text,
-            font_id,
-            color,
-            justification,
+            symbol,
+            scale_factor,
             rotation,
             is_mirrored,
-            is_hidden,
+            line_width,
+            color,
             owner_part_id,
-            unique_id: json_unique_id(json),
+            display_flags: parse_schlib_display_flags(json),
             raw_params: json_raw_params(json),
         })
     }

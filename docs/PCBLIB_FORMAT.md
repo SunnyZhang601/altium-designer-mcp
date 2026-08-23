@@ -730,9 +730,8 @@ Filled rectangle, single 50-byte block:
 
 ### Region (0x0B)
 
-Filled polygon — a **single** size-prefixed block. (Earlier revisions of this crate wrote a
-spurious empty second block, which Altium read as an invalid record type, silently dropping every
-primitive after the region.)
+Filled polygon — a **single** size-prefixed block; an empty second block would be read by Altium
+as an invalid record type, silently dropping every primitive after the region.
 
 | Offset | Size | Field |
 |--------|------|-------|

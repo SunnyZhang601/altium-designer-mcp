@@ -11,6 +11,9 @@ so CI can read them without Altium. Regenerate and re-commit whenever the author
 > Building these is iterative — generate, read back with the Rust tests, extend the
 > primitive set, regenerate. Coverage grows component by component.
 
+[`COVERAGE.md`](COVERAGE.md) is the map of what each fixture exercises, the enrichment
+backlog, and the Altium behaviours verified not to persist.
+
 ## NEVER open-and-save a committed golden in Altium
 
 An AD load+save cycle silently damages fixtures (measured 2026-08-16 by resaving

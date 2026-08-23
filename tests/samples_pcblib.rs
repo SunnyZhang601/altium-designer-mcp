@@ -849,7 +849,7 @@ fn samples_pcblib_body3d() {
 }
 
 // ---------------------------------------------------------------------------
-// Coverage-enrichment tests (docs/FIXTURE_COVERAGE.md): non-default PcbLib
+// Coverage-enrichment tests (scripts/samples/COVERAGE.md): non-default PcbLib
 // property values authored by GenerateSamples.pas, verified against the real
 // Altium-regenerated fixture.
 // ---------------------------------------------------------------------------

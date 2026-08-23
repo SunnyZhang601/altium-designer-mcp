@@ -366,66 +366,25 @@ impl McpServer {
         let mut footprints_updated = Vec::new();
 
         for fp in library.iter_mut() {
-            let mut fp_changes = json!({
-                "name": fp.name,
-                "tracks": 0,
-                "arcs": 0,
-                "regions": 0,
-                "text": 0,
-            });
-            let mut fp_total = 0usize;
-
-            // Update tracks
-            for track in &mut fp.tracks {
-                if track.layer == from_layer {
-                    if !dry_run {
-                        track.layer = to_layer;
-                    }
-                    fp_changes["tracks"] = json!(fp_changes["tracks"].as_u64().unwrap_or(0) + 1);
-                    fp_total += 1;
-                }
-            }
-
-            // Update arcs
-            for arc in &mut fp.arcs {
-                if arc.layer == from_layer {
-                    if !dry_run {
-                        arc.layer = to_layer;
-                    }
-                    fp_changes["arcs"] = json!(fp_changes["arcs"].as_u64().unwrap_or(0) + 1);
-                    fp_total += 1;
-                }
-            }
-
-            // Update regions
-            for region in &mut fp.regions {
-                if region.layer == from_layer {
-                    if !dry_run {
-                        region.layer = to_layer;
-                        // The replayed V7_LAYER token named the old layer; let
-                        // the writer derive it from the new one.
-                        region.v7_layer = None;
-                    }
-                    fp_changes["regions"] = json!(fp_changes["regions"].as_u64().unwrap_or(0) + 1);
-                    fp_total += 1;
-                }
-            }
-
-            // Update text
-            for text in &mut fp.text {
-                if text.layer == from_layer {
-                    if !dry_run {
-                        text.layer = to_layer;
-                    }
-                    fp_changes["text"] = json!(fp_changes["text"].as_u64().unwrap_or(0) + 1);
-                    fp_total += 1;
-                }
-            }
-
-            if fp_total > 0 {
-                fp_changes["total"] = json!(fp_total);
-                footprints_updated.push(fp_changes);
-                total_updated += fp_total;
+            // A dry run moves a copy, so the report is the real move's report.
+            let moved = if dry_run {
+                fp.clone().move_layer(from_layer, to_layer)
+            } else {
+                fp.move_layer(from_layer, to_layer)
+            };
+            if moved.total() > 0 {
+                footprints_updated.push(json!({
+                    "name": fp.name,
+                    "tracks": moved.tracks,
+                    "arcs": moved.arcs,
+                    "regions": moved.regions,
+                    "text": moved.text,
+                    "fills": moved.fills,
+                    "pads": moved.pads,
+                    "component_bodies": moved.component_bodies,
+                    "total": moved.total(),
+                }));
+                total_updated += moved.total();
             }
         }
 
@@ -735,6 +694,81 @@ mod tests {
         let fp1 = lib.get("SOIC8").unwrap();
         assert_eq!(fp1.tracks[0].layer, Layer::Mechanical13);
         assert_eq!(fp1.tracks[2].layer, Layer::Mechanical1);
+    }
+
+    /// "Move every primitive" means every kind that sits on a layer: fills,
+    /// pads and component bodies move with the tracks, arcs, regions and
+    /// text, a dry run reports the same counts, and a moved region or body
+    /// writes the token of its new layer.
+    #[test]
+    fn rename_layer_moves_fills_pads_and_bodies_too() {
+        use crate::altium::pcblib::{Arc, ComponentBody, Fill, Region, Text};
+
+        let dir = test_temp_dir();
+        let server = create_test_server(dir.path());
+        let path = dir.path().join("Kinds.PcbLib");
+        let mut lib = PcbLib::new();
+        let mut fp = Footprint::new("KINDS");
+        let from = Layer::Mechanical13;
+        fp.add_track(Track::new(0.0, 0.0, 1.0, 0.0, 0.1, from));
+        fp.add_arc(Arc::circle(0.0, 0.0, 1.0, 0.1, from));
+        fp.add_text(Text::new(0.0, 0.0, "T", 1.0, from));
+        fp.add_fill(Fill::new(0.0, 0.0, 1.0, 1.0, from));
+        fp.add_region(Region::rectangle(0.0, 0.0, 1.0, 1.0, from));
+        let mut pad = Pad::smd("1", 0.0, 0.0, 1.0, 1.0);
+        pad.layer = from;
+        fp.add_pad(pad);
+        let mut body = ComponentBody::new("", "body.step");
+        body.embedded = false;
+        body.layer = from;
+        fp.add_component_body(body);
+        lib.add(fp);
+        lib.save(&path).unwrap();
+
+        for dry_run in [true, false] {
+            let result = server.call_batch_update(&json!({
+                "filepath": path.to_string_lossy(),
+                "operation": "rename_layer",
+                "parameters": { "from_layer": "Mechanical 13", "to_layer": "Mechanical 20" },
+                "dry_run": dry_run,
+            }));
+            assert!(!result.is_error, "{}", get_result_text(&result));
+            let parsed = parse_result_json(&result);
+            assert_eq!(
+                parsed["total_primitives_updated"], 7,
+                "dry_run={dry_run}: {parsed}"
+            );
+            let report = &parsed["footprints_updated"][0];
+            for kind in [
+                "tracks",
+                "arcs",
+                "regions",
+                "text",
+                "fills",
+                "pads",
+                "component_bodies",
+            ] {
+                assert_eq!(report[kind], 1, "dry_run={dry_run} {kind}: {parsed}");
+            }
+            assert_eq!(report["total"], 7);
+        }
+
+        let lib = PcbLib::open(&path).unwrap();
+        let fp = lib.get("KINDS").unwrap();
+        let to = Layer::Mechanical20;
+        assert_eq!(fp.tracks[0].layer, to);
+        assert_eq!(fp.arcs[0].layer, to);
+        assert_eq!(fp.text[0].layer, to);
+        assert_eq!(fp.fills[0].layer, to);
+        assert_eq!(
+            fp.regions[0].layer, to,
+            "the region's token followed the move"
+        );
+        assert_eq!(fp.pads[0].layer, to);
+        assert_eq!(
+            fp.component_bodies[0].layer, to,
+            "the body's token followed the move"
+        );
     }
 
     #[test]

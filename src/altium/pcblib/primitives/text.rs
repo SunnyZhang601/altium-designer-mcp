@@ -300,6 +300,54 @@ pub struct Text {
     pub raw_geometry: Option<Vec<u8>>,
 }
 
+impl Text {
+    /// Creates a stroke-font text of `height` mm at (`x`, `y`) on `layer`,
+    /// every other field at the value a text placed from scratch gets.
+    #[must_use]
+    pub fn new(x: f64, y: f64, text: impl Into<String>, height: f64, layer: Layer) -> Self {
+        Self {
+            raw_layer_id: None,
+            barcode_full_width: None,
+            barcode_full_height: None,
+            barcode_x_margin: None,
+            barcode_y_margin: None,
+            barcode_kind: 0,
+            barcode_font_name: String::new(),
+            barcode_inverted: false,
+            barcode_show_text: false,
+            x,
+            y,
+            text: text.into(),
+            height,
+            layer,
+            kind: TextKind::Stroke,
+            rotation: 0.0,
+            stroke_font: None,
+            stroke_width: None,
+            italic: false,
+            bold: false,
+            mirror: false,
+            is_comment: false,
+            is_designator: false,
+            font_name: "Arial".to_string(),
+            justification: TextJustification::default(),
+            is_inverted: false,
+            inverted_border: None,
+            use_inverted_rectangle: false,
+            inverted_rect_width: None,
+            inverted_rect_height: None,
+            inverted_rect_text_offset: None,
+            flags: PcbFlags::default(),
+            net_index: 0xFFFF,
+            polygon_index: 0xFFFF,
+            component_index: -1,
+            unique_id: None,
+            guid: None,
+            raw_geometry: None,
+        }
+    }
+}
+
 /// A filled rectangle on a layer.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Fill {

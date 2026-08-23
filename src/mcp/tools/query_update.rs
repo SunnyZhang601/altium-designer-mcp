@@ -70,18 +70,21 @@ impl McpServer {
             Err(e) => return ToolCallResult::error(format!("Failed to read library: {e}")),
         };
 
-        // Check component exists
-        if library.get(component_name).is_none() {
+        // The component as the library spells it: the caller may name it in
+        // another case, and that spelling must not leak into the file.
+        let Some(stored_name) = library.get(component_name).map(|f| f.name.clone()) else {
             let available: Vec<_> = library.names().into_iter().take(10).collect();
             return ToolCallResult::error(format!(
                 "Component '{component_name}' not found in library. Available: {}{}",
                 available.join(", "),
                 if library.len() > 10 { "..." } else { "" }
             ));
-        }
+        };
+        let component_name = stored_name.as_str();
 
         // Parse the replacement footprint — the same parser as write_pcblib,
-        // so an update accepts exactly what a write does.
+        // so an update accepts exactly what a write does. A replacement
+        // without a name keeps the stored one.
         let keys = crate::mcp::tools::allowed_keys::PcbLibKeys::new();
         let footprint = match self.parse_footprint_json(
             fp_json,
@@ -105,7 +108,10 @@ impl McpServer {
             }
             // The footprint's own name in another case resolves to itself
             // and is a legitimate rename; any other holder is a clash.
-            if let Some(existing) = library.get(name).filter(|f| f.name != component_name) {
+            if let Some(existing) = library
+                .get(name)
+                .filter(|f| !crate::altium::same_name(&f.name, component_name))
+            {
                 return ToolCallResult::error(Self::taken_name_error(
                     format!(
                         "Cannot rename '{component_name}' to '{name}': a footprint with that name already exists"
@@ -228,18 +234,21 @@ impl McpServer {
             Err(e) => return ToolCallResult::error(format!("Failed to read library: {e}")),
         };
 
-        // Check component exists
-        if library.get(component_name).is_none() {
+        // The component as the library spells it: the caller may name it in
+        // another case, and that spelling must not leak into the file.
+        let Some(stored_name) = library.get(component_name).map(|s| s.name.clone()) else {
             let available: Vec<_> = library.names().into_iter().take(10).collect();
             return ToolCallResult::error(format!(
                 "Component '{component_name}' not found in library. Available: {}{}",
                 available.join(", "),
                 if library.len() > 10 { "..." } else { "" }
             ));
-        }
+        };
+        let component_name = stored_name.as_str();
 
         // Parse the replacement symbol — the same parser as write_schlib, so
-        // an update accepts exactly what a write does.
+        // an update accepts exactly what a write does. A replacement without
+        // a name keeps the stored one.
         let keys = crate::mcp::tools::allowed_keys::SchLibKeys::new();
         let symbol = match self.parse_symbol_json(
             sym_json,
@@ -263,7 +272,10 @@ impl McpServer {
             }
             // The symbol's own name in another case resolves to itself and
             // is a legitimate rename; any other holder is a clash.
-            if let Some(existing) = library.get(name).filter(|s| s.name != component_name) {
+            if let Some(existing) = library
+                .get(name)
+                .filter(|s| !crate::altium::same_name(&s.name, component_name))
+            {
                 return ToolCallResult::error(Self::taken_name_error(
                     format!(
                         "Cannot rename '{component_name}' to '{name}': a symbol with that name already exists"
@@ -1274,6 +1286,67 @@ mod tests {
             "symbol": { "pins": [], "primitive_order": 42 },
         }));
         assert!(!result.is_error, "{}", get_result_text(&result));
+    }
+
+    /// The caller may name the component in another case: a replacement
+    /// without a name keeps the stored spelling (no rename happens, none is
+    /// reported), and an explicit name in another case is the one case-only
+    /// rename that is allowed.
+    #[test]
+    fn update_component_keeps_the_stored_spelling_unless_renamed() {
+        use crate::altium::{PcbLib, SchLib};
+        let dir = test_temp_dir();
+        let server = create_test_server(dir.path());
+
+        let pcb = dir.path().join("Spelling.PcbLib");
+        create_test_pcblib(&pcb); // CHIP_0402 + CHIP_0603
+        let result = server.call_update_component(&json!({
+            "filepath": pcb.to_string_lossy(),
+            "component_name": "chip_0402",
+            "footprint": { "description": "touched", "pads": [] },
+        }));
+        assert!(!result.is_error, "{}", get_result_text(&result));
+        let parsed = parse_result_json(&result);
+        assert_eq!(parsed["renamed"], false, "{parsed}");
+        assert_eq!(parsed["component_name"], "CHIP_0402");
+        assert_eq!(
+            PcbLib::open(&pcb).unwrap().names(),
+            ["CHIP_0402", "CHIP_0603"]
+        );
+
+        let result = server.call_update_component(&json!({
+            "filepath": pcb.to_string_lossy(),
+            "component_name": "chip_0402",
+            "footprint": { "name": "Chip_0402", "pads": [] },
+        }));
+        assert!(!result.is_error, "{}", get_result_text(&result));
+        assert_eq!(parse_result_json(&result)["renamed"], true);
+        assert_eq!(
+            PcbLib::open(&pcb).unwrap().names(),
+            ["Chip_0402", "CHIP_0603"]
+        );
+
+        let sch = dir.path().join("Spelling.SchLib");
+        create_test_schlib(&sch); // RESISTOR + CAPACITOR
+        let result = server.call_update_component(&json!({
+            "filepath": sch.to_string_lossy(),
+            "component_name": "resistor",
+            "symbol": { "pins": [] },
+            "dry_run": true,
+        }));
+        assert!(!result.is_error, "{}", get_result_text(&result));
+        assert_eq!(parse_result_json(&result)["would_rename"], false);
+        let result = server.call_update_component(&json!({
+            "filepath": sch.to_string_lossy(),
+            "component_name": "resistor",
+            "symbol": { "pins": [] },
+        }));
+        assert!(!result.is_error, "{}", get_result_text(&result));
+        assert_eq!(parse_result_json(&result)["renamed"], false);
+        assert_eq!(
+            SchLib::open(&sch).unwrap().names(),
+            ["RESISTOR", "CAPACITOR"]
+        );
     }
 
     #[test]

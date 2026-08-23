@@ -295,7 +295,10 @@ impl McpServer {
 
         // Check if new name already exists. The component's own name in
         // another case resolves to itself and is a legitimate rename.
-        if let Some(existing) = library.get(new_name).filter(|c| c.name != old_name) {
+        if let Some(existing) = library
+            .get(new_name)
+            .filter(|c| !crate::altium::same_name(&c.name, old_name))
+        {
             return ToolCallResult::error(Self::taken_name_error(
                 format!("Component '{new_name}' already exists in library"),
                 new_name,
@@ -361,7 +364,10 @@ impl McpServer {
 
         // Check if new name already exists. The component's own name in
         // another case resolves to itself and is a legitimate rename.
-        if let Some(existing) = library.get(new_name).filter(|c| c.name != old_name) {
+        if let Some(existing) = library
+            .get(new_name)
+            .filter(|c| !crate::altium::same_name(&c.name, old_name))
+        {
             return ToolCallResult::error(Self::taken_name_error(
                 format!("Component '{new_name}' already exists in library"),
                 new_name,
@@ -464,10 +470,12 @@ impl McpServer {
             );
         }
 
-        // Validate new name if provided
-        let target_name = new_name.unwrap_or(component_name);
-        if let Err(e) = Self::validate_ole_name(target_name) {
-            return ToolCallResult::error(e);
+        // Validate the new name if provided; without one the copy keeps the
+        // source's name as its library spells it.
+        if let Some(new_name) = new_name {
+            if let Err(e) = Self::validate_ole_name(new_name) {
+                return ToolCallResult::error(e);
+            }
         }
 
         // Determine file types from extensions
@@ -494,7 +502,7 @@ impl McpServer {
                 source_filepath,
                 target_filepath,
                 component_name,
-                target_name,
+                new_name,
                 description,
                 ignore_missing_models,
                 preserve_external_paths,
@@ -503,7 +511,7 @@ impl McpServer {
                 source_filepath,
                 target_filepath,
                 component_name,
-                target_name,
+                new_name,
                 description,
             ),
             Some(ext) => ToolCallResult::error(format!(
@@ -519,7 +527,7 @@ impl McpServer {
         source_filepath: &str,
         target_filepath: &str,
         component_name: &str,
-        target_name: &str,
+        new_name: Option<&str>,
         description: Option<&str>,
         ignore_missing_models: bool,
         preserve_external_paths: bool,
@@ -539,7 +547,9 @@ impl McpServer {
             ));
         };
 
-        // Clone the footprint
+        // Clone the footprint under the new name, or the source's own as its
+        // library spells it — not as the caller happened to spell it.
+        let target_name = new_name.unwrap_or(&source.name);
         let mut new_footprint = source.clone();
         new_footprint.name = target_name.to_string();
         if let Some(desc) = description {
@@ -645,7 +655,7 @@ impl McpServer {
                 component_name,
                 source_filepath,
                 target_filepath,
-                if target_name == component_name {
+                if new_name.is_none() {
                     String::new()
                 } else {
                     format!(" as '{target_name}'")
@@ -693,7 +703,7 @@ impl McpServer {
         source_filepath: &str,
         target_filepath: &str,
         component_name: &str,
-        target_name: &str,
+        new_name: Option<&str>,
         description: Option<&str>,
     ) -> ToolCallResult {
         use crate::altium::SchLib;
@@ -711,7 +721,9 @@ impl McpServer {
             ));
         };
 
-        // Clone the symbol
+        // Clone the symbol under the new name, or the source's own as its
+        // library spells it — not as the caller happened to spell it.
+        let target_name = new_name.unwrap_or(&source.name);
         let mut new_symbol = source.clone();
         new_symbol.name = target_name.to_string();
         if let Some(desc) = description {
@@ -761,7 +773,7 @@ impl McpServer {
                 component_name,
                 source_filepath,
                 target_filepath,
-                if target_name == component_name {
+                if new_name.is_none() {
                     String::new()
                 } else {
                     format!(" as '{target_name}'")
@@ -3299,10 +3311,11 @@ mod tests {
         assert!(result.is_error);
         assert!(get_result_text(&result).contains("as 'CHIP_0603'"));
 
-        // The component's own name in another case is a legitimate rename.
+        // The component's own name in another case is a legitimate rename,
+        // however the caller spells the old name.
         let result = server.call_rename_component(&json!({
             "filepath": path.to_string_lossy(),
-            "old_name": "CHIP_0402",
+            "old_name": "Chip_0402",
             "new_name": "chip_0402",
         }));
         assert!(!result.is_error, "{}", get_result_text(&result));
@@ -3363,5 +3376,39 @@ mod tests {
             SchLib::open(&sch).unwrap().names(),
             ["Resistor", "CAPACITOR"]
         );
+    }
+
+    /// Without a new name a cross-library copy keeps the source's spelling,
+    /// however the caller spelt the component name.
+    #[test]
+    fn a_cross_library_copy_keeps_the_source_spelling() {
+        let dir = test_temp_dir();
+        let server = create_test_server(dir.path());
+        let path = dir.path().join("Case.PcbLib");
+        create_test_pcblib(&path); // CHIP_0402 + CHIP_0603
+        let other = dir.path().join("Other.PcbLib");
+        create_test_pcblib(&other);
+
+        let result = server.call_copy_component_cross_library(&json!({
+            "source_filepath": other.to_string_lossy(),
+            "target_filepath": path.to_string_lossy(),
+            "component_name": "chip_0603",
+        }));
+        assert!(result.is_error, "{}", get_result_text(&result));
+        assert!(
+            get_result_text(&result).contains("'CHIP_0603' already exists"),
+            "{}",
+            get_result_text(&result)
+        );
+        let spare = dir.path().join("Spare.PcbLib");
+        PcbLib::new().save(&spare).unwrap();
+        let result = server.call_copy_component_cross_library(&json!({
+            "source_filepath": other.to_string_lossy(),
+            "target_filepath": spare.to_string_lossy(),
+            "component_name": "chip_0603",
+        }));
+        assert!(!result.is_error, "{}", get_result_text(&result));
+        assert_eq!(parse_result_json(&result)["target_name"], "CHIP_0603");
+        assert_eq!(PcbLib::open(&spare).unwrap().names(), ["CHIP_0603"]);
     }
 }

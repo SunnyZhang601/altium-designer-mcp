@@ -295,7 +295,10 @@ impl McpServer {
 
         // Check if new name already exists. The component's own name in
         // another case resolves to itself and is a legitimate rename.
-        if let Some(existing) = library.get(new_name).filter(|c| c.name != old_name) {
+        if let Some(existing) = library
+            .get(new_name)
+            .filter(|c| !crate::altium::same_name(&c.name, old_name))
+        {
             return ToolCallResult::error(Self::taken_name_error(
                 format!("Component '{new_name}' already exists in library"),
                 new_name,
@@ -361,7 +364,10 @@ impl McpServer {
 
         // Check if new name already exists. The component's own name in
         // another case resolves to itself and is a legitimate rename.
-        if let Some(existing) = library.get(new_name).filter(|c| c.name != old_name) {
+        if let Some(existing) = library
+            .get(new_name)
+            .filter(|c| !crate::altium::same_name(&c.name, old_name))
+        {
             return ToolCallResult::error(Self::taken_name_error(
                 format!("Component '{new_name}' already exists in library"),
                 new_name,
@@ -3299,10 +3305,11 @@ mod tests {
         assert!(result.is_error);
         assert!(get_result_text(&result).contains("as 'CHIP_0603'"));
 
-        // The component's own name in another case is a legitimate rename.
+        // The component's own name in another case is a legitimate rename,
+        // however the caller spells the old name.
         let result = server.call_rename_component(&json!({
             "filepath": path.to_string_lossy(),
-            "old_name": "CHIP_0402",
+            "old_name": "Chip_0402",
             "new_name": "chip_0402",
         }));
         assert!(!result.is_error, "{}", get_result_text(&result));

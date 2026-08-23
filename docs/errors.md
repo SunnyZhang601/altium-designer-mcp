@@ -207,9 +207,11 @@ component becomes, and how Altium resolves one. Every tool that creates a name
 `merge_libraries`, `update_component` with a new name) therefore treats a name differing
 from an existing one only in case as taken, and says so with the spelling on file:
 `Component 'res_0402' already exists in library as 'RES_0402' (component names are
-case-insensitive)`. Renaming a component to its own name in another case is allowed. Two
-such names within one `write_*` request are reported as a duplicate. A rename keeps the
-component's position in the library.
+case-insensitive)`. Renaming a component to its own name in another case is allowed,
+however the request spells the old name. Naming a component in another case when
+referring to it (`update_component`, `update_pad`, …) never changes the spelling on file:
+only an explicit new name renames. Two such names within one `write_*` request are
+reported as a duplicate. A rename keeps the component's position in the library.
 
 ---
 

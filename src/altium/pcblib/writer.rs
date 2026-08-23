@@ -547,7 +547,7 @@ const fn hole_shape_to_id(shape: HoleShape) -> u8 {
     }
 }
 
-/// Encodes the canonical 596-byte pad size/shape block (Block 5) for a simple
+/// Encodes the canonical 651-byte pad size/shape block (Block 5) for a simple
 /// pad that needs a non-round hole or an explicit corner radius. Layout matches
 /// `AltiumSharp` `WritePad` (values uniform across layers); the reader pairs
 /// with this via [`super::reader`] when the block is >= 596 bytes.

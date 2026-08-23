@@ -346,21 +346,22 @@ graphic_keys!(
     ]
 );
 
-/// An elliptical arc carries no display flags.
-pub const ELLIPTICAL_ARC: &[&str] = &[
-    "x",
-    "y",
-    "radius",
-    "secondary_radius",
-    "start_angle",
-    "end_angle",
-    "line_width",
-    "color",
-    "fill_color",
-    "owner_part_id",
-    "unique_id",
-    "raw_params",
-];
+graphic_keys!(
+    /// An elliptical arc.
+    ELLIPTICAL_ARC = [
+        "x",
+        "y",
+        "radius",
+        "secondary_radius",
+        "start_angle",
+        "end_angle",
+        "line_width",
+        "color",
+        "fill_color",
+        "owner_part_id",
+        "unique_id",
+    ]
+);
 
 /// A text annotation (record 3) carries no display flags; `hidden` is the
 /// authoring spelling of `is_hidden`.
@@ -527,15 +528,14 @@ mod tests {
             text_frames => TEXT_FRAME,
             beziers => BEZIER,
             ellipses => ELLIPSE,
+            elliptical_arcs => ELLIPTICAL_ARC,
             labels => LABEL,
             parameters => PARAMETER,
         );
-        // The golden carries no elliptical arc (RECORD=11) and no text
-        // annotation (RECORD=3) — fixture gaps — so those two lists are held
-        // to their structs by construction only.
-        assert!(symbols
-            .iter()
-            .all(|s| s.elliptical_arcs.is_empty() && s.text.is_empty()));
+        // The golden carries no RECORD=3 — an IEEE symbol, which AD24's
+        // scripting API cannot place — so that list is held to its struct by
+        // construction only.
+        assert!(symbols.iter().all(|s| s.text.is_empty()));
     }
 
     /// The same for the golden `PcbLib` — true by construction for the

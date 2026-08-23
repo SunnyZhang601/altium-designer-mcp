@@ -1416,13 +1416,14 @@ fn encode_elliptical_arc(arc: &EllipticalArc, index: usize) -> String {
     // (scaled by 100,000), carrying near-boundary values into the integer part.
     // See [`super::coord`] for the shared encoding.
     format!(
-        "|RECORD=11|IsNotAccesible=T{}|OwnerPartId={}\
+        "|RECORD=11|IsNotAccesible=T{}|OwnerPartId={}{}\
          {}{}\
          {}\
          {}\
          |LineWidth={}{}{}{}|UniqueID={}",
         index_in_sheet(index),
         arc.owner_part_id,
+        write_display_flags(arc.display_flags),
         coord_param("Location.X", arc.x),
         coord_param("Location.Y", arc.y),
         coord_param("Radius", arc.radius),

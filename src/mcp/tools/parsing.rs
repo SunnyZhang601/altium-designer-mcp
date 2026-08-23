@@ -2906,6 +2906,7 @@ impl McpServer {
             color,
             fill_color,
             owner_part_id,
+            display_flags: parse_schlib_display_flags(json),
             unique_id: json_unique_id(json),
             raw_params: json_raw_params(json),
         })

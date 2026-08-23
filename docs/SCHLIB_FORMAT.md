@@ -58,7 +58,7 @@ instead of being repeated:
   re-decoded through the authoring machine's ANSI code page (a locale artefact; Windows-1250 for
   the golden); this crate writes the same bytes under both keys, which every reader resolves to
   the same value. Applies to every text field: `LibReference`, `ComponentDescription`, `Text` on
-  Label/Text/Parameter/Designator/TextFrame, and the FileHeader's `LibRef{N}`/`CompDescr{N}`.
+  Label/Parameter/Designator/TextFrame, and the FileHeader's `LibRef{N}`/`CompDescr{N}`.
 - **`UniqueID`:** 8-character alphanumeric per-record id, emitted as the LAST key.
 - **Encoding:** records are Windows-1252, with a leading `|`, no trailing `|`, and a trailing
   `0x00` (the record length includes the null).
@@ -330,7 +330,8 @@ Derived from the Rotated and Flipped flags:
 
 ### Pin auxiliary streams
 
-Two optional per-component OLE streams carry data the binary pin record cannot hold. Both use the
+Three optional per-component OLE streams carry data the binary pin record cannot hold
+(`PinWideText`, the third, is described above). All use the
 [compressed-storage framing](#compressed-storage-framing) with each entry keyed by the **pin
 ordinal** as an ASCII-decimal Pascal string:
 
@@ -340,7 +341,7 @@ ordinal** as an ASCII-decimal Pascal string:
 - **`PinSymbolLineWidth`** — a per-pin symbol line width. Payload: a Unicode parameter block
   `[u32 LE byte_len][UTF-16LE "|SYMBOL_LINEWIDTH=N"]`.
 
-A symbol whose pins are all on-grid with default line width emits **neither** stream.
+A symbol whose pins are all on-grid, default-width and ASCII-named emits **none** of them.
 
 ## Compressed-Storage Framing
 
@@ -500,8 +501,8 @@ The first record of each component's Data stream. Keys as written (in order):
 | `PartIDLocked` | bool | `T`/`F` |
 
 > **Note:** Altium-authored headers also carry a component `UniqueID` and may carry
-> `DesignItemId` / `ComponentKind`; the `UniqueID` is currently unmodelled (dropped on
-> read). Every other key the model does not name — a UI-authored
+> `DesignItemId` / `ComponentKind`; none of these is a typed field, but every key the model
+> does not name — those, or a UI-authored
 > `COMPONENTKINDVERSION2=5` — rides along verbatim: the whole header is carried as read
 > (`Symbol::header_params`, every segment in order) and replayed byte for byte unless the
 > field behind a segment was edited, so the two `%UTF8%` layouts Altium uses both survive.
@@ -509,7 +510,7 @@ The first record of each component's Data stream. Keys as written (in order):
 > `ComponentDescription=<Windows-1252 bytes>` (twin first, two empty segments, code-page
 > plain key); a scripted one puts UTF-8 bytes in both keys.
 
-A record the file stores without a `UniqueID` (Altium writes a pie that way) is not given one:
+A record the file stores without a `UniqueID` (Altium writes a pie and an IEEE symbol that way) is not given one:
 a save is deterministic, so a version-controlled library shows no phantom diff. The library's
 own `UniqueID` in the `FileHeader` is kept for its lifetime as well.
 
@@ -922,7 +923,8 @@ Some symbols have multiple parts (e.g. quad op-amp):
 - **Pin symbol decorations**: supported (22 symbol types at 4 positions)
 - **Display modes**: count in `DisplayModeCount`; primitives carry `OwnerPartDisplayMode`
 - **Font storage**: fonts defined in FileHeader (`FontName{N}`, `Size{N}`)
-- **Unique IDs**: all records carry an 8-char alphanumeric `UniqueID` (last key)
+- **Unique IDs**: text records carry an 8-char alphanumeric `UniqueID` as their last key —
+    except a pie and an IEEE symbol, which Altium writes without one (and are given none)
 - **Embedded images**: `RECORD=30` metadata + zlib payloads in `/Storage`, order-matched
 
 ## References
@@ -930,4 +932,3 @@ Some symbols have multiple parts (e.g. quad op-amp):
 - [AltiumSharp](https://github.com/issus/AltiumSharp) - C# library for Altium files (MIT)
 - [pyAltiumLib](https://github.com/ChrisHoyer/pyAltiumLib) - Python library for reading Altium files
 - [python-altium](https://github.com/vadmium/python-altium) - Altium format documentation
-- Sample analysis: `scripts/analyse/analyse_schlib.py`

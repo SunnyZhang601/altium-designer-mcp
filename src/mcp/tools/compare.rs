@@ -418,13 +418,25 @@ impl McpServer {
             }
         }
 
-        // Compare component bodies count
+        // Compare component body counts
         if fp_a.component_bodies.len() != fp_b.component_bodies.len() {
             differences.push(json!({
                 "field": "component_body_count",
                 "component_a": fp_a.component_bodies.len(),
                 "component_b": fp_b.component_bodies.len()
             }));
+        }
+
+        // Compare component bodies in detail
+        if include_geometry {
+            let body_diffs =
+                Self::compare_bodies(&fp_a.component_bodies, &fp_b.component_bodies, tolerance);
+            if !body_diffs.is_empty() {
+                differences.push(json!({
+                    "field": "component_bodies",
+                    "differences": body_diffs
+                }));
+            }
         }
 
         let is_identical = differences.is_empty();
@@ -457,7 +469,9 @@ impl McpServer {
                 "text_a": fp_a.text.len(),
                 "text_b": fp_b.text.len(),
                 "fills_a": fp_a.fills.len(),
-                "fills_b": fp_b.fills.len()
+                "fills_b": fp_b.fills.len(),
+                "component_bodies_a": fp_a.component_bodies.len(),
+                "component_bodies_b": fp_b.component_bodies.len()
             }
         });
 
@@ -1237,6 +1251,113 @@ impl McpServer {
         diffs
     }
 
+    /// Compares two lists of component bodies keyed by model name (the STEP
+    /// file a body shows; extruded bodies share the empty name), tolerating
+    /// duplicate names like pads tolerate duplicate designators. Identity
+    /// (GUIDs, unique ids, checksums) is not a difference; the outline, layer,
+    /// heights, rotations, offset, kind, colour and embedding are.
+    pub(crate) fn compare_bodies(
+        bodies_a: &[crate::altium::pcblib::ComponentBody],
+        bodies_b: &[crate::altium::pcblib::ComponentBody],
+        tolerance: f64,
+    ) -> Vec<Value> {
+        use crate::altium::pcblib::ComponentBody;
+
+        let property_changes = |a: &ComponentBody, b: &ComponentBody| {
+            let mut changes = Vec::new();
+            if a.outline.len() != b.outline.len() {
+                changes.push(json!({
+                    "property": "vertex_count",
+                    "a": a.outline.len(),
+                    "b": b.outline.len()
+                }));
+            } else if let Some((k, (va, vb))) =
+                a.outline
+                    .iter()
+                    .zip(&b.outline)
+                    .enumerate()
+                    .find(|(_, (va, vb))| {
+                        (va.0 - vb.0).abs() > tolerance || (va.1 - vb.1).abs() > tolerance
+                    })
+            {
+                changes.push(json!({
+                    "property": "outline",
+                    "first_mismatch_index": k,
+                    "a": { "x": va.0, "y": va.1 },
+                    "b": { "x": vb.0, "y": vb.1 }
+                }));
+            }
+            if a.layer != b.layer {
+                changes.push(json!({
+                    "property": "layer",
+                    "a": a.layer,
+                    "b": b.layer
+                }));
+            }
+            for (property, va, vb) in [
+                ("overall_height", a.overall_height, b.overall_height),
+                ("standoff_height", a.standoff_height, b.standoff_height),
+                ("z_offset", a.z_offset, b.z_offset),
+                ("rotation_x", a.rotation_x, b.rotation_x),
+                ("rotation_y", a.rotation_y, b.rotation_y),
+                ("rotation_z", a.rotation_z, b.rotation_z),
+                ("body_opacity_3d", a.body_opacity_3d, b.body_opacity_3d),
+            ] {
+                if (va - vb).abs() > tolerance {
+                    changes.push(json!({
+                        "property": property,
+                        "a": va,
+                        "b": vb
+                    }));
+                }
+            }
+            if a.kind != b.kind {
+                changes.push(json!({
+                    "property": "kind",
+                    "a": a.kind,
+                    "b": b.kind
+                }));
+            }
+            if a.embedded != b.embedded {
+                changes.push(json!({
+                    "property": "embedded",
+                    "a": a.embedded,
+                    "b": b.embedded
+                }));
+            }
+            if a.body_color_3d != b.body_color_3d {
+                changes.push(json!({
+                    "property": "body_color_3d",
+                    "a": a.body_color_3d,
+                    "b": b.body_color_3d
+                }));
+            }
+            if a.name != b.name {
+                changes.push(json!({
+                    "property": "name",
+                    "a": a.name,
+                    "b": b.name
+                }));
+            }
+            changes
+        };
+
+        compare_keyed(
+            bodies_a,
+            bodies_b,
+            "model_name",
+            |body| body.model_name.as_str(),
+            |body| {
+                vec![
+                    ("layer", json!(body.layer)),
+                    ("vertex_count", json!(body.outline.len())),
+                    ("overall_height", json!(body.overall_height)),
+                ]
+            },
+            property_changes,
+        )
+    }
+
     /// Compares two symbols in detail.
     #[allow(clippy::too_many_lines)]
     pub(crate) fn compare_symbols(
@@ -1526,8 +1647,8 @@ impl McpServer {
 mod tests {
     use super::*;
     use crate::altium::pcblib::{
-        Arc, Fill, Layer, Pad, PcbFlags, Region, RegionKind, Text, TextJustification, TextKind,
-        Track, Via,
+        Arc, ComponentBody, Fill, Layer, Pad, PcbFlags, Region, RegionKind, Text,
+        TextJustification, TextKind, Track, Via,
     };
     use crate::altium::schlib::{Parameter, Rectangle};
 
@@ -1776,6 +1897,42 @@ mod tests {
         assert_eq!(diffs.len(), 1);
         assert_eq!(diffs[0]["status"], "modified");
         assert_eq!(diffs[0]["changes"][0]["property"], "hole_size");
+    }
+
+    /// A body's height, outline, layer or placement is a reported change;
+    /// two copies that differ only in identity are the same body.
+    #[test]
+    fn body_changes_reported_and_identity_ignored() {
+        let mut body_a = ComponentBody::new("", "part.step");
+        body_a.outline = vec![(0.0, 0.0), (2.0, 0.0), (2.0, 1.0), (0.0, 1.0)];
+        body_a.overall_height = 1.5;
+        let mut twin = body_a.clone();
+        twin.guid = Some("{11111111-2222-3333-4444-555555555555}".to_string());
+        twin.unique_id = Some("ABCDEFGH".to_string());
+        twin.model_checksum = 42;
+        assert!(McpServer::compare_bodies(&[body_a.clone()], &[twin], 0.001).is_empty());
+
+        let mut body_b = body_a.clone();
+        body_b.overall_height = 2.5;
+        body_b.outline[2] = (2.0, 1.2);
+        body_b.layer = Layer::Mechanical13;
+        let diffs = McpServer::compare_bodies(&[body_a.clone()], &[body_b], 0.001);
+        assert_eq!(diffs.len(), 1, "{diffs:?}");
+        assert_eq!(diffs[0]["status"], "modified");
+        assert_eq!(diffs[0]["model_name"], "part.step");
+        for property in ["outline", "layer", "overall_height"] {
+            assert!(has_change(&diffs, property), "{property}: {diffs:?}");
+        }
+        assert_eq!(diffs[0]["changes"][0]["first_mismatch_index"], 2);
+
+        // A different model is a one-sided pair, described by layer and size.
+        let other = ComponentBody::new("", "other.step");
+        let diffs = McpServer::compare_bodies(&[body_a], &[other], 0.001);
+        assert_eq!(diffs.len(), 2, "{diffs:?}");
+        assert_eq!(diffs[0]["status"], "only_in_a");
+        assert_eq!(diffs[0]["vertex_count"], 4);
+        assert_eq!(diffs[1]["status"], "only_in_b");
+        assert_eq!(diffs[1]["model_name"], "other.step");
     }
 
     #[test]
@@ -2539,12 +2696,55 @@ mod tests {
                 "fill_count",
                 "fills",
                 "component_body_count",
+                "component_bodies",
             ] {
                 assert!(
                     fields.contains(&expected),
                     "missing {expected:?} from the reported fields: {fields:?}"
                 );
             }
+            assert_eq!(parsed["summary"]["component_bodies_a"], 0);
+            assert_eq!(parsed["summary"]["component_bodies_b"], 1);
+        }
+
+        /// Two footprints whose only difference is a body's height are not
+        /// identical.
+        #[test]
+        fn compare_footprints_sees_a_body_change() {
+            let dir = test_temp_dir();
+            let server = create_test_server(dir.path());
+            let path = dir.path().join("Bodies.PcbLib");
+
+            let mut base = one_of_each("BASE");
+            base.add_component_body(body());
+            let mut taller = one_of_each("TALLER");
+            let mut tall_body = body();
+            tall_body.overall_height = 2.0;
+            taller.add_component_body(tall_body);
+
+            let mut lib = PcbLib::new();
+            lib.add(base);
+            lib.add(taller);
+            lib.save(&path).unwrap();
+
+            let r = server.call_compare_components(&json!({
+                "filepath_a": path.to_string_lossy(), "component_a": "BASE",
+                "filepath_b": path.to_string_lossy(), "component_b": "TALLER",
+            }));
+            assert!(!r.is_error, "{}", get_result_text(&r));
+            let parsed = parse_result_json(&r);
+            assert_eq!(parsed["identical"], false, "{parsed}");
+            let differences = parsed["differences"].as_array().unwrap();
+            let bodies = differences
+                .iter()
+                .find(|d| d["field"] == "component_bodies")
+                .expect("a body diff");
+            assert_eq!(bodies["differences"][0]["status"], "modified");
+            assert_eq!(
+                bodies["differences"][0]["changes"][0]["property"],
+                "overall_height"
+            );
+            assert_eq!(differences.len(), 1, "{differences:?}");
         }
 
         #[test]

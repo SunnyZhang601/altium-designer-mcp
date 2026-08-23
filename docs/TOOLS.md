@@ -932,7 +932,8 @@ Manage footprint links in Altium SchLib symbols. Supports listing, adding, and r
 ## `compare_components`
 
 Compare two specific components in detail, showing differences in primitives, parameters, and properties. Components can be from the same library or different libraries.
-Returns detailed primitive-level differences (pads, tracks, pins, etc.).
+Returns primitive-level differences for every kind: pads, vias, tracks, arcs, regions, text, fills and 3D bodies of a footprint; pins, every graphic shape, parameters and
+footprint links of a symbol. Identity (GUIDs, unique ids) is never a difference.
 
 **Example**
 

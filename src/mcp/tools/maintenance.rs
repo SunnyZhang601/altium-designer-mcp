@@ -622,6 +622,28 @@ impl McpServer {
         followed
     }
 
+    /// Carries a via diameter edit into its per-layer table (a non-simple
+    /// stack): every layer whose diameter matched the old primary takes the
+    /// new one, a layer with its own value keeps it. Returns how many layers
+    /// followed.
+    fn propagate_via_edit_to_stack(
+        via: &mut crate::altium::pcblib::Via,
+        old_diameter: f64,
+    ) -> usize {
+        let close = |a: f64, b: f64| (a - b).abs() < 1e-6;
+        if close(old_diameter, via.diameter) {
+            return 0;
+        }
+        let new_diameter = via.diameter;
+        via.per_layer_diameters.as_mut().map_or(0, |layers| {
+            layers
+                .iter_mut()
+                .filter(|d| close(**d, old_diameter))
+                .map(|d| *d = new_diameter)
+                .count()
+        })
+    }
+
     /// Applies an `update_pad` request's `updates` object to `pad`, returning
     /// the change records for the response (or the message for an invalid
     /// value). A stacked pad's per-layer tables follow a primary edit — see
@@ -1151,7 +1173,21 @@ impl McpServer {
                     changes.push(
                         json!({"property": "diameter", "old": via.diameter, "new": diameter}),
                     );
+                    let old_diameter = via.diameter;
                     via.diameter = diameter;
+                    // A stacked via's per-layer diameters are what the writer
+                    // emits for each layer, so a primary edit that left them
+                    // alone did not take in Altium (the pad's stack follows a
+                    // size edit the same way). Layers that shared the old
+                    // diameter follow; a layer with its own value keeps it.
+                    let followed = Self::propagate_via_edit_to_stack(via, old_diameter);
+                    if followed > 0 {
+                        changes.push(json!({
+                            "property": "per_layer_diameters",
+                            "layers_followed": followed,
+                            "note": "layers that shared the old diameter now carry the new one; layers with their own value were left alone",
+                        }));
+                    }
                 }
                 if let Some(hole_size) = updates.get("hole_size").and_then(Value::as_f64) {
                     changes.push(
@@ -2213,6 +2249,57 @@ mod tests {
             assert!((via.hole_size - 0.4).abs() < 1e-4, "hole {}", via.hole_size);
             assert_eq!(via.from_layer, Layer::TopLayer);
             assert_eq!(via.to_layer, Layer::BottomLayer);
+        }
+
+        /// A stacked via's per-layer diameters are what Altium draws per layer,
+        /// so a diameter edit has to reach them: layers that shared the old
+        /// diameter follow, a layer with its own value keeps it — the pad
+        /// rule of #407, applied to vias.
+        #[test]
+        fn update_primitive_via_diameter_reaches_the_stack() {
+            use crate::altium::pcblib::{Via, ViaStackMode};
+
+            let dir = test_temp_dir();
+            let server = create_test_server(dir.path());
+            let path = dir.path().join("Stack.PcbLib");
+            let mut lib = PcbLib::new();
+            let mut fp = Footprint::new("STACK");
+            let mut via = Via::new(0.0, 0.0, 0.6, 0.3);
+            via.diameter_stack_mode = ViaStackMode::FullStack;
+            let mut layers = vec![0.6; 32];
+            layers[1] = 0.9; // a deliberate bottom-layer value
+            via.per_layer_diameters = Some(layers);
+            fp.add_via(via);
+            lib.add(fp);
+            lib.save(&path).expect("save");
+
+            let result = server.call_update_primitive(&json!({
+                "filepath": path.to_string_lossy(),
+                "component_name": "STACK",
+                "primitive_type": "via",
+                "index": 0,
+                "updates": { "diameter": 0.8 },
+            }));
+            assert!(!result.is_error, "{}", get_result_text(&result));
+            let parsed = parse_result_json(&result);
+            let stack = parsed["changes"]
+                .as_array()
+                .expect("changes")
+                .iter()
+                .find(|c| c["property"] == "per_layer_diameters")
+                .expect("the stack followed");
+            assert_eq!(stack["layers_followed"], 31);
+
+            let lib = PcbLib::open(&path).expect("reopen");
+            let via = &lib.get("STACK").unwrap().vias[0];
+            assert!((via.diameter - 0.8).abs() < 1e-4);
+            let layers = via.per_layer_diameters.as_ref().expect("stacked");
+            assert!((layers[0] - 0.8).abs() < 1e-4, "top followed: {layers:?}");
+            assert!(
+                (layers[1] - 0.9).abs() < 1e-4,
+                "the deliberate value stayed"
+            );
+            assert!(layers[2..].iter().all(|d| (d - 0.8).abs() < 1e-4));
         }
 
         #[test]

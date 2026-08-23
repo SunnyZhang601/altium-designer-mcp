@@ -96,7 +96,7 @@ additional details like part_count and pin_count.
 | Name | Type | Required | Description |
 | --- | --- | --- | --- |
 | `filepath` | string | yes | Path to the library file |
-| `include_metadata` | boolean | no | If true, return objects with metadata (part_count, pin_count, etc.) instead of just names. Default: false |
+| `include_metadata` | boolean | no | If true, return objects with metadata instead of just names: a footprint's description, one count per primitive kind and has_3d_model; a symbol's description, designator, part_count, pin_count and footprint_count. Default: false |
 | `limit` | integer | no | Maximum number of components to return (optional, default: all) |
 | `offset` | integer | no | Number of components to skip (optional, default: 0) |
 

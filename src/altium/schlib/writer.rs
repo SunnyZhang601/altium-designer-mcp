@@ -1554,23 +1554,39 @@ fn count_records(data: &[u8]) -> usize {
 /// finding it on placement); a name-only record with `DatafileCount=0` shows in
 /// the list but reports "model not found".
 fn encode_footprint_model(model: &FootprintModel, owner_index: usize, is_current: bool) -> String {
-    // ModelDatafile0 (the .PcbLib path) is what lets Altium resolve the footprint
-    // directly; omitted when no path is known (falls back to name search).
-    let datafile = model
-        .library_path
-        .as_deref()
-        .map(|p| format!("|ModelDatafile0={p}"))
-        .unwrap_or_default();
+    // The datafile group — DatafileCount=1, the optional ModelDatafile0 path,
+    // ModelDatafileEntity0 and ModelDatafileKind0 — is what lets Altium resolve
+    // the footprint; a link built from scratch gets it. Altium itself omits the
+    // whole group on a name-only link (the IMPLCHAIN golden), so a read link
+    // keeps the group only when it had one or a path was given since.
+    let linked = model.library_path.is_some()
+        || model.raw_params.is_empty()
+        || model
+            .raw_params
+            .iter()
+            .any(|(key, _)| key.eq_ignore_ascii_case("DatafileCount"));
+    let datafiles = if linked {
+        let path = model
+            .library_path
+            .as_deref()
+            .map(|p| format!("|ModelDatafile0={p}"))
+            .unwrap_or_default();
+        format!(
+            "|DatafileCount=1{path}|ModelDatafileEntity0={}|ModelDatafileKind0=PCBLib",
+            model.name
+        )
+    } else {
+        String::new()
+    };
     // The read UniqueID is re-emitted verbatim (deterministic RMW); only a
     // from-scratch model gets a fresh one.
     let unique_id = model.unique_id.clone().unwrap_or_else(generate_unique_id);
     format!(
-        "|RECORD=45|OwnerIndex={}|IndexInSheet=-1|Description={}|ModelName={}|ModelType=PCBLIB|DatafileCount=1{}|ModelDatafileEntity0={}|ModelDatafileKind0=PCBLib{}|UniqueID={}",
+        "|RECORD=45|OwnerIndex={}|IndexInSheet=-1|Description={}|ModelName={}|ModelType=PCBLIB{}{}|UniqueID={}",
         owner_index,
         model.description,
         model.name,
-        datafile,
-        model.name,
+        datafiles,
         if is_current { "|IsCurrent=T" } else { "" },
         unique_id
     )
@@ -3503,6 +3519,32 @@ mod tests {
         assert_eq!(
             verbatim,
             "|RECORD=45|OwnerIndex=1|IndexInSheet=-1|ModelName=MOUNTING_HOLE|ModelType=PCBLIB|DatafileCount=1|ModelDatafileEntity0=MOUNTING_HOLE|ModelDatafileKind0=PCBLib|IsCurrent=T|IntegratedModel=T|DatabaseModel=T|UniqueID=ABCDEFGH"
+        );
+
+        // A name-only link as Altium stores it — no datafile group — keeps
+        // that shape; giving it a path adds the whole group.
+        let raw: Vec<(String, String)> = [
+            ("RECORD", "45"),
+            ("OwnerIndex", "4"),
+            ("IndexInSheet", "-1"),
+            ("ModelName", "SOIC-8-WIDE"),
+            ("ModelType", "PCBLIB"),
+            ("UniqueID", "IQFACTUZ"),
+        ]
+        .iter()
+        .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+        .collect();
+        let mut plain = FootprintModel::new("SOIC-8-WIDE");
+        plain.unique_id = Some("IQFACTUZ".to_string());
+        plain.raw_params = raw;
+        assert_eq!(
+            replay_record(&encode_footprint_model(&plain, 4, false), &plain.raw_params),
+            "|RECORD=45|OwnerIndex=4|IndexInSheet=-1|ModelName=SOIC-8-WIDE|ModelType=PCBLIB|UniqueID=IQFACTUZ"
+        );
+        plain.library_path = Some("Lib.PcbLib".to_string());
+        assert_eq!(
+            replay_record(&encode_footprint_model(&plain, 4, false), &plain.raw_params),
+            "|RECORD=45|OwnerIndex=4|IndexInSheet=-1|ModelName=SOIC-8-WIDE|ModelType=PCBLIB|UniqueID=IQFACTUZ|DatafileCount=1|ModelDatafile0=Lib.PcbLib|ModelDatafileEntity0=SOIC-8-WIDE|ModelDatafileKind0=PCBLib"
         );
 
         // No longer current, a description given: the unmodelled keys stay,

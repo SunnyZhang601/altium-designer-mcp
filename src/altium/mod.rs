@@ -66,13 +66,32 @@ pub fn encode_windows1252(s: &str) -> Vec<u8> {
     for ch in s.chars() {
         let utf8 = ch.encode_utf8(&mut buf);
         let (bytes, _, had_errors) = encoding_rs::WINDOWS_1252.encode(utf8);
-        if had_errors {
-            out.push(b'?');
-        } else {
+        if !had_errors {
             out.extend_from_slice(&bytes);
+        } else if let Some(byte) = c1_identity_byte(ch) {
+            out.push(byte);
+        } else {
+            out.push(b'?');
         }
     }
     out
+}
+
+/// The byte a C1 control character (U+0080-U+009F) stands for.
+///
+/// Altium narrows a text through the writing machine's ANSI code page, and
+/// a position that page leaves undefined comes out as the identity control —
+/// a library written on a Windows-1250 machine holds byte `0x98` for U+0098
+/// where Windows-1252 has `˜`. Writing the control back as its byte is the
+/// only encoding that reproduces what Altium stored; `?` would not.
+const fn c1_identity_byte(ch: char) -> Option<u8> {
+    let code = ch as u32;
+    if code >= 0x80 && code <= 0x9F {
+        #[allow(clippy::cast_possible_truncation)]
+        Some(code as u8)
+    } else {
+        None
+    }
 }
 
 /// Decodes Windows-1252 bytes to a string — Altium's on-disk string encoding.
@@ -628,6 +647,18 @@ pub(crate) fn order_ranker<'a>(new_order: &[&'a str]) -> impl Fn(&str) -> usize 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_c1_control_encodes_as_its_own_byte() {
+        // The TEXT_ANSI_WIDE golden: a text Altium narrowed through Windows-1250
+        // holds byte 0x98 for U+0098, a position that page leaves undefined.
+        assert_eq!(encode_windows1252("\u{98}"), [0x98]);
+        assert_eq!(encode_windows1252("\u{81}\u{9d}"), [0x81, 0x9d]);
+        // Characters Windows-1252 does hold take their own byte, not the
+        // identity one, and a character it lacks is still `?`.
+        assert_eq!(encode_windows1252("\u{2dc}"), [0x98]);
+        assert_eq!(encode_windows1252("\u{3a9}"), [b'?']);
+    }
 
     #[test]
     fn names_differing_only_in_case_are_one_storage_name() {

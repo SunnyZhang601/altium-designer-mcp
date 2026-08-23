@@ -361,6 +361,25 @@ begin
                                   PCBM_BoardRegisteration, Body.I_ObjectAddress);
 end;
 
+{ Probe (batch 5): a non-Latin literal assigned to the text directly, not
+  through a String-typed parameter. Everything else as AddText. }
+procedure AddTextUnicodeLiteral(Comp : IPCB_LibComponent; X : Integer; Y : Integer);
+var
+    Txt : IPCB_Text;
+begin
+    Txt := PCBServer.PCBObjectFactory(eTextObject, eNoDimension, eCreate_Default);
+    if Txt = nil then Exit;
+    Txt.XLocation := MilsToCoord(X);
+    Txt.YLocation := MilsToCoord(Y);
+    Txt.Layer     := eTopOverlay;
+    Txt.Size      := MilsToCoord(50);
+    Txt.Rotation  := 0;
+    Txt.Text      := '10 Ω';
+    Comp.AddPCBObject(Txt);
+    PCBServer.SendMessageToRobots(Comp.I_ObjectAddress, c_Broadcast,
+                                  PCBM_BoardRegisteration, Txt.I_ObjectAddress);
+end;
+
 { Body whose STEP model is REFERENCED, not embedded (batch 5): IPCB_Model.Embed
   (a documented Boolean member) cleared before the model is attached, so the
   golden pins the form a UI-authored library showed for a non-embedded model
@@ -1472,18 +1491,36 @@ begin
     except
     end;
 
-    // TEXT_UNICODE (batch 5): text beyond U+00FF, so a golden pins WideStrings
-    // as UTF-16 code units against a real Altium file (AltiumSharp and the
-    // Latin-1 10µF of TEXT_WIN1252 were the only witnesses). Source LITERALS —
-    // the route that authored the non-Latin component names — not Chr(), which
-    // truncates modulo 256 (see TEXT_LONG).
+    // TEXT_ANSI_WIDE (batch 5): text whose WideStrings units leave the byte
+    // range, so a golden pins ENCODEDTEXT as UTF-16 code units of the text as
+    // ALTIUM holds it (AltiumSharp and the Latin-1 10µF of TEXT_WIN1252 were
+    // the only witnesses). Built from bytes with Chr(): the engine's strings
+    // are ANSI, and Altium widens them through the writing machine's code
+    // page — Windows-1250 here — so byte 148 becomes U+201D (8221) and byte
+    // 152, undefined in 1250, the identity control U+0098. A source LITERAL
+    // beyond Latin-1 in a TEXT reaches Altium as its UTF-8 bytes widened the
+    // same way ('10 Ω' came out as 49,48,32,206,169), unlike a component
+    // NAME, which the literal route authors correctly — see TEXT_UNI_LITERAL.
     try
         Comp := PCBServer.CreatePCBLibComp;
-        Comp.Name := 'TEXT_UNICODE';
+        Comp.Name := 'TEXT_ANSI_WIDE';
         Lib.RegisterComponent(Comp);
         PCBServer.PreProcess;
-        AddText(Comp, 0,   0, '10 Ω', 50, 0, eTopOverlay);
-        AddText(Comp, 0, 100, '电阻', 50, 0, eTopOverlay);
+        AddText(Comp, 0,   0, '10 ' + Chr(206) + Chr(169), 50, 0, eTopOverlay);
+        AddText(Comp, 0, 100, Chr(148) + 'Q' + Chr(152) + Chr(187), 50, 0, eTopOverlay);
+        PCBServer.PostProcess;
+    except
+    end;
+
+    // TEXT_UNI_LITERAL (batch 5 probe): the same non-Latin literal assigned to
+    // IPCB_Text.Text INSIDE the helper, bypassing the String-typed parameter
+    // of AddText, to learn whether the parameter narrowed it or the engine did.
+    try
+        Comp := PCBServer.CreatePCBLibComp;
+        Comp.Name := 'TEXT_UNI_LITERAL';
+        Lib.RegisterComponent(Comp);
+        PCBServer.PreProcess;
+        AddTextUnicodeLiteral(Comp, 0, 0);
         PCBServer.PostProcess;
     except
     end;
@@ -1555,7 +1592,7 @@ end;
   so the record carries Location/Radius/SecondaryRadius _Frac keys. }
 procedure AddEllipticalArc(Comp : ISch_Component; CX : Integer; CY : Integer;
                            RX : Integer; RY : Integer; AStart : Double; AEnd : Double;
-                           Frac : Boolean);
+                           Frac : Boolean; Locked : Boolean);
 var
     EA  : ISch_EllipticalArc;
     Off : Integer;
@@ -1571,6 +1608,7 @@ begin
     EA.EndAngle        := AEnd;
     EA.LineWidth       := eSmall;
     EA.Color           := $000000;
+    EA.GraphicallyLocked := Locked;
     EA.OwnerPartId          := 1;
     EA.OwnerPartDisplayMode := Comp.DisplayMode;
     Comp.AddSchObject(EA);
@@ -3381,8 +3419,8 @@ begin
         Comp := NewSymbol(Lib, 'ELLARC', 'Elliptical arcs', 1);
         if Comp <> nil then
         begin
-            AddEllipticalArc(Comp, -60, 0, 50, 30, 0, 270, False);
-            AddEllipticalArc(Comp,  60, 0, 50, 30, 45, 315, True);
+            AddEllipticalArc(Comp, -60, 0, 50, 30, 0, 270, False, False);
+            AddEllipticalArc(Comp,  60, 0, 50, 30, 45, 315, True, True);
         end;
     except
     end;

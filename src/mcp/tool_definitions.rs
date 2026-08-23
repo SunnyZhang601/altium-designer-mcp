@@ -7,6 +7,7 @@
 use serde_json::json;
 
 use crate::mcp::server::{McpServer, ToolDefinition};
+use crate::mcp::tools::accepted;
 
 impl McpServer {
     /// Returns the list of available tools.
@@ -253,14 +254,14 @@ impl McpServer {
                                                 "is_plated": { "type": "boolean", "description": "Whether the hole is plated. Altium stores this for every pad (SMD included). Default: true" },
                                                 "solder_mask_expansion_from_hole_edge": { "type": "boolean", "description": "Measure solder-mask expansion from the HOLE edge instead of the pad edge. Only meaningful on a pad with a hole. Default: false" },
                                                 "jumper_id": { "type": "integer", "description": "Jumper group id. Pads sharing a non-zero id are linked as a jumper / 0-ohm net. Default: 0" },
-                                                "stack_mode": { "type": "string", "enum": ["simple", "top_middle_bottom", "full_stack"], "description": "Per-layer pad stack. \"simple\" (default) uses one size and shape on every layer; \"top_middle_bottom\" takes 3 per-layer entries [top, mid, bottom]; \"full_stack\" takes 32 (index 0 = Top, 1 = Bottom, 2-31 = Mid layers)." },
+                                                "stack_mode": { "type": "string", "enum": accepted::STACK_MODES, "description": "Per-layer pad stack. \"simple\" (default) uses one size and shape on every layer; \"top_middle_bottom\" takes 3 per-layer entries [top, mid, bottom]; \"full_stack\" takes 32 (index 0 = Top, 1 = Bottom, 2-31 = Mid layers)." },
                                                 "per_layer_sizes": { "type": "array", "description": "Per-layer pad sizes in mm, used when stack_mode is not \"simple\". Entry count must match the stack mode (3 or 32).", "items": { "type": "object", "properties": { "width": { "type": "number" }, "height": { "type": "number" } }, "required": ["width", "height"] } },
                                                 "per_layer_shapes": { "type": "array", "description": "Per-layer pad shapes, same ordering and count as per_layer_sizes. Same vocabulary as shape.", "items": { "type": "string", "enum": ["rectangle", "rounded_rectangle", "round", "circle", "oval", "octagonal"] } },
                                                 "per_layer_corner_radii": { "type": "array", "description": "Per-layer corner radius as a percentage (0-100), for rounded-rectangle layers.", "items": { "type": "integer" } },
                                                 "per_layer_offsets": { "type": "array", "description": "Per-layer pad offsets in mm from the pad centre.", "items": { "type": "object", "properties": { "x": { "type": "number" }, "y": { "type": "number" } }, "required": ["x", "y"] } },
                                                 "hole_shape": {
                                                     "type": "string",
-                                                    "enum": ["round", "square", "slot"],
+                                                    "enum": accepted::HOLE_SHAPES,
                                                     "description": "Drill hole shape. Default: round. Use slot for oblong holes (set hole_slot_length)"
                                                 },
                                                 "hole_slot_length": { "type": "number", "description": "Slot length in mm for a slot hole (hole_shape=slot). Default: 0" },
@@ -270,20 +271,20 @@ impl McpServer {
                                                 "solder_mask_expansion": { "type": "number", "description": "Solder mask expansion in mm (optional; omit to use the rule default)" },
                                                 "solder_mask_expansion_mode": {
                                                     "type": "string",
-                                                    "enum": ["none", "from_rule", "manual"],
+                                                    "enum": accepted::MASK_EXPANSION_MODES,
                                                     "description": "Solder mask expansion mode. 'none' (the default) leaves the cached value stale so Altium takes the expansion from the design rule; 'from_rule' tells Altium the stored value is a rule result to honour as-is; 'manual' uses the stored value as hand-specified."
                                                 },
                                                 "paste_mask_expansion": { "type": "number", "description": "Paste (stencil) mask expansion in mm (optional; omit to use the rule default)" },
                                                 "paste_mask_expansion_mode": {
                                                     "type": "string",
-                                                    "enum": ["none", "from_rule", "manual"],
+                                                    "enum": accepted::MASK_EXPANSION_MODES,
                                                     "description": "Paste mask expansion mode. 'none' (the default) leaves the cached value stale so Altium takes the expansion from the design rule; 'from_rule' tells Altium the stored value is a rule result to honour as-is; 'manual' uses the stored value as hand-specified."
                                                 },
                                                 "corner_radius_percent": { "type": "integer", "description": "Rounded-rectangle corner radius as a percentage of the shorter side (0-100). Default: 0" },
                                                 "rotation": { "type": "number", "description": "Pad rotation in degrees. Default: 0" },
                                                 "power_plane_connect_style": {
                                                     "type": "string",
-                                                    "enum": ["relief", "direct", "no_connect"],
+                                                    "enum": accepted::POWER_PLANE_CONNECT_STYLES,
                                                     "description": "How the pad connects to an internal power plane. Default: relief (thermal spokes)"
                                                 },
                                                 "relief_conductor_width": { "type": "number", "description": "Thermal-relief spoke (conductor) width in mm. Default: 0.254 (10 mil)" },
@@ -340,17 +341,17 @@ impl McpServer {
                                                 "solder_mask_expansion": { "type": "number", "description": "Solder mask expansion in mm (negative = tented). Default: 0" },
                                                 "solder_mask_expansion_mode": {
                                                     "type": "string",
-                                                    "enum": ["none", "from_rule", "manual"],
+                                                    "enum": accepted::MASK_EXPANSION_MODES,
                                                     "description": "Solder mask expansion mode. 'none' (the default) leaves the cached value stale so Altium takes the expansion from the design rule; 'from_rule' tells Altium the stored value is a rule result to honour as-is; 'manual' uses the stored value as hand-specified."
                                                 },
                                                 "thermal_relief_gap": { "type": "number", "description": "Thermal relief air-gap width in mm. Default: 0.254 (10 mil)" },
                                                 "solder_mask_expansion_from_hole_edge": { "type": "boolean", "description": "Measure solder-mask expansion from the HOLE edge instead of the pad edge. Default: false" },
-                                                "drill_layer_pair_type": { "type": "string", "enum": ["through", "blind_buried_start", "mid", "end"], "description": "Drill-pair classification. \"through\" (default) spans the whole board; the others mark a via's place in a blind/buried drill-pair sequence." },
+                                                "drill_layer_pair_type": { "type": "string", "enum": accepted::DRILL_LAYER_PAIR_TYPES, "description": "Drill-pair classification. \"through\" (default) spans the whole board; the others mark a via's place in a blind/buried drill-pair sequence." },
                                                 "thermal_relief_conductors": { "type": "integer", "description": "Number of thermal relief conductors. Default: 4" },
                                                 "thermal_relief_width": { "type": "number", "description": "Thermal relief conductor width in mm. Default: 0.254 (10 mil)" },
                                                 "power_plane_connect_style": {
                                                     "type": "string",
-                                                    "enum": ["relief", "direct", "no_connect"],
+                                                    "enum": accepted::POWER_PLANE_CONNECT_STYLES,
                                                     "description": "How the via connects to an internal power plane. Default: relief (thermal spokes)"
                                                 },
                                                 "power_plane_relief_expansion": { "type": "number", "description": "Power-plane relief expansion in mm. Default: 0.508 (20 mil)" },
@@ -431,7 +432,7 @@ impl McpServer {
                                                     }
                                                 },
                                                 "layer": { "type": "string", "description": "Layer name: Top Courtyard, Top Assembly, Mechanical 1, etc." },
-                                                "kind": { "type": ["string", "integer"], "description": "Region kind (optional). \"copper\" (default) for a copper pour/fill, \"cutout\" for a board/polygon cutout, or a raw Altium KIND integer. Default: copper" },
+                                                "kind": { "type": ["string", "integer"], "examples": accepted::REGION_KINDS, "description": "Region kind (optional). \"copper\" (default) for a copper pour/fill, \"cutout\" for a board/polygon cutout, or a raw Altium KIND integer. Default: copper" },
                                                 "name": { "type": "string", "description": "Region name (the NAME parameter, optional). Default: empty" },
                                                 "net_index": { "type": "integer", "description": "Net index into the board net list (optional). 65535 = no net. Default: 65535" },
                                                 "polygon_index": { "type": "integer", "description": "Polygon index (common header; 65535 = none). Normally omitted; preserved on a read-modify-write. Default: 65535" },
@@ -474,15 +475,15 @@ impl McpServer {
                                                 "height": { "type": "number", "description": "Text height in mm" },
                                                 "layer": { "type": "string", "description": "Layer name: Top Overlay, Top Assembly, Mechanical 1, etc." },
                                                 "rotation": { "type": "number", "description": "Rotation in degrees" },
-                                                "kind": { "type": "string", "enum": ["stroke", "true_type", "bar_code"], "description": "Text rendering kind. \"stroke\" (default) uses a vector stroke font (most common for silkscreen); \"true_type\" renders with the TrueType font named by font_name; \"bar_code\" is a barcode. Default: stroke" },
-                                                "stroke_font": { "type": "string", "enum": ["default", "sans_serif", "serif"], "description": "Stroke font selection (only meaningful when kind is \"stroke\"). Default: default (Altium's built-in stroke font)" },
+                                                "kind": { "type": "string", "enum": accepted::TEXT_KINDS, "description": "Text rendering kind. \"stroke\" (default) uses a vector stroke font (most common for silkscreen); \"true_type\" renders with the TrueType font named by font_name; \"bar_code\" is a barcode. Default: stroke" },
+                                                "stroke_font": { "type": "string", "enum": accepted::STROKE_FONTS, "description": "Stroke font selection (only meaningful when kind is \"stroke\"). Default: default (Altium's built-in stroke font)" },
                                                 "font_name": { "type": "string", "description": "TrueType font name (only meaningful when kind is \"true_type\"). Default: Arial" },
                                                 "bold": { "type": "boolean", "description": "Bold font style (TrueType). Default: false" },
                                                 "italic": { "type": "boolean", "description": "Italic font style (TrueType). Default: false" },
                                                 "mirror": { "type": "boolean", "description": "Mirror the text (bottom-side silkscreen). Default: false" },
                                                 "is_comment": { "type": "boolean", "description": "Mark this text as the component's Comment field (Altium IsComment). Preserved on read-modify-write. Default: false" },
                                                 "is_designator": { "type": "boolean", "description": "Mark this text as the component's Designator field (Altium IsDesignator). Preserved on read-modify-write. Default: false" },
-                                                "justification": { "type": "string", "enum": ["bottom_left", "bottom_center", "bottom_right", "middle_left", "middle_center", "middle_right", "top_left", "top_center", "top_right"], "description": "Text anchor / justification within its frame. Default: bottom_left" },
+                                                "justification": { "type": "string", "enum": accepted::TEXT_JUSTIFICATIONS, "description": "Text anchor / justification within its frame. Default: bottom_left" },
                                                 "stroke_width": { "type": "number", "description": "Stroke line width in mm (optional; defaults to Altium's ~4 mil)" },
                                                 "is_inverted": { "type": "boolean", "description": "Draw the text inverted (knockout): a filled bar with the glyphs punched out. Default: false" },
                                                 "inverted_border": { "type": "number", "description": "Border margin around inverted text in mm (only meaningful when is_inverted). Default: none" },
@@ -658,8 +659,8 @@ impl McpServer {
                                                 "x": { "type": "integer", "description": "Pin's body-attach (INNER) end, in whole schematic units (10 units = 1 grid square). This is the end that touches the symbol body, NOT the connection tip. The pin is drawn from (x,y) extending 'length' units in the 'orientation' direction; the connection tip is at the far end. Pins are integer-positioned; for an off-grid pin supply the sub-unit remainder via 'frac' (a fractional value here is truncated)." },
                                                 "y": { "type": "integer", "description": "Y of the pin's body-attach (inner) end, in whole schematic units. See 'x' (use 'frac' for off-grid)." },
                                                 "length": { "type": "number", "description": "Pin length in schematic units (10 = 1 grid). Drawn from (x,y) outward in the 'orientation' direction." },
-                                                "orientation": { "type": "string", "enum": ["left", "right", "up", "down"], "description": "Direction the pin POINTS, away from the body — NOT which side it sits on. A pin on the LEFT side uses 'left' (tip at x-length); a RIGHT-side pin uses 'right' (tip at x+length); 'up'/'down' for top/bottom pins. Put each pin's (x,y) on the matching body-rectangle edge so it attaches flush, e.g. left pin {x:-50,y:20,length:30,orientation:'left'} with rectangle x1=-50, and the matching right pin {x:50,y:20,length:30,orientation:'right'} with x2=50. For TOP/BOTTOM pins, (x,y) sits on the body's top/bottom edge and the pin points outward (away from the body centre): a top-side pin uses 'up' (tip at y+length, above the body), a bottom-side pin uses 'down' (tip at y-length, below) — e.g. a vertical 2-pin part with the body near y=0: top pin {x:0,y:10,length:30,orientation:'up'} (tip at y=40), bottom pin {x:0,y:-10,length:30,orientation:'down'} (tip at y=-40)." },
-                                                "electrical_type": { "type": "string", "enum": ["input", "output", "bidirectional", "passive", "power", "open_collector", "open_emitter", "hi_z", "tristate"], "description": "Pin electrical type. 'tristate' is accepted as an alias for 'hi_z'. Default: passive" },
+                                                "orientation": { "type": "string", "enum": accepted::PIN_ORIENTATIONS, "description": "Direction the pin POINTS, away from the body — NOT which side it sits on. A pin on the LEFT side uses 'left' (tip at x-length); a RIGHT-side pin uses 'right' (tip at x+length); 'up'/'down' for top/bottom pins. Put each pin's (x,y) on the matching body-rectangle edge so it attaches flush, e.g. left pin {x:-50,y:20,length:30,orientation:'left'} with rectangle x1=-50, and the matching right pin {x:50,y:20,length:30,orientation:'right'} with x2=50. For TOP/BOTTOM pins, (x,y) sits on the body's top/bottom edge and the pin points outward (away from the body centre): a top-side pin uses 'up' (tip at y+length, above the body), a bottom-side pin uses 'down' (tip at y-length, below) — e.g. a vertical 2-pin part with the body near y=0: top pin {x:0,y:10,length:30,orientation:'up'} (tip at y=40), bottom pin {x:0,y:-10,length:30,orientation:'down'} (tip at y=-40)." },
+                                                "electrical_type": { "type": "string", "enum": accepted::PIN_ELECTRICAL_TYPES, "description": "Pin electrical type. 'tristate' is accepted as an alias for 'hi_z'. Default: passive" },
                                                 "owner_part_id": { "type": "integer", "description": "Part number this pin belongs to (1-based). Default: 1" },
                                                 "hidden": { "type": "boolean", "description": "Whether the pin is hidden. Default: false" },
                                                 "show_name": { "type": "boolean", "description": "Whether to show the pin name. Default: true" },
@@ -670,10 +671,10 @@ impl McpServer {
                                                 "swap_id_group": { "type": "string", "description": "Pin swap-id group, for pin-swap. Default: empty" },
                                                 "part_and_sequence": { "type": "string", "description": "Pin part-and-sequence swap id. Default: '|&|'" },
                                                 "default_value": { "type": "string", "description": "Pin default value. Default: empty" },
-                                                "symbol_inner_edge": { "type": "string", "description": "Decoration on the INNER edge (nearest the body), e.g. 'dot' (inversion bubble), 'clock'. Default: none" },
-                                                "symbol_outer_edge": { "type": "string", "description": "Decoration on the OUTER edge (furthest from the body), e.g. 'dot', 'clock'. Default: none" },
-                                                "symbol_inside": { "type": "string", "description": "Decoration drawn inside the pin line, e.g. 'postponed_output', 'open_collector'. Default: none" },
-                                                "symbol_outside": { "type": "string", "description": "Decoration drawn outside the pin line, e.g. 'right_left_signal_flow', 'analog_signal_in'. Default: none" },
+                                                "symbol_inner_edge": { "type": "string", "enum": accepted::PIN_SYMBOLS, "description": "Decoration on the INNER edge (nearest the body), e.g. 'dot' (inversion bubble), 'clock'. Default: none" },
+                                                "symbol_outer_edge": { "type": "string", "enum": accepted::PIN_SYMBOLS, "description": "Decoration on the OUTER edge (furthest from the body), e.g. 'dot', 'clock'. Default: none" },
+                                                "symbol_inside": { "type": "string", "enum": accepted::PIN_SYMBOLS, "description": "Decoration drawn inside the pin line, e.g. 'postponed_output', 'open_collector'. Default: none" },
+                                                "symbol_outside": { "type": "string", "enum": accepted::PIN_SYMBOLS, "description": "Decoration drawn outside the pin line, e.g. 'right_left_signal_flow', 'analog_signal_in'. Default: none" },
                                                 "owner_part_display_mode": { "type": "integer", "description": "Pin's alternate-view (display-mode) index in the binary pin record. Default: 0" },
                                                 "symbol_line_width": { "type": "integer", "description": "Pin symbol line-width index. Non-zero writes a PinSymbolLineWidth auxiliary stream; 0 (default) writes none." },
                                                 "frac": { "type": "object", "description": "Fractional pin coordinates for off-grid pins, in 1/100000 schematic-unit steps. Non-zero writes a PinFrac auxiliary stream; omit for on-grid pins.", "properties": { "x": { "type": "integer" }, "y": { "type": "integer" }, "length": { "type": "integer" } } }
@@ -1032,7 +1033,7 @@ impl McpServer {
                                                 "text": { "type": "string", "description": "Text content" },
                                                 "font_id": { "type": "integer", "description": "Font ID. Default: 1" },
                                                 "color": { "type": "integer", "description": "BGR colour. Default: 0x000080" },
-                                                "justification": { "type": "string", "enum": ["bottom_left", "bottom_center", "bottom_right", "middle_left", "middle_center", "middle_right", "top_left", "top_center", "top_right"], "description": "Alignment. Default: bottom_left" },
+                                                "justification": { "type": "string", "enum": accepted::TEXT_JUSTIFICATIONS, "description": "Alignment. Default: bottom_left" },
                                                 "rotation": { "type": "number", "description": "Rotation in degrees. Default: 0" },
                                                 "is_mirrored": { "type": "boolean", "description": "Mirrored. Default: false" },
                                                 "is_hidden": { "type": "boolean", "description": "Hidden. Default: false" },

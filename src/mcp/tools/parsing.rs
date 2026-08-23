@@ -234,6 +234,228 @@ fn json_guidless_opt(json: &Value, key: &str) -> Option<String> {
 
 /// Accepted pad-shape spellings, quoted in every shape error so the two tools
 /// give identical guidance.
+/// The values an enum-valued string field accepts, as the JSON boundary
+/// spells them (the serde `snake_case` names). Each list is the schema's
+/// `enum` for the field, the parser's accepted set and the error's
+/// "accepted values" — one list, three uses.
+pub mod accepted {
+    /// `hole_shape` of a pad.
+    pub const HOLE_SHAPES: &[&str] = &["round", "square", "slot"];
+    /// `paste_mask_expansion_mode` / `solder_mask_expansion_mode`.
+    pub const MASK_EXPANSION_MODES: &[&str] = &["none", "manual", "from_rule"];
+    /// `power_plane_connect_style` of a pad or via.
+    pub const POWER_PLANE_CONNECT_STYLES: &[&str] = &["relief", "direct", "no_connect"];
+    /// `stack_mode` of a pad and `diameter_stack_mode` of a via.
+    pub const STACK_MODES: &[&str] = &["simple", "top_middle_bottom", "full_stack"];
+    /// `drill_layer_pair_type` of a via.
+    pub const DRILL_LAYER_PAIR_TYPES: &[&str] = &["through", "blind_buried_start", "mid", "end"];
+    /// `kind` of a `PcbLib` text.
+    pub const TEXT_KINDS: &[&str] = &["stroke", "true_type", "bar_code"];
+    /// `stroke_font` of a `PcbLib` text.
+    pub const STROKE_FONTS: &[&str] = &["default", "sans_serif", "serif"];
+    /// `kind` of a region, by name (a raw `KIND` integer is accepted too).
+    pub const REGION_KINDS: &[&str] = &["copper", "cutout", "named_region", "cavity"];
+    /// `justification` of a `PcbLib` text or a `SchLib` label.
+    pub const TEXT_JUSTIFICATIONS: &[&str] = &[
+        "bottom_left",
+        "bottom_center",
+        "bottom_right",
+        "middle_left",
+        "middle_center",
+        "middle_right",
+        "top_left",
+        "top_center",
+        "top_right",
+    ];
+    /// `orientation` of a pin.
+    pub const PIN_ORIENTATIONS: &[&str] = &["left", "right", "up", "down"];
+    /// `electrical_type` of a pin.
+    pub const PIN_ELECTRICAL_TYPES: &[&str] = &[
+        "input",
+        "output",
+        "bidirectional",
+        "passive",
+        "power",
+        "open_collector",
+        "open_emitter",
+        "hi_z",
+    ];
+    /// The four `symbol_*` decorations of a pin.
+    pub const PIN_SYMBOLS: &[&str] = &[
+        "none",
+        "dot",
+        "right_left_signal_flow",
+        "clock",
+        "active_low_input",
+        "analog_signal_in",
+        "not_logic_connection",
+        "postponed_output",
+        "open_collector",
+        "hi_z",
+        "high_current",
+        "pulse",
+        "schmitt",
+        "active_low_output",
+        "open_collector_pull_up",
+        "open_emitter",
+        "open_emitter_pull_up",
+        "digital_signal_in",
+        "shift_left",
+        "open_output",
+        "left_right_signal_flow",
+        "bidirectional_signal_flow",
+    ];
+
+    /// Spellings accepted besides the names above, folded (lower case, no
+    /// separators) → the name they stand for.
+    pub const TEXT_JUSTIFICATION_SYNONYMS: &[(&str, &str)] = &[
+        ("bottomcentre", "bottom_center"),
+        ("centerleft", "middle_left"),
+        ("centreleft", "middle_left"),
+        ("middlecentre", "middle_center"),
+        ("center", "middle_center"),
+        ("centre", "middle_center"),
+        ("centerright", "middle_right"),
+        ("centreright", "middle_right"),
+        ("topcentre", "top_center"),
+    ];
+    /// Spellings accepted besides [`PIN_ELECTRICAL_TYPES`].
+    pub const PIN_ELECTRICAL_TYPE_SYNONYMS: &[(&str, &str)] = &[
+        ("io", "bidirectional"),
+        ("inputoutput", "bidirectional"),
+        ("tristate", "hi_z"),
+        ("highimpedance", "hi_z"),
+    ];
+    /// Spellings accepted besides [`PIN_SYMBOLS`].
+    pub const PIN_SYMBOL_SYNONYMS: &[(&str, &str)] = &[
+        ("invert", "dot"),
+        ("inversion", "dot"),
+        ("clk", "clock"),
+        ("lowinput", "active_low_input"),
+        ("lowoutput", "active_low_output"),
+        ("rightleft", "right_left_signal_flow"),
+        ("leftright", "left_right_signal_flow"),
+        ("bidirectional", "bidirectional_signal_flow"),
+        ("analog", "analog_signal_in"),
+        ("digital", "digital_signal_in"),
+        ("notlogic", "not_logic_connection"),
+        ("postponed", "postponed_output"),
+        ("highimpedance", "hi_z"),
+        ("schmitttrigger", "schmitt"),
+    ];
+    /// Spellings accepted besides [`HOLE_SHAPES`].
+    pub const HOLE_SHAPE_SYNONYMS: &[(&str, &str)] = &[("circle", "round"), ("circular", "round")];
+}
+
+/// A spelling without case or the `_`, `-` and space separators, so the
+/// serde name, a camel-cased or a spaced form compare equal.
+fn fold_spelling(s: &str) -> String {
+    s.chars()
+        .filter(|c| !matches!(c, ' ' | '-' | '_'))
+        .flat_map(char::to_lowercase)
+        .collect()
+}
+
+/// Resolves an enum-valued string to the JSON boundary's spelling: one of
+/// `accepted` (the serde names) in any case and with or without separators,
+/// or a `synonyms` entry. An unrecognised value is an error naming the
+/// field and the accepted values — never a silent default.
+fn parse_enum<T: serde::de::DeserializeOwned>(
+    value: &str,
+    field: &str,
+    accepted: &[&str],
+    synonyms: &[(&str, &str)],
+) -> Result<T, String> {
+    let folded = fold_spelling(value);
+    let name = accepted
+        .iter()
+        .copied()
+        .find(|name| fold_spelling(name) == folded)
+        .or_else(|| {
+            synonyms
+                .iter()
+                .find(|(synonym, _)| *synonym == folded)
+                .map(|(_, name)| *name)
+        })
+        .ok_or_else(|| {
+            format!(
+                "{field} '{value}' is not recognised. Accepted values: {}",
+                accepted.join(", ")
+            )
+        })?;
+    serde_json::from_value(Value::String(name.to_string()))
+        .map_err(|e| format!("{field} '{value}': {e}"))
+}
+
+/// Reads an optional enum-valued string field through [`parse_enum`]: absent
+/// is `Ok(None)`; present but not a string, or unrecognised, is an error.
+fn enum_field<T: serde::de::DeserializeOwned>(
+    json: &Value,
+    key: &str,
+    field: &str,
+    accepted: &[&str],
+    synonyms: &[(&str, &str)],
+) -> Result<Option<T>, String> {
+    match json.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(s)) => parse_enum(s, field, accepted, synonyms).map(Some),
+        Some(other) => Err(format!(
+            "{field} must be a string, got {other}. Accepted values: {}",
+            accepted.join(", ")
+        )),
+    }
+}
+
+/// One contour of a region: every vertex must carry both coordinates, since
+/// dropping one would silently reshape the outline. `what` names the contour
+/// ("outline", "hole 2") in the error.
+fn region_vertices(
+    points: &[Value],
+    what: &str,
+) -> Result<Vec<crate::altium::pcblib::Vertex>, String> {
+    points
+        .iter()
+        .enumerate()
+        .map(|(i, v)| {
+            let coordinate = |key: &str| {
+                v.get(key)
+                    .and_then(Value::as_f64)
+                    .ok_or_else(|| format!("Region {what} vertex {i} is missing a numeric '{key}'"))
+            };
+            Ok(crate::altium::pcblib::Vertex {
+                x: coordinate("x")?,
+                y: coordinate("y")?,
+            })
+        })
+        .collect()
+}
+
+/// A region's optional interior hole contours: an array of vertex arrays,
+/// each a closed contour of at least three whole vertices.
+fn region_holes(json: &Value) -> Result<Vec<Vec<crate::altium::pcblib::Vertex>>, String> {
+    match json.get("holes") {
+        None | Some(Value::Null) => Ok(Vec::new()),
+        Some(Value::Array(contours)) => contours
+            .iter()
+            .enumerate()
+            .map(|(i, contour)| {
+                let points = contour
+                    .as_array()
+                    .ok_or_else(|| format!("Region hole {i} must be an array of vertices"))?;
+                let hole = region_vertices(points, &format!("hole {i}"))?;
+                if hole.len() < 3 {
+                    return Err(format!(
+                        "Region hole {i} needs at least 3 vertices, got {}",
+                        hole.len()
+                    ));
+                }
+                Ok(hole)
+            })
+            .collect(),
+        Some(other) => Err(format!("Region holes must be an array, got {other}")),
+    }
+}
+
 /// The spellings every layer-name field accepts; appended to each "invalid
 /// layer" error so a caller learns the rule, not just the rejection.
 pub const LAYER_NAME_HELP: &str =
@@ -372,8 +594,9 @@ impl McpServer {
         if let Some(pins) = sym_json.get("pins").and_then(Value::as_array) {
             for (i, pin_json) in pins.iter().enumerate() {
                 Self::refuse_unknown(pin_json, &keys.pin)?;
-                let pin = Self::parse_schlib_pin(pin_json)
-                    .ok_or_else(|| Self::malformed(operation, filepath, name, "pin", i))?;
+                let pin = Self::parse_schlib_pin(pin_json).map_err(|reason| {
+                    Self::malformed(operation, filepath, name, "pin", i, &reason)
+                })?;
                 symbol.add_pin(pin);
             }
         }
@@ -382,8 +605,16 @@ impl McpServer {
         if let Some(rects) = sym_json.get("rectangles").and_then(Value::as_array) {
             for (i, rect_json) in rects.iter().enumerate() {
                 Self::refuse_unknown(rect_json, allowed_keys::RECTANGLE)?;
-                let rect = Self::parse_schlib_rectangle(rect_json)
-                    .ok_or_else(|| Self::malformed(operation, filepath, name, "rectangle", i))?;
+                let rect = Self::parse_schlib_rectangle(rect_json).ok_or_else(|| {
+                    Self::malformed(
+                        operation,
+                        filepath,
+                        name,
+                        "rectangle",
+                        i,
+                        "a required field is missing or invalid",
+                    )
+                })?;
                 symbol.add_rectangle(rect);
             }
         }
@@ -392,8 +623,17 @@ impl McpServer {
         if let Some(round_rects) = sym_json.get("round_rects").and_then(Value::as_array) {
             for (i, round_rect_json) in round_rects.iter().enumerate() {
                 Self::refuse_unknown(round_rect_json, allowed_keys::ROUND_RECT)?;
-                let round_rect = Self::parse_schlib_round_rect(round_rect_json)
-                    .ok_or_else(|| Self::malformed(operation, filepath, name, "round_rect", i))?;
+                let round_rect =
+                    Self::parse_schlib_round_rect(round_rect_json).ok_or_else(|| {
+                        Self::malformed(
+                            operation,
+                            filepath,
+                            name,
+                            "round_rect",
+                            i,
+                            "a required field is missing or invalid",
+                        )
+                    })?;
                 symbol.add_round_rect(round_rect);
             }
         }
@@ -402,8 +642,16 @@ impl McpServer {
         if let Some(lines) = sym_json.get("lines").and_then(Value::as_array) {
             for (i, line_json) in lines.iter().enumerate() {
                 Self::refuse_unknown(line_json, allowed_keys::LINE)?;
-                let line = Self::parse_schlib_line(line_json)
-                    .ok_or_else(|| Self::malformed(operation, filepath, name, "line", i))?;
+                let line = Self::parse_schlib_line(line_json).ok_or_else(|| {
+                    Self::malformed(
+                        operation,
+                        filepath,
+                        name,
+                        "line",
+                        i,
+                        "a required field is missing or invalid",
+                    )
+                })?;
                 symbol.add_line(line);
             }
         }
@@ -412,8 +660,16 @@ impl McpServer {
         if let Some(polylines) = sym_json.get("polylines").and_then(Value::as_array) {
             for (i, polyline_json) in polylines.iter().enumerate() {
                 Self::refuse_unknown(polyline_json, allowed_keys::POLYLINE)?;
-                let polyline = Self::parse_schlib_polyline(polyline_json)
-                    .ok_or_else(|| Self::malformed(operation, filepath, name, "polyline", i))?;
+                let polyline = Self::parse_schlib_polyline(polyline_json).ok_or_else(|| {
+                    Self::malformed(
+                        operation,
+                        filepath,
+                        name,
+                        "polyline",
+                        i,
+                        "a required field is missing or invalid",
+                    )
+                })?;
                 symbol.add_polyline(polyline);
             }
         }
@@ -422,8 +678,16 @@ impl McpServer {
         if let Some(polygons) = sym_json.get("polygons").and_then(Value::as_array) {
             for (i, polygon_json) in polygons.iter().enumerate() {
                 Self::refuse_unknown(polygon_json, allowed_keys::POLYGON)?;
-                let polygon = Self::parse_schlib_polygon(polygon_json)
-                    .ok_or_else(|| Self::malformed(operation, filepath, name, "polygon", i))?;
+                let polygon = Self::parse_schlib_polygon(polygon_json).ok_or_else(|| {
+                    Self::malformed(
+                        operation,
+                        filepath,
+                        name,
+                        "polygon",
+                        i,
+                        "a required field is missing or invalid",
+                    )
+                })?;
                 symbol.add_polygon(polygon);
             }
         }
@@ -435,8 +699,16 @@ impl McpServer {
                 // allow-list must match the documented fields in tool_definitions or every arc is
                 // rejected as an "unknown field" (was erroneously copied from the PcbLib arc as ["layer"]).
                 Self::refuse_unknown(arc_json, allowed_keys::ARC)?;
-                let arc = Self::parse_schlib_arc(arc_json)
-                    .ok_or_else(|| Self::malformed(operation, filepath, name, "arc", i))?;
+                let arc = Self::parse_schlib_arc(arc_json).ok_or_else(|| {
+                    Self::malformed(
+                        operation,
+                        filepath,
+                        name,
+                        "arc",
+                        i,
+                        "a required field is missing or invalid",
+                    )
+                })?;
                 symbol.add_arc(arc);
             }
         }
@@ -444,8 +716,16 @@ impl McpServer {
         if let Some(pies) = sym_json.get("pies").and_then(Value::as_array) {
             for (i, pie_json) in pies.iter().enumerate() {
                 Self::refuse_unknown(pie_json, allowed_keys::PIE)?;
-                let pie = Self::parse_schlib_pie(pie_json)
-                    .ok_or_else(|| Self::malformed(operation, filepath, name, "pie", i))?;
+                let pie = Self::parse_schlib_pie(pie_json).ok_or_else(|| {
+                    Self::malformed(
+                        operation,
+                        filepath,
+                        name,
+                        "pie",
+                        i,
+                        "a required field is missing or invalid",
+                    )
+                })?;
                 symbol.add_pie(pie);
             }
         }
@@ -453,8 +733,16 @@ impl McpServer {
         if let Some(images) = sym_json.get("images").and_then(Value::as_array) {
             for (i, image_json) in images.iter().enumerate() {
                 Self::refuse_unknown(image_json, allowed_keys::IMAGE)?;
-                let image = Self::parse_schlib_image(image_json)
-                    .ok_or_else(|| Self::malformed(operation, filepath, name, "image", i))?;
+                let image = Self::parse_schlib_image(image_json).ok_or_else(|| {
+                    Self::malformed(
+                        operation,
+                        filepath,
+                        name,
+                        "image",
+                        i,
+                        "a required field is missing or invalid",
+                    )
+                })?;
                 symbol.add_image(image);
             }
         }
@@ -462,8 +750,16 @@ impl McpServer {
         if let Some(text_frames) = sym_json.get("text_frames").and_then(Value::as_array) {
             for (i, frame_json) in text_frames.iter().enumerate() {
                 Self::refuse_unknown(frame_json, allowed_keys::TEXT_FRAME)?;
-                let text_frame = Self::parse_schlib_text_frame(frame_json)
-                    .ok_or_else(|| Self::malformed(operation, filepath, name, "text_frame", i))?;
+                let text_frame = Self::parse_schlib_text_frame(frame_json).ok_or_else(|| {
+                    Self::malformed(
+                        operation,
+                        filepath,
+                        name,
+                        "text_frame",
+                        i,
+                        "a required field is missing or invalid",
+                    )
+                })?;
                 symbol.add_text_frame(text_frame);
             }
         }
@@ -471,8 +767,16 @@ impl McpServer {
         if let Some(beziers) = sym_json.get("beziers").and_then(Value::as_array) {
             for (i, bezier_json) in beziers.iter().enumerate() {
                 Self::refuse_unknown(bezier_json, allowed_keys::BEZIER)?;
-                let bezier = Self::parse_schlib_bezier(bezier_json)
-                    .ok_or_else(|| Self::malformed(operation, filepath, name, "bezier", i))?;
+                let bezier = Self::parse_schlib_bezier(bezier_json).ok_or_else(|| {
+                    Self::malformed(
+                        operation,
+                        filepath,
+                        name,
+                        "bezier",
+                        i,
+                        "a required field is missing or invalid",
+                    )
+                })?;
                 symbol.add_bezier(bezier);
             }
         }
@@ -481,7 +785,14 @@ impl McpServer {
             for (i, ell_arc_json) in ell_arcs.iter().enumerate() {
                 Self::refuse_unknown(ell_arc_json, allowed_keys::ELLIPTICAL_ARC)?;
                 let ell_arc = Self::parse_schlib_elliptical_arc(ell_arc_json).ok_or_else(|| {
-                    Self::malformed(operation, filepath, name, "elliptical_arc", i)
+                    Self::malformed(
+                        operation,
+                        filepath,
+                        name,
+                        "elliptical_arc",
+                        i,
+                        "a required field is missing or invalid",
+                    )
                 })?;
                 symbol.add_elliptical_arc(ell_arc);
             }
@@ -491,8 +802,16 @@ impl McpServer {
         if let Some(ellipses) = sym_json.get("ellipses").and_then(Value::as_array) {
             for (i, ellipse_json) in ellipses.iter().enumerate() {
                 Self::refuse_unknown(ellipse_json, allowed_keys::ELLIPSE)?;
-                let ellipse = Self::parse_schlib_ellipse(ellipse_json)
-                    .ok_or_else(|| Self::malformed(operation, filepath, name, "ellipse", i))?;
+                let ellipse = Self::parse_schlib_ellipse(ellipse_json).ok_or_else(|| {
+                    Self::malformed(
+                        operation,
+                        filepath,
+                        name,
+                        "ellipse",
+                        i,
+                        "a required field is missing or invalid",
+                    )
+                })?;
                 symbol.add_ellipse(ellipse);
             }
         }
@@ -501,8 +820,9 @@ impl McpServer {
         if let Some(labels) = sym_json.get("labels").and_then(Value::as_array) {
             for (i, label_json) in labels.iter().enumerate() {
                 Self::refuse_unknown(label_json, allowed_keys::LABEL)?;
-                let label = Self::parse_schlib_label(label_json)
-                    .ok_or_else(|| Self::malformed(operation, filepath, name, "label", i))?;
+                let label = Self::parse_schlib_label(label_json).map_err(|reason| {
+                    Self::malformed(operation, filepath, name, "label", i, &reason)
+                })?;
                 symbol.add_label(label);
             }
         }
@@ -511,8 +831,16 @@ impl McpServer {
         if let Some(symbols) = sym_json.get("ieee_symbols").and_then(Value::as_array) {
             for (i, symbol_json) in symbols.iter().enumerate() {
                 Self::refuse_unknown(symbol_json, allowed_keys::IEEE_SYMBOL)?;
-                let ieee_symbol = Self::parse_schlib_ieee_symbol(symbol_json)
-                    .ok_or_else(|| Self::malformed(operation, filepath, name, "IEEE symbol", i))?;
+                let ieee_symbol = Self::parse_schlib_ieee_symbol(symbol_json).ok_or_else(|| {
+                    Self::malformed(
+                        operation,
+                        filepath,
+                        name,
+                        "IEEE symbol",
+                        i,
+                        "a required field is missing or invalid",
+                    )
+                })?;
                 symbol.add_ieee_symbol(ieee_symbol);
             }
         }
@@ -521,8 +849,16 @@ impl McpServer {
         if let Some(params) = sym_json.get("parameters").and_then(Value::as_array) {
             for (i, param_json) in params.iter().enumerate() {
                 Self::refuse_unknown(param_json, allowed_keys::PARAMETER)?;
-                let param = Self::parse_schlib_parameter(param_json)
-                    .ok_or_else(|| Self::malformed(operation, filepath, name, "parameter", i))?;
+                let param = Self::parse_schlib_parameter(param_json).ok_or_else(|| {
+                    Self::malformed(
+                        operation,
+                        filepath,
+                        name,
+                        "parameter",
+                        i,
+                        "a required field is missing or invalid",
+                    )
+                })?;
                 symbol.add_parameter(param);
             }
         }
@@ -535,7 +871,14 @@ impl McpServer {
                 // read-preserved identity a replay carries back.
                 Self::refuse_unknown(fp_json, &keys.footprint)?;
                 let fp_name = fp_json.get("name").and_then(Value::as_str).ok_or_else(|| {
-                    Self::malformed(operation, filepath, name, "footprint link", i)
+                    Self::malformed(
+                        operation,
+                        filepath,
+                        name,
+                        "footprint link",
+                        i,
+                        "a required field is missing or invalid",
+                    )
                 })?;
                 {
                     let mut fp = FootprintModel::new(fp_name);
@@ -608,15 +951,13 @@ impl McpServer {
         component: &str,
         kind: &str,
         index: usize,
+        reason: &str,
     ) -> ToolCallResult {
         ToolCallResult::error_with_context(
-            ErrorContext::new(
-                operation,
-                format!("Malformed {kind}: a required field is missing or invalid"),
-            )
-            .with_filepath(filepath)
-            .with_component(component)
-            .with_details(format!("Failed to parse {kind} at index {index}")),
+            ErrorContext::new(operation, format!("Malformed {kind}: {reason}"))
+                .with_filepath(filepath)
+                .with_component(component)
+                .with_details(format!("Failed to parse {kind} at index {index}")),
         )
     }
 
@@ -744,8 +1085,9 @@ impl McpServer {
         if let Some(regions) = fp_json.get("regions").and_then(Value::as_array) {
             for (i, region_json) in regions.iter().enumerate() {
                 Self::refuse_unknown(region_json, &keys.region)?;
-                let region = Self::parse_region(region_json)
-                    .ok_or_else(|| Self::malformed(operation, filepath, name, "region", i))?;
+                let region = Self::parse_region(region_json).map_err(|reason| {
+                    Self::malformed(operation, filepath, name, "region", i, &reason)
+                })?;
                 footprint.add_region(region);
             }
         }
@@ -754,8 +1096,9 @@ impl McpServer {
         if let Some(texts) = fp_json.get("text").and_then(Value::as_array) {
             for (i, text_json) in texts.iter().enumerate() {
                 Self::refuse_unknown(text_json, &keys.text)?;
-                let text = Self::parse_text(text_json)
-                    .ok_or_else(|| Self::malformed(operation, filepath, name, "text", i))?;
+                let text = Self::parse_text(text_json).map_err(|reason| {
+                    Self::malformed(operation, filepath, name, "text", i, &reason)
+                })?;
                 footprint.add_text(text);
             }
         }
@@ -1046,44 +1389,37 @@ impl McpServer {
         };
         let rotation = json.get("rotation").and_then(Value::as_f64).unwrap_or(0.0);
 
-        // Parse optional hole shape
-        let hole_shape = json
-            .get("hole_shape")
-            .and_then(Value::as_str)
-            .map(|s| match s.to_lowercase().as_str() {
-                "square" => crate::altium::pcblib::HoleShape::Square,
-                "slot" => crate::altium::pcblib::HoleShape::Slot,
-                _ => crate::altium::pcblib::HoleShape::Round,
-            })
-            .unwrap_or_default();
+        // Enum-valued fields: absent keeps the from-scratch default, an
+        // unrecognised value is refused rather than silently defaulted.
+        let pad_field = |key: &str| format!("Pad '{designator}' {key}");
+        let hole_shape = enum_field(
+            json,
+            "hole_shape",
+            &pad_field("hole_shape"),
+            accepted::HOLE_SHAPES,
+            accepted::HOLE_SHAPE_SYNONYMS,
+        )?
+        .unwrap_or_default();
 
         // Parse optional mask expansion values
         let paste_mask_expansion = json.get("paste_mask_expansion").and_then(Value::as_f64);
         let solder_mask_expansion = json.get("solder_mask_expansion").and_then(Value::as_f64);
-        let paste_mask_expansion_mode = json
-            .get("paste_mask_expansion_mode")
-            .and_then(Value::as_str)
-            .map(|s| match s.to_lowercase().as_str() {
-                "manual" => MaskExpansionMode::Manual,
-                "from_rule" => MaskExpansionMode::FromRule,
-                // Anything else, "none" included, maps to the state a fresh
-                // Altium pad carries, so an unrecognised value produces the
-                // same bytes as saying nothing at all.
-                _ => MaskExpansionMode::None,
-            })
-            .unwrap_or_default();
-        let solder_mask_expansion_mode = json
-            .get("solder_mask_expansion_mode")
-            .and_then(Value::as_str)
-            .map(|s| match s.to_lowercase().as_str() {
-                "manual" => MaskExpansionMode::Manual,
-                "from_rule" => MaskExpansionMode::FromRule,
-                // Anything else, "none" included, maps to the state a fresh
-                // Altium pad carries, so an unrecognised value produces the
-                // same bytes as saying nothing at all.
-                _ => MaskExpansionMode::None,
-            })
-            .unwrap_or_default();
+        let paste_mask_expansion_mode: MaskExpansionMode = enum_field(
+            json,
+            "paste_mask_expansion_mode",
+            &pad_field("paste_mask_expansion_mode"),
+            accepted::MASK_EXPANSION_MODES,
+            &[],
+        )?
+        .unwrap_or_default();
+        let solder_mask_expansion_mode: MaskExpansionMode = enum_field(
+            json,
+            "solder_mask_expansion_mode",
+            &pad_field("solder_mask_expansion_mode"),
+            accepted::MASK_EXPANSION_MODES,
+            &[],
+        )?
+        .unwrap_or_default();
 
         // Parse optional corner radius
         let corner_radius_percent = json
@@ -1095,15 +1431,14 @@ impl McpServer {
         // Thermal-relief / power-plane connection fields. Absent keys keep the
         // from-scratch defaults (= Altium's pad template), so an unspecified pad
         // round-trips byte-identically.
-        let power_plane_connect_style = json
-            .get("power_plane_connect_style")
-            .and_then(Value::as_str)
-            .map(|s| match s.to_lowercase().as_str() {
-                "direct" => PowerPlaneConnectStyle::Direct,
-                "no_connect" | "noconnect" => PowerPlaneConnectStyle::NoConnect,
-                _ => PowerPlaneConnectStyle::Relief,
-            })
-            .unwrap_or_default();
+        let power_plane_connect_style: PowerPlaneConnectStyle = enum_field(
+            json,
+            "power_plane_connect_style",
+            &pad_field("power_plane_connect_style"),
+            accepted::POWER_PLANE_CONNECT_STYLES,
+            &[],
+        )?
+        .unwrap_or_default();
         let relief_conductor_width = json
             .get("relief_conductor_width")
             .and_then(Value::as_f64)
@@ -1159,16 +1494,14 @@ impl McpServer {
 
         // Per-layer pad stack. The model has carried these all along; without them
         // in the schema a caller could never author anything but a Simple pad.
-        let stack_mode = match json
-            .get("stack_mode")
-            .and_then(Value::as_str)
-            .map(str::to_lowercase)
-            .as_deref()
-        {
-            Some("top_middle_bottom") => PadStackMode::TopMiddleBottom,
-            Some("full_stack") => PadStackMode::FullStack,
-            _ => PadStackMode::Simple,
-        };
+        let stack_mode: PadStackMode = enum_field(
+            json,
+            "stack_mode",
+            &pad_field("stack_mode"),
+            accepted::STACK_MODES,
+            &[],
+        )?
+        .unwrap_or_default();
         // Each entry in any spelling the tools accept (`{width, height}`,
         // `{x, y}` or `[a, b]`); a malformed entry is a zero pair rather than
         // a silently shortened stack.
@@ -1356,48 +1689,49 @@ impl McpServer {
     }
 
     /// Parses a region from JSON.
-    pub(crate) fn parse_region(json: &Value) -> Option<crate::altium::pcblib::Region> {
-        use crate::altium::pcblib::{Layer, Region, RegionKind, Vertex};
+    pub(crate) fn parse_region(json: &Value) -> Result<crate::altium::pcblib::Region, String> {
+        use crate::altium::pcblib::{Layer, Region, RegionKind};
 
-        let vertices_json = json.get("vertices").and_then(Value::as_array)?;
-        let layer = json
-            .get("layer")
-            .and_then(Value::as_str)
-            .and_then(Layer::parse)
-            .unwrap_or(Layer::Mechanical15);
+        let vertices_json = json
+            .get("vertices")
+            .and_then(Value::as_array)
+            .ok_or("Region is missing its vertices array")?;
+        let layer = match json.get("layer").and_then(Value::as_str) {
+            Some(s) => Layer::parse(s)
+                .ok_or_else(|| format!("Region has invalid layer '{s}'. {LAYER_NAME_HELP}"))?,
+            None => Layer::Mechanical15,
+        };
 
-        let vertices: Vec<Vertex> = vertices_json
-            .iter()
-            .filter_map(|v| {
-                let x = v.get("x").and_then(Value::as_f64)?;
-                let y = v.get("y").and_then(Value::as_f64)?;
-                Some(Vertex { x, y })
-            })
-            .collect();
-
+        let vertices = region_vertices(vertices_json, "outline")?;
         if vertices.len() < 3 {
-            return None; // Need at least 3 vertices for a polygon
+            return Err(format!(
+                "Region needs at least 3 vertices, got {}",
+                vertices.len()
+            ));
         }
 
         // `kind` accepts a name (matching the serde representation) or a raw
         // KIND integer. Board cutouts are not a kind of their own — AD24 stores
         // one as copper on the keep-out layer with `ISBOARDCUTOUT=TRUE`.
-        let parse_kind_str = |s: &str| match s.to_ascii_lowercase().as_str() {
-            "cutout" => RegionKind::Cutout,
-            "copper" => RegionKind::Copper,
-            "named_region" => RegionKind::NamedRegion,
-            "cavity" => RegionKind::Cavity,
-            other => other
-                .parse::<i32>()
-                .map_or(RegionKind::Copper, RegionKind::from_id),
-        };
         let kind = match json.get("kind") {
-            Some(v) if v.is_string() => parse_kind_str(v.as_str().unwrap_or("copper")),
-            Some(v) => v
+            None | Some(Value::Null) => RegionKind::Copper,
+            Some(Value::String(s)) => match s.trim().parse::<i32>() {
+                Ok(id) => RegionKind::from_id(id),
+                Err(_) => parse_enum(s, "Region kind", accepted::REGION_KINDS, &[])?,
+            },
+            Some(Value::Number(n)) => n
                 .as_i64()
                 .and_then(|i| i32::try_from(i).ok())
-                .map_or(RegionKind::Copper, RegionKind::from_id),
-            None => RegionKind::Copper,
+                .map(RegionKind::from_id)
+                .ok_or_else(|| format!("Region kind {n} is not a KIND integer"))?,
+            // The serde form of a kind outside the named ones (`{"other": n}`),
+            // as read_pcblib echoes it.
+            Some(other) => serde_json::from_value::<RegionKind>(other.clone()).map_err(|_| {
+                format!(
+                    "Region kind {other} is not recognised. Accepted values: {}, or a KIND integer",
+                    accepted::REGION_KINDS.join(", ")
+                )
+            })?,
         };
         let name = json
             .get("name")
@@ -1425,27 +1759,7 @@ impl McpServer {
             .and_then(Value::as_bool)
             .unwrap_or(false);
 
-        // Optional interior hole contours: an array of vertex arrays (each >= 3 pts).
-        let holes: Vec<Vec<Vertex>> = json
-            .get("holes")
-            .and_then(Value::as_array)
-            .map(|contours| {
-                contours
-                    .iter()
-                    .filter_map(Value::as_array)
-                    .map(|contour| {
-                        contour
-                            .iter()
-                            .filter_map(|v| {
-                                let x = v.get("x").and_then(Value::as_f64)?;
-                                let y = v.get("y").and_then(Value::as_f64)?;
-                                Some(Vertex { x, y })
-                            })
-                            .collect()
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
+        let holes = region_holes(json)?;
 
         let text_field = |key: &str| json.get(key).and_then(Value::as_str).map(str::to_string);
 
@@ -1455,7 +1769,7 @@ impl McpServer {
         // writer appends nothing (byte-identical to a from-scratch region).
         let additional_parameters = Self::parse_additional_parameters(json);
 
-        Some(Region {
+        Ok(Region {
             vertices,
             holes,
             layer,
@@ -1520,13 +1834,21 @@ impl McpServer {
     // A flat JSON-to-field mapping: long because Text carries a lot of optional
     // properties, not because it branches.
     #[allow(clippy::too_many_lines)]
-    pub(crate) fn parse_text(json: &Value) -> Option<crate::altium::pcblib::Text> {
+    pub(crate) fn parse_text(json: &Value) -> Result<crate::altium::pcblib::Text, String> {
         use crate::altium::pcblib::{Layer, StrokeFont, Text, TextJustification, TextKind};
 
-        let x = json.get("x").and_then(Value::as_f64)?;
-        let y = json.get("y").and_then(Value::as_f64)?;
-        let text = json.get("text").and_then(Value::as_str)?;
-        let height = json.get("height").and_then(Value::as_f64)?;
+        let number = |key: &str| {
+            json.get(key)
+                .and_then(Value::as_f64)
+                .ok_or_else(|| format!("Text is missing a numeric '{key}'"))
+        };
+        let x = number("x")?;
+        let y = number("y")?;
+        let text = json
+            .get("text")
+            .and_then(Value::as_str)
+            .ok_or("Text is missing its 'text' string")?;
+        let height = number("height")?;
         let layer = json
             .get("layer")
             .and_then(Value::as_str)
@@ -1544,13 +1866,15 @@ impl McpServer {
         // serde so the accepted tokens match exactly what `read_pcblib` emits; an
         // absent or unparseable value falls back to the from-scratch default (which
         // keeps a default text byte-identical to the template).
-        let kind = json
-            .get("kind")
-            .and_then(|v| serde_json::from_value::<TextKind>(v.clone()).ok())
-            .unwrap_or_default();
-        let stroke_font = json
-            .get("stroke_font")
-            .and_then(|v| serde_json::from_value::<StrokeFont>(v.clone()).ok());
+        let kind: TextKind =
+            enum_field(json, "kind", "Text kind", accepted::TEXT_KINDS, &[])?.unwrap_or_default();
+        let stroke_font: Option<StrokeFont> = enum_field(
+            json,
+            "stroke_font",
+            "Text stroke_font",
+            accepted::STROKE_FONTS,
+            &[],
+        )?;
         let italic = json.get("italic").and_then(Value::as_bool).unwrap_or(false);
         let bold = json.get("bold").and_then(Value::as_bool).unwrap_or(false);
         let mirror = json.get("mirror").and_then(Value::as_bool).unwrap_or(false);
@@ -1570,10 +1894,14 @@ impl McpServer {
             .map_or_else(|| "Arial".to_string(), ToString::to_string);
         // The from-scratch default is `BottomLeft` (encodes to the template's
         // 0x03 byte, keeping a default text byte-identical).
-        let justification = json
-            .get("justification")
-            .and_then(|v| serde_json::from_value::<TextJustification>(v.clone()).ok())
-            .unwrap_or(TextJustification::BottomLeft);
+        let justification: TextJustification = enum_field(
+            json,
+            "justification",
+            "Text justification",
+            accepted::TEXT_JUSTIFICATIONS,
+            accepted::TEXT_JUSTIFICATION_SYNONYMS,
+        )?
+        .unwrap_or(TextJustification::BottomLeft);
 
         // Inverted (knockout) text-box descriptor. Absent booleans default to
         // false and absent dimensions to `None`, keeping a default text
@@ -1593,7 +1921,7 @@ impl McpServer {
             .get("inverted_rect_text_offset")
             .and_then(Value::as_f64);
 
-        Some(Text {
+        Ok(Text {
             raw_layer_id: json_raw_layer_id(json),
             x,
             y,
@@ -1793,7 +2121,7 @@ impl McpServer {
     #[allow(clippy::too_many_lines)] // Via has many optional fields requiring individual parsing
     pub(crate) fn parse_via(json: &Value) -> Result<crate::altium::pcblib::Via, String> {
         use crate::altium::pcblib::{
-            DrillLayerPairType, Layer, MaskExpansionMode, PowerPlaneConnectStyle, Via, ViaStackMode,
+            DrillLayerPairType, Layer, MaskExpansionMode, PowerPlaneConnectStyle, Via,
         };
 
         let x = json
@@ -1853,26 +2181,23 @@ impl McpServer {
         {
             via.solder_mask_expansion_from_hole_edge = b;
         }
-        if let Some(s) = json.get("drill_layer_pair_type").and_then(Value::as_str) {
-            via.drill_layer_pair_type = match s.to_lowercase().as_str() {
-                "blind_buried_start" => DrillLayerPairType::BlindBuriedStart,
-                "mid" => DrillLayerPairType::Mid,
-                "end" => DrillLayerPairType::End,
-                _ => DrillLayerPairType::Through,
-            };
+        if let Some(kind) = enum_field::<DrillLayerPairType>(
+            json,
+            "drill_layer_pair_type",
+            "Via drill_layer_pair_type",
+            accepted::DRILL_LAYER_PAIR_TYPES,
+            &[],
+        )? {
+            via.drill_layer_pair_type = kind;
         }
-        if let Some(s) = json
-            .get("solder_mask_expansion_mode")
-            .and_then(Value::as_str)
-        {
-            via.solder_mask_expansion_mode = match s.to_lowercase().as_str() {
-                "manual" => MaskExpansionMode::Manual,
-                "from_rule" => MaskExpansionMode::FromRule,
-                // Anything else, "none" included, maps to the state a fresh
-                // Altium pad carries, so an unrecognised value produces the
-                // same bytes as saying nothing at all.
-                _ => MaskExpansionMode::None,
-            };
+        if let Some(mode) = enum_field::<MaskExpansionMode>(
+            json,
+            "solder_mask_expansion_mode",
+            "Via solder_mask_expansion_mode",
+            accepted::MASK_EXPANSION_MODES,
+            &[],
+        )? {
+            via.solder_mask_expansion_mode = mode;
         }
         if let Some(v) = json.get("thermal_relief_gap").and_then(Value::as_f64) {
             via.thermal_relief_gap = v;
@@ -1891,15 +2216,14 @@ impl McpServer {
         // Power-plane connection (SubRecord-1 @31/@42/@46) + paste-mask @50 +
         // net index @3. Absent keys keep the from-scratch defaults (= Altium's
         // via template), so an unspecified via round-trips byte-identically.
-        if let Some(s) = json
-            .get("power_plane_connect_style")
-            .and_then(Value::as_str)
-        {
-            via.power_plane_connect_style = match s.to_lowercase().as_str() {
-                "direct" => PowerPlaneConnectStyle::Direct,
-                "no_connect" | "noconnect" => PowerPlaneConnectStyle::NoConnect,
-                _ => PowerPlaneConnectStyle::Relief,
-            };
+        if let Some(style) = enum_field::<PowerPlaneConnectStyle>(
+            json,
+            "power_plane_connect_style",
+            "Via power_plane_connect_style",
+            accepted::POWER_PLANE_CONNECT_STYLES,
+            &[],
+        )? {
+            via.power_plane_connect_style = style;
         }
         if let Some(v) = json
             .get("power_plane_relief_expansion")
@@ -1941,16 +2265,14 @@ impl McpServer {
         {
             via.solder_mask_expansion_back = Some(v);
         }
-        via.diameter_stack_mode = match json
-            .get("diameter_stack_mode")
-            .and_then(Value::as_str)
-            .map(str::to_lowercase)
-            .as_deref()
-        {
-            Some("top_middle_bottom") => ViaStackMode::TopMiddleBottom,
-            Some("full_stack") => ViaStackMode::FullStack,
-            _ => ViaStackMode::Simple,
-        };
+        via.diameter_stack_mode = enum_field(
+            json,
+            "diameter_stack_mode",
+            "Via diameter_stack_mode",
+            accepted::STACK_MODES,
+            &[],
+        )?
+        .unwrap_or_default();
         if let Some(diameters) = json.get("per_layer_diameters").and_then(Value::as_array) {
             via.per_layer_diameters = Some(diameters.iter().filter_map(Value::as_f64).collect());
         }
@@ -2019,41 +2341,43 @@ impl McpServer {
     /// Parses a schematic pin from JSON.
     #[allow(clippy::cast_possible_truncation)]
     #[allow(clippy::too_many_lines)] // Pin parsing with symbol attributes requires many lines
-    pub(crate) fn parse_schlib_pin(json: &Value) -> Option<crate::altium::schlib::Pin> {
+    pub(crate) fn parse_schlib_pin(json: &Value) -> Result<crate::altium::schlib::Pin, String> {
         use crate::altium::schlib::{Pin, PinElectricalType, PinOrientation, PinSymbol};
 
-        let designator = json.get("designator").and_then(Value::as_str)?;
+        let designator = json
+            .get("designator")
+            .and_then(Value::as_str)
+            .ok_or("Pin is missing its 'designator' string")?;
         let name = json
             .get("name")
             .and_then(Value::as_str)
             .unwrap_or(designator);
-        let x = json_i32(json, "x")?;
-        let y = json_i32(json, "y")?;
+        let integer = |key: &str| {
+            json_i32(json, key)
+                .ok_or_else(|| format!("Pin '{designator}' is missing an integer '{key}'"))
+        };
+        let x = integer("x")?;
+        let y = integer("y")?;
         let length = json_i32(json, "length").unwrap_or(10);
+        let pin_field = |key: &str| format!("Pin '{designator}' {key}");
 
-        let orientation =
-            json.get("orientation")
-                .and_then(Value::as_str)
-                .map_or(PinOrientation::Right, |s| match s.to_lowercase().as_str() {
-                    "left" => PinOrientation::Left,
-                    "up" => PinOrientation::Up,
-                    "down" => PinOrientation::Down,
-                    _ => PinOrientation::Right,
-                });
+        let orientation: PinOrientation = enum_field(
+            json,
+            "orientation",
+            &pin_field("orientation"),
+            accepted::PIN_ORIENTATIONS,
+            &[],
+        )?
+        .unwrap_or(PinOrientation::Right);
 
-        let electrical_type = json.get("electrical_type").and_then(Value::as_str).map_or(
-            PinElectricalType::Passive,
-            |s| match s.to_lowercase().as_str() {
-                "input" => PinElectricalType::Input,
-                "output" => PinElectricalType::Output,
-                "bidirectional" | "io" | "input_output" => PinElectricalType::Bidirectional,
-                "power" => PinElectricalType::Power,
-                "open_collector" => PinElectricalType::OpenCollector,
-                "open_emitter" => PinElectricalType::OpenEmitter,
-                "hiz" | "hi_z" | "tristate" => PinElectricalType::HiZ,
-                _ => PinElectricalType::Passive,
-            },
-        );
+        let electrical_type: PinElectricalType = enum_field(
+            json,
+            "electrical_type",
+            &pin_field("electrical_type"),
+            accepted::PIN_ELECTRICAL_TYPES,
+            accepted::PIN_ELECTRICAL_TYPE_SYNONYMS,
+        )?
+        .unwrap_or(PinElectricalType::Passive);
 
         let hidden = json.get("hidden").and_then(Value::as_bool).unwrap_or(false);
         let show_name = json
@@ -2066,50 +2390,21 @@ impl McpServer {
             .unwrap_or(true);
         let owner_part_id = json_i32(json, "owner_part_id").unwrap_or(1);
 
-        // Helper to parse PinSymbol from string
-        let parse_pin_symbol = |s: &str| -> PinSymbol {
-            match s.to_lowercase().replace(['-', '_'], "").as_str() {
-                "dot" | "invert" | "inversion" => PinSymbol::Dot,
-                "clock" | "clk" => PinSymbol::Clock,
-                "activelowinput" | "lowinput" => PinSymbol::ActiveLowInput,
-                "activelowoutput" | "lowoutput" => PinSymbol::ActiveLowOutput,
-                "rightleftsignalflow" | "rightleft" => PinSymbol::RightLeftSignalFlow,
-                "leftrightsignalflow" | "leftright" => PinSymbol::LeftRightSignalFlow,
-                "bidirectionalsignalflow" | "bidirectional" => PinSymbol::BidirectionalSignalFlow,
-                "analogsignalin" | "analog" => PinSymbol::AnalogSignalIn,
-                "digitalsignalin" | "digital" => PinSymbol::DigitalSignalIn,
-                "notlogicconnection" | "notlogic" => PinSymbol::NotLogicConnection,
-                "postponedoutput" | "postponed" => PinSymbol::PostponedOutput,
-                "opencollector" => PinSymbol::OpenCollector,
-                "opencollectorpullup" => PinSymbol::OpenCollectorPullUp,
-                "openemitter" => PinSymbol::OpenEmitter,
-                "openemitterpullup" => PinSymbol::OpenEmitterPullUp,
-                "openoutput" => PinSymbol::OpenOutput,
-                "hiz" | "highimpedance" => PinSymbol::HiZ,
-                "highcurrent" => PinSymbol::HighCurrent,
-                "pulse" => PinSymbol::Pulse,
-                "schmitt" | "schmitttrigger" => PinSymbol::Schmitt,
-                "shiftleft" => PinSymbol::ShiftLeft,
-                _ => PinSymbol::None, // "none" and unknown values
-            }
+        // The four decorations, each by its serde name or a synonym.
+        let pin_symbol = |key: &str| -> Result<PinSymbol, String> {
+            Ok(enum_field(
+                json,
+                key,
+                &pin_field(key),
+                accepted::PIN_SYMBOLS,
+                accepted::PIN_SYMBOL_SYNONYMS,
+            )?
+            .unwrap_or(PinSymbol::None))
         };
-
-        let symbol_inner_edge = json
-            .get("symbol_inner_edge")
-            .and_then(Value::as_str)
-            .map_or(PinSymbol::None, parse_pin_symbol);
-        let symbol_outer_edge = json
-            .get("symbol_outer_edge")
-            .and_then(Value::as_str)
-            .map_or(PinSymbol::None, parse_pin_symbol);
-        let symbol_inside = json
-            .get("symbol_inside")
-            .and_then(Value::as_str)
-            .map_or(PinSymbol::None, parse_pin_symbol);
-        let symbol_outside = json
-            .get("symbol_outside")
-            .and_then(Value::as_str)
-            .map_or(PinSymbol::None, parse_pin_symbol);
+        let symbol_inner_edge = pin_symbol("symbol_inner_edge")?;
+        let symbol_outer_edge = pin_symbol("symbol_outer_edge")?;
+        let symbol_inside = pin_symbol("symbol_inside")?;
+        let symbol_outside = pin_symbol("symbol_outside")?;
 
         // Authoring fields read from JSON so an
         // AI can set them, matching the names `read_schlib` exposes (serialised
@@ -2168,7 +2463,7 @@ impl McpServer {
             .and_then(|v| u8::try_from(v).ok())
             .unwrap_or(1);
 
-        Some(Pin {
+        Ok(Pin {
             name: name.to_string(),
             designator: designator.to_string(),
             x,
@@ -2951,12 +3246,19 @@ impl McpServer {
 
     /// Parses a schematic label from JSON.
     #[allow(clippy::cast_possible_truncation)]
-    pub(crate) fn parse_schlib_label(json: &Value) -> Option<crate::altium::schlib::Label> {
+    pub(crate) fn parse_schlib_label(json: &Value) -> Result<crate::altium::schlib::Label, String> {
         use crate::altium::schlib::{Label, TextJustification};
 
-        let x = json_f64(json, "x")?;
-        let y = json_f64(json, "y")?;
-        let text = json.get("text").and_then(Value::as_str)?.to_string();
+        let number = |key: &str| {
+            json_f64(json, key).ok_or_else(|| format!("Label is missing a numeric '{key}'"))
+        };
+        let x = number("x")?;
+        let y = number("y")?;
+        let text = json
+            .get("text")
+            .and_then(Value::as_str)
+            .ok_or("Label is missing its 'text' string")?
+            .to_string();
 
         let font_id = json.get("font_id").and_then(Value::as_u64).unwrap_or(1) as u8;
         let color = json
@@ -2975,26 +3277,16 @@ impl McpServer {
             .unwrap_or(false);
         let owner_part_id = json_i32(json, "owner_part_id").unwrap_or(1);
 
-        let justification = json.get("justification").and_then(Value::as_str).map_or(
-            TextJustification::BottomLeft,
-            |s| {
-                match s.to_lowercase().replace(['-', '_'], "").as_str() {
-                    "bottomcenter" | "bottomcentre" => TextJustification::BottomCenter,
-                    "bottomright" => TextJustification::BottomRight,
-                    "middleleft" | "centerleft" | "centreleft" => TextJustification::MiddleLeft,
-                    "middlecenter" | "middlecentre" | "center" | "centre" => {
-                        TextJustification::MiddleCenter
-                    }
-                    "middleright" | "centerright" | "centreright" => TextJustification::MiddleRight,
-                    "topleft" => TextJustification::TopLeft,
-                    "topcenter" | "topcentre" => TextJustification::TopCenter,
-                    "topright" => TextJustification::TopRight,
-                    _ => TextJustification::BottomLeft, // "bottomleft" and unknown values
-                }
-            },
-        );
+        let justification: TextJustification = enum_field(
+            json,
+            "justification",
+            "Label justification",
+            accepted::TEXT_JUSTIFICATIONS,
+            accepted::TEXT_JUSTIFICATION_SYNONYMS,
+        )?
+        .unwrap_or(TextJustification::BottomLeft);
 
-        Some(Label {
+        Ok(Label {
             x,
             y,
             text,
@@ -4011,23 +4303,28 @@ mod tests {
         }
 
         #[test]
-        fn parse_pad_reads_hole_shape_and_falls_back_to_round() {
+        fn parse_pad_reads_hole_shape_and_refuses_an_unknown_one() {
             use crate::altium::pcblib::HoleShape;
 
-            let with_shape = |s: &str| {
+            let parsed = |s: &str| {
                 let mut json = pad_json();
                 json["hole_size"] = json!(0.8);
                 json["hole_shape"] = json!(s);
-                McpServer::parse_pad(&json)
-                    .expect("pad should parse")
-                    .hole_shape
+                McpServer::parse_pad(&json).map(|pad| pad.hole_shape)
             };
-            assert_eq!(with_shape("square"), HoleShape::Square);
-            assert_eq!(with_shape("slot"), HoleShape::Slot);
-            assert_eq!(with_shape("round"), HoleShape::Round);
-            // An unrecognised name is not an error — a round hole is the safe
-            // reading, and the pad still writes.
-            assert_eq!(with_shape("hexagon"), HoleShape::Round);
+            let shape = |s: &str| parsed(s).expect("pad should parse");
+            assert_eq!(shape("square"), HoleShape::Square);
+            assert_eq!(shape("slot"), HoleShape::Slot);
+            assert_eq!(shape("round"), HoleShape::Round);
+            // Case and separators do not matter, and `circle` is a synonym.
+            assert_eq!(shape("SQUARE"), HoleShape::Square);
+            assert_eq!(shape("circle"), HoleShape::Round);
+            // An unrecognised name is refused, naming the field and the
+            // accepted values — a drilled hole silently turned round is a
+            // manufacturing change, not a reading.
+            let err = parsed("hexagon").unwrap_err();
+            assert!(err.contains("Pad '1' hole_shape 'hexagon'"), "{err}");
+            assert!(err.contains("round, square, slot"), "{err}");
         }
 
         #[test]
@@ -4184,49 +4481,61 @@ mod tests {
         }
 
         #[test]
-        fn parse_via_maps_unrecognised_enum_names_to_the_altium_default() {
-            use crate::altium::pcblib::{
-                DrillLayerPairType, MaskExpansionMode, PowerPlaneConnectStyle,
+        fn parse_via_refuses_an_unrecognised_enum_name() {
+            // A typo in any of the via's enum fields is refused by name; the
+            // via would otherwise be written with the plain default and the
+            // caller told nothing.
+            let with = |key: &str, value: &str| {
+                let mut json = json!({
+                    "x": 0.0, "y": 0.0, "diameter": 0.6, "hole_size": 0.3,
+                });
+                json[key] = json!(value);
+                McpServer::parse_via(&json).unwrap_err()
             };
-
-            // An unrecognised name produces the state a fresh Altium via
-            // carries, so a typo writes the same bytes as saying nothing.
-            let via = McpServer::parse_via(&json!({
-                "x": 0.0, "y": 0.0, "diameter": 0.6, "hole_size": 0.3,
-                "solder_mask_expansion_mode": "whatever",
-                "drill_layer_pair_type": "whatever",
-                "power_plane_connect_style": "whatever",
-            }))
-            .expect("via should parse");
-
-            assert_eq!(via.solder_mask_expansion_mode, MaskExpansionMode::None);
-            assert_eq!(via.drill_layer_pair_type, DrillLayerPairType::Through);
-            assert_eq!(
-                via.power_plane_connect_style,
-                PowerPlaneConnectStyle::Relief
-            );
+            for (key, accepted) in [
+                ("solder_mask_expansion_mode", "none, manual, from_rule"),
+                (
+                    "drill_layer_pair_type",
+                    "through, blind_buried_start, mid, end",
+                ),
+                ("power_plane_connect_style", "relief, direct, no_connect"),
+                (
+                    "diameter_stack_mode",
+                    "simple, top_middle_bottom, full_stack",
+                ),
+            ] {
+                let err = with(key, "whatever");
+                assert!(err.contains(&format!("Via {key} 'whatever'")), "{err}");
+                assert!(err.contains(accepted), "{err}");
+            }
         }
 
         // ---- parse_region -----------------------------------------------------
 
         #[test]
-        fn parse_region_needs_three_vertices() {
+        fn parse_region_needs_three_whole_vertices() {
             let vertex = |x: f64, y: f64| json!({ "x": x, "y": y });
-            assert!(McpServer::parse_region(&json!({
+            let err = McpServer::parse_region(&json!({
                 "layer": "Top Layer",
                 "vertices": [vertex(0.0, 0.0), vertex(1.0, 0.0)],
             }))
-            .is_none());
+            .unwrap_err();
+            assert!(err.contains("at least 3 vertices, got 2"), "{err}");
 
-            // Entries missing a coordinate are dropped, which can take an
-            // apparently-large outline below the minimum.
-            assert!(McpServer::parse_region(&json!({
+            // A vertex missing a coordinate is refused by name — dropping it
+            // would quietly reshape the outline.
+            let err = McpServer::parse_region(&json!({
                 "layer": "Top Layer",
                 "vertices": [vertex(0.0, 0.0), vertex(1.0, 0.0), { "x": 1.0 }],
             }))
-            .is_none());
+            .unwrap_err();
+            assert!(
+                err.contains("outline vertex 2 is missing a numeric 'y'"),
+                "{err}"
+            );
 
-            assert!(McpServer::parse_region(&json!({ "layer": "Top Layer" })).is_none());
+            let err = McpServer::parse_region(&json!({ "layer": "Top Layer" })).unwrap_err();
+            assert!(err.contains("missing its vertices array"), "{err}");
         }
 
         #[test]
@@ -4250,11 +4559,23 @@ mod tests {
             assert_eq!(with_kind(json!("copper")), RegionKind::Copper);
             assert_eq!(with_kind(json!("named_region")), RegionKind::NamedRegion);
             assert_eq!(with_kind(json!("cavity")), RegionKind::Cavity);
-            // A numeric KIND, as a string and as a number, and an unreadable
-            // value falling back to copper.
+            // A numeric KIND, as a string and as a number.
             assert_eq!(with_kind(json!("4")), RegionKind::Cavity);
             assert_eq!(with_kind(json!(4)), RegionKind::Cavity);
-            assert_eq!(with_kind(json!("nonsense")), RegionKind::Copper);
+            // An unrecognised name is refused rather than read as copper.
+            let mut json = json!({
+                "layer": "Top Layer",
+                "vertices": [
+                    { "x": 0.0, "y": 0.0 }, { "x": 1.0, "y": 0.0 }, { "x": 0.0, "y": 1.0 },
+                ],
+            });
+            json["kind"] = json!("nonsense");
+            let err = McpServer::parse_region(&json).unwrap_err();
+            assert!(err.contains("Region kind 'nonsense'"), "{err}");
+            assert!(
+                err.contains("copper, cutout, named_region, cavity"),
+                "{err}"
+            );
         }
 
         #[test]
@@ -4326,10 +4647,8 @@ mod tests {
 
         #[test]
         fn label_justification_accepts_the_spelling_variants() {
-            // A schematic label takes its anchor as a free-text name, so both
-            // spellings of centre and either separator have to land on the same
-            // anchor. (PcbLib text is separate — it deserialises through serde
-            // and accepts only the canonical serde spelling.)
+            // Both spellings of centre and either separator land on the same
+            // anchor, for a schematic label and a PcbLib text alike.
             use crate::altium::schlib::TextJustification;
 
             let justified = |s: &str| {
@@ -4350,8 +4669,75 @@ mod tests {
             assert_eq!(justified("centre-right"), TextJustification::MiddleRight);
             assert_eq!(justified("topleft"), TextJustification::TopLeft);
             assert_eq!(justified("top-centre"), TextJustification::TopCenter);
-            // Unrecognised falls back to Altium's own default corner.
-            assert_eq!(justified("sideways"), TextJustification::BottomLeft);
+            // An unrecognised anchor is refused, not quietly moved to a
+            // corner the caller did not ask for.
+            let err = McpServer::parse_schlib_label(&json!({
+                "x": 0.0, "y": 0.0, "text": "REF", "justification": "sideways",
+            }))
+            .unwrap_err();
+            assert!(err.contains("Label justification 'sideways'"), "{err}");
+            assert!(err.contains("bottom_left, bottom_center"), "{err}");
+        }
+
+        /// Every value the schemas advertise parses, and every synonym lands
+        /// on a name that does: a list entry that no longer matches its enum
+        /// would advertise a value the parser then refuses.
+        #[test]
+        fn every_advertised_enum_value_parses() {
+            use crate::altium::pcblib::{
+                DrillLayerPairType, HoleShape, MaskExpansionMode, PadStackMode,
+                PowerPlaneConnectStyle, RegionKind, StrokeFont, TextKind,
+            };
+            use crate::altium::schlib::{
+                PinElectricalType, PinOrientation, PinSymbol, TextJustification,
+            };
+            use crate::mcp::tools::parsing::accepted::*;
+
+            /// Checks one list against the enum it names, then its synonyms.
+            fn check<T: serde::de::DeserializeOwned>(
+                names: &[&str],
+                synonyms: &[(&str, &str)],
+                what: &str,
+            ) {
+                assert!(!names.is_empty(), "{what}: no accepted values");
+                for name in names {
+                    super::super::parse_enum::<T>(name, what, names, synonyms)
+                        .unwrap_or_else(|e| panic!("{what} '{name}': {e}"));
+                }
+                for (synonym, name) in synonyms {
+                    assert!(
+                        names.contains(name),
+                        "{what}: synonym '{synonym}' points at '{name}', which is not accepted"
+                    );
+                    super::super::parse_enum::<T>(synonym, what, names, synonyms)
+                        .unwrap_or_else(|e| panic!("{what} synonym '{synonym}': {e}"));
+                }
+            }
+
+            check::<HoleShape>(HOLE_SHAPES, HOLE_SHAPE_SYNONYMS, "hole_shape");
+            check::<MaskExpansionMode>(MASK_EXPANSION_MODES, &[], "mask_expansion_mode");
+            check::<PowerPlaneConnectStyle>(
+                POWER_PLANE_CONNECT_STYLES,
+                &[],
+                "power_plane_connect_style",
+            );
+            check::<PadStackMode>(STACK_MODES, &[], "stack_mode");
+            check::<DrillLayerPairType>(DRILL_LAYER_PAIR_TYPES, &[], "drill_layer_pair_type");
+            check::<TextKind>(TEXT_KINDS, &[], "kind");
+            check::<StrokeFont>(STROKE_FONTS, &[], "stroke_font");
+            check::<RegionKind>(REGION_KINDS, &[], "region kind");
+            check::<TextJustification>(
+                TEXT_JUSTIFICATIONS,
+                TEXT_JUSTIFICATION_SYNONYMS,
+                "justification",
+            );
+            check::<PinOrientation>(PIN_ORIENTATIONS, &[], "orientation");
+            check::<PinElectricalType>(
+                PIN_ELECTRICAL_TYPES,
+                PIN_ELECTRICAL_TYPE_SYNONYMS,
+                "electrical_type",
+            );
+            check::<PinSymbol>(PIN_SYMBOLS, PIN_SYMBOL_SYNONYMS, "symbol");
         }
     }
 }

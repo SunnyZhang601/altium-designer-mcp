@@ -288,8 +288,7 @@ remaining headroom sits in `mcp/server.rs` and `mcp/tools/library_ops.rs`.
 | `docs/TOOLS.md` | Generated tool reference (source of truth: `src/mcp/tool_definitions.rs`) |
 | `docs/PCBLIB_FORMAT.md` | `.PcbLib` binary format reference |
 | `docs/SCHLIB_FORMAT.md` | `.SchLib` binary format reference |
-| `docs/FIXTURE_COVERAGE.md` | Golden-fixture coverage map for the Altium-authored samples |
-| `docs/COVERAGE_AUDIT.md` | Verified worklist of Altium features not yet fully supported |
+| `docs/FIXTURE_COVERAGE.md` | Golden-fixture coverage map, verified Altium negatives and the scripting-name checks |
 | Rustdoc comments | API documentation |
 
 ### Updating Documentation

@@ -2656,7 +2656,7 @@ end;
 
 { Polyline carrying every styling property it owns: a non-default LineStyle,
   both end shapes, the end-shape size, and Transparent. All five names resolve
-  in the DelphiScript identifier table (see docs/COVERAGE_AUDIT.md for how that
+  in the DelphiScript identifier table (see docs/FIXTURE_COVERAGE.md for how that
   is checked); whether AD24 persists each is what this fixture establishes. }
 procedure AddPolylineStyled(Comp : ISch_Component; X1 : Integer; Y1 : Integer;
                             X2 : Integer; Y2 : Integer; X3 : Integer; Y3 : Integer);
@@ -3229,7 +3229,7 @@ begin
       costs ONLY that symbol, the rest of the library still saves. An unresolved
       identifier is different — it is a COMPILE error and aborts the whole run,
       so check every property and enum name against the DelphiScript identifier
-      table first (docs/COVERAGE_AUDIT.md gives the one-liner).
+      table first (docs/FIXTURE_COVERAGE.md gives the one-liner).
       ====================================================================== }
 
     { ---- SHAPESTYLE — non-default LineStyle lines + a transparent rectangle + a

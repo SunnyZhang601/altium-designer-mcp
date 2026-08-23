@@ -564,7 +564,7 @@ Keys in golden order: `Orientation` and `Justification` sit between the coordina
 ### IEEE Symbol (RECORD=3)
 
 One of Altium's standard logic and signal glyphs placed at a point with a scale, a
-quarter-turn rotation and an optional mirror. Settled by the `IEEESYM` golden (batch 6):
+quarter-turn rotation and an optional mirror. Settled by the `IEEESYM` golden:
 the record carries exactly these keys, in this order, and **no `UniqueID`** — Altium never
 gives this record one, so none is written.
 

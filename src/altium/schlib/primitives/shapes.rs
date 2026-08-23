@@ -951,6 +951,92 @@ impl EllipticalArc {
     }
 }
 
+/// An IEEE symbol — `SchLib` `RECORD=3`.
+///
+/// One of Altium's standard logic and signal glyphs (a dot, a clock, an
+/// active-low input, …) placed at a point with a scale, a quarter-turn
+/// rotation and an optional mirror. Settled by the `IEEESYM` golden: the record carries `Symbol`,
+/// `Location.X/Y`, `ScaleFactor`, `Orientation`, `LineWidth`, `Mirror=T`,
+/// `Color` and the universal display flags — and no `UniqueID`, which is why
+/// this struct has none. Earlier versions of this crate read `RECORD=3` as a
+/// text annotation; Altium's text string is [`super::Label`] (`RECORD=4`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct IeeeSymbol {
+    /// Anchor X (`Location.X`).
+    #[serde(serialize_with = "crate::altium::serde_round::serialize")]
+    pub x: f64,
+    /// Anchor Y (`Location.Y`).
+    #[serde(serialize_with = "crate::altium::serde_round::serialize")]
+    pub y: f64,
+    /// The glyph, as Altium's `TIeeeSymbol` id: 1 Dot, 2 Right-Left Signal
+    /// Flow, 3 Clock, 4 Active Low Input, 5 Analog Signal In, 6 Not Logic
+    /// Connection, 7 Shift Right, 8 Postponed Output, 9 Open Collector, 10 Hi-Z,
+    /// 11 High Current, 12 Pulse, 13 Schmitt, 14 Delay, 15 Group Line, 16 Group
+    /// Binary, 17 Active Low Output, 18 Pi, 19 Greater Equal, 20 Less Equal,
+    /// 21 Sigma, 22 Open Collector Pull Up, 23 Open Emitter, 24 Open Emitter
+    /// Pull Up, 25 Digital Signal In, 26 And, 27 Invertor, 28 Or, 29 Xor,
+    /// 30 Shift Left, 31 Input Output, 32 Open Circuit Output, 33 Left-Right
+    /// Signal Flow, 34 Bidirectional Signal Flow (`docs/SCHLIB_FORMAT.md`).
+    pub symbol: u32,
+    /// Glyph size (`ScaleFactor`), in schematic units; Altium's default
+    /// placement is 10.
+    #[serde(
+        default = "default_scale_factor",
+        serialize_with = "crate::altium::serde_round::serialize"
+    )]
+    pub scale_factor: f64,
+    /// Rotation in degrees, a multiple of 90 (`Orientation` 0-3).
+    #[serde(default, serialize_with = "crate::altium::serde_round::serialize")]
+    pub rotation: f64,
+    /// Mirrored (`Mirror=T`).
+    #[serde(default)]
+    pub is_mirrored: bool,
+    /// Line width.
+    #[serde(default = "default_line_width")]
+    pub line_width: u8,
+    /// Line colour (BGR format).
+    #[serde(default)]
+    pub color: u32,
+    /// Owner part ID.
+    #[serde(default = "default_owner_part")]
+    pub owner_part_id: i32,
+    /// Universal display/lock flags; omitted from JSON when all default.
+    #[serde(default, flatten)]
+    pub display_flags: ShapeDisplayFlags,
+    /// The record exactly as read: every `key=value` segment in stored order
+    /// (an empty segment as `("", "")`), so the writer replays it verbatim
+    /// where the field behind a segment is unchanged and emits only the keys
+    /// Altium wrote. Empty for a record built from scratch, which emits the
+    /// canonical form.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub raw_params: Vec<(String, String)>,
+}
+
+const fn default_scale_factor() -> f64 {
+    10.0
+}
+
+impl IeeeSymbol {
+    /// Creates an IEEE symbol of glyph `symbol` at (`x`, `y`), at Altium's
+    /// default size, unrotated and unmirrored.
+    #[must_use]
+    pub fn new(symbol: u32, x: impl Into<f64>, y: impl Into<f64>) -> Self {
+        Self {
+            x: x.into(),
+            y: y.into(),
+            symbol,
+            scale_factor: default_scale_factor(),
+            rotation: 0.0,
+            is_mirrored: false,
+            line_width: 1,
+            color: 0,
+            owner_part_id: 1,
+            display_flags: ShapeDisplayFlags::default(),
+            raw_params: Vec::new(),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

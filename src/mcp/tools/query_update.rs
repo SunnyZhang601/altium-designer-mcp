@@ -424,7 +424,11 @@ impl McpServer {
                 ("arc_count", old.arcs.len(), new.arcs.len()),
                 ("ellipse_count", old.ellipses.len(), new.ellipses.len()),
                 ("label_count", old.labels.len(), new.labels.len()),
-                ("text_count", old.text.len(), new.text.len()),
+                (
+                    "ieee_symbol_count",
+                    old.ieee_symbols.len(),
+                    new.ieee_symbols.len(),
+                ),
                 (
                     "parameter_count",
                     old.parameters.len(),
@@ -1578,7 +1582,7 @@ mod tests {
                 "round_rects": [{ "x1": -10, "y1": -6, "x2": 10, "y2": 6, "corner_x_radius": 2, "corner_y_radius": 2 }],
                 "polygons": [{ "points": [ {"x": -5,"y": -5}, {"x": 5,"y": -5}, {"x": 0,"y": 5} ] }],
                 "labels": [{ "x": 0, "y": 12, "text": "R" }],
-                "text": [{ "x": 0, "y": -12, "text": "note" }],
+                "ieee_symbols": [{ "x": 0, "y": -12, "symbol": 3, "rotation": 90, "is_mirrored": true }],
                 "pies": [{ "x": 0, "y": 0, "radius": 5, "start_angle": 0.0, "end_angle": 90.0 }],
                 "images": [{ "x1": -8, "y1": -8, "x2": 8, "y2": 8, "file_name": "img.png" }],
                 "text_frames": [{ "x1": -12, "y1": -14, "x2": 12, "y2": -10, "text": "frame" }]

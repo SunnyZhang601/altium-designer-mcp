@@ -237,8 +237,8 @@ This follows the IPC-7351 convention where pin 1 has a distinct shape (typically
 | **Ellipse** | Ellipse or circle (filled or unfilled) |
 | **EllipticalArc** | Elliptical arc segment with fractional radii |
 | **Bezier** | Cubic Bezier curve (4 control points) |
-| **Label** | Text label (RECORD=4) |
-| **Text** | Text annotation (RECORD=3) |
+| **Label** | Text string (RECORD=4) — the only free text on a symbol |
+| **IeeeSymbol** | IEEE symbol glyph (RECORD=3): a dot, a clock, an active-low input, … |
 | **TextFrame** | Bordered multi-line text box (word-wrap, alignment) |
 | **Parameter** | Component parameter (Value, Part Number, etc.) |
 | **FootprintModel** | Reference to a footprint in a PcbLib |

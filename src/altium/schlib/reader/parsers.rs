@@ -920,46 +920,47 @@ pub(super) fn parse_label(props: &HashMap<String, String>) -> Option<Label> {
     })
 }
 
-/// Parses a text annotation from properties.
-#[allow(clippy::unnecessary_wraps)] // infallible (all coords default); Option kept for uniform parser dispatch
-pub(super) fn parse_text(props: &HashMap<String, String>) -> Option<Text> {
+/// Parses an IEEE symbol (RECORD=3) from properties.
+#[allow(clippy::unnecessary_wraps)] // infallible (all fields default); Option kept for uniform parser dispatch
+pub(super) fn parse_ieee_symbol(props: &HashMap<String, String>) -> Option<IeeeSymbol> {
     let x = crate::altium::schlib::coord::read(props, "location.x");
     let y = crate::altium::schlib::coord::read(props, "location.y");
-    let text = read_utf8_text_field(props, "text").unwrap_or_default();
-
-    let font_id = props
-        .get("fontid")
+    let symbol = props
+        .get("symbol")
         .and_then(|s| s.parse().ok())
-        .unwrap_or(1);
-    let color = props.get("color").and_then(|s| s.parse().ok()).unwrap_or(0);
+        .unwrap_or(0);
+    let scale_factor = if props.contains_key("scalefactor") {
+        crate::altium::schlib::coord::read(props, "scalefactor")
+    } else {
+        10.0
+    };
     let rotation = props
         .get("orientation")
         .and_then(|s| s.parse::<i32>().ok())
         .map_or(0.0, |o| f64::from(o) * 90.0);
-    let justification = props
-        .get("justification")
-        .and_then(|s| s.parse::<u8>().ok())
-        .map_or(TextJustification::BottomLeft, justification_from_id);
-    let is_mirrored = props.get("ismirrored").is_some_and(|s| s == "T");
-    let is_hidden = props.get("ishidden").is_some_and(|s| s == "T");
+    let is_mirrored = props.get("mirror").is_some_and(|s| s == "T");
+    let line_width = props
+        .get("linewidth")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(1);
+    let color = props.get("color").and_then(|s| s.parse().ok()).unwrap_or(0);
     let owner_part_id = props
         .get("ownerpartid")
         .and_then(|s| s.parse().ok())
         .unwrap_or(1);
 
-    Some(Text {
+    Some(IeeeSymbol {
         raw_params: Vec::new(),
         x,
         y,
-        text,
-        font_id,
-        color,
-        justification,
+        symbol,
+        scale_factor,
         rotation,
         is_mirrored,
-        is_hidden,
+        line_width,
+        color,
         owner_part_id,
-        unique_id: props.get("uniqueid").cloned(),
+        display_flags: read_display_flags(props),
     })
 }
 

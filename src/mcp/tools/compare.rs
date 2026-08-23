@@ -1356,7 +1356,7 @@ impl McpServer {
         compare_family!("round_rect_count", "round_rects", round_rects);
         compare_family!("elliptical_arc_count", "elliptical_arcs", elliptical_arcs);
         compare_family!("label_count", "labels", labels);
-        compare_family!("text_count", "text", text);
+        compare_family!("ieee_symbol_count", "ieee_symbols", ieee_symbols);
 
         // Compare footprint references
         if sym_a.footprints.len() != sym_b.footprints.len() {

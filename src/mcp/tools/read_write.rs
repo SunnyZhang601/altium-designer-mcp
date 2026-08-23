@@ -2597,7 +2597,7 @@ mod tests {
                 ),
                 ("ellipse", json!({ "name": "B", "ellipses": empty })),
                 ("label", json!({ "name": "B", "labels": empty })),
-                ("text", json!({ "name": "B", "text": empty })),
+                ("IEEE symbol", json!({ "name": "B", "ieee_symbols": empty })),
                 (
                     "parameter",
                     json!({ "name": "B", "parameters": [{ "value": "1k" }] }),

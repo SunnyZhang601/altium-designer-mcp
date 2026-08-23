@@ -83,7 +83,7 @@ impl McpServer {
                     "Read an Altium .SchLib file and return its contents including symbols \
                      with their primitives (pins, rectangles, round_rects, lines, polylines, \
                      polygons, arcs, pies, images, text_frames, beziers, ellipses, \
-                     elliptical_arcs, labels, text), parameters and footprint links. \
+                     elliptical_arcs, labels, ieee_symbols), parameters and footprint links. \
                      Coordinates are in schematic units (10 units = 1 grid square, not mm). \
                      Fields such as unique_id, primitive_order, header_params, raw_params, \
                      all_pin_count and extra_streams are fidelity carriers: pass them back \
@@ -1021,7 +1021,7 @@ impl McpServer {
                                     },
                                     "labels": {
                                         "type": "array",
-                                        "description": "Text label definitions (RECORD=4). For RECORD=3 annotations use 'text'.",
+                                        "description": "Text string definitions (RECORD=4) — Altium's only free text on a symbol.",
                                         "items": {
                                             "type": "object",
                                             "properties": {
@@ -1044,25 +1044,27 @@ impl McpServer {
                                             "required": ["x", "y", "text"]
                                         }
                                     },
-                                    "text": {
+                                    "ieee_symbols": {
                                         "type": "array",
-                                        "description": "Text/label annotations",
+                                        "description": "IEEE symbol glyphs (RECORD=3): a dot, a clock, an active-low input, ... placed at a point with a scale.",
                                         "items": {
                                             "type": "object",
                                             "properties": {
-                                                "x": { "type": "number", "description": "X position" },
-                                                "y": { "type": "number", "description": "Y position" },
-                                                "text": { "type": "string", "description": "Text content" },
-                                                "font_id": { "type": "integer", "description": "Font ID. Default: 1" },
-                                                "color": { "type": "integer", "description": "BGR colour. Default: 0x000080" },
-                                                "justification": { "type": "string", "enum": ["bottom_left", "bottom_center", "bottom_right", "middle_left", "middle_center", "middle_right", "top_left", "top_center", "top_right"], "description": "Alignment. Default: bottom_left" },
-                                                "rotation": { "type": "number", "description": "Rotation in degrees. Default: 0" },
+                                                "x": { "type": "number", "description": "Anchor X" },
+                                                "y": { "type": "number", "description": "Anchor Y" },
+                                                "symbol": { "type": "integer", "description": "Glyph, as Altium's TIeeeSymbol id: 1 Dot, 2 Right-Left Signal Flow, 3 Clock, 4 Active Low Input, 5 Analog Signal In, 6 Not Logic Connection, 7 Shift Right, 8 Postponed Output, 9 Open Collector, 10 Hi-Z, 11 High Current, 12 Pulse, 13 Schmitt, 14 Delay, 15 Group Line, 16 Group Binary, 17 Active Low Output, 18 Pi, 19 Greater Equal, 20 Less Equal, 21 Sigma, 22 Open Collector Pull Up, 23 Open Emitter, 24 Open Emitter Pull Up, 25 Digital Signal In, 26 And, 27 Invertor, 28 Or, 29 Xor, 30 Shift Left, 31 Input Output, 32 Open Circuit Output, 33 Left-Right Signal Flow, 34 Bidirectional Signal Flow" },
+                                                "scale_factor": { "type": "number", "description": "Glyph size in schematic units. Default: 10" },
+                                                "rotation": { "type": "number", "description": "Rotation in degrees (0/90/180/270). Default: 0" },
                                                 "is_mirrored": { "type": "boolean", "description": "Mirrored. Default: false" },
-                                                "is_hidden": { "type": "boolean", "description": "Hidden. Default: false" },
+                                                "line_width": { "type": "integer", "description": "Line width (0=smallest, 1=small, 2=medium, 3=large). Default: 1" },
+                                                "color": { "type": "integer", "description": "BGR colour. Default: 0" },
                                                 "owner_part_id": { "type": "integer", "description": "Part number (1-based). Default: 1" },
-                                                "unique_id": { "type": "string", "description": "8-char Altium unique ID; preserved on read-modify-write, auto-generated if omitted" }
+                                                "graphically_locked": { "type": "boolean", "description": "Whether the shape is graphically locked. Default: false" },
+                                                "disabled": { "type": "boolean", "description": "Whether the shape is disabled. Default: false" },
+                                                "dimmed": { "type": "boolean", "description": "Whether the shape is dimmed. Default: false" },
+                                                "owner_part_display_mode": { "type": "integer", "description": "Display mode this shape belongs to (0=Normal, 1=first alternate/de-Morgan, ...). Default: 0" }
                                             },
-                                            "required": ["x", "y", "text"]
+                                            "required": ["x", "y", "symbol"]
                                         }
                                     },
                                     "parameters": {

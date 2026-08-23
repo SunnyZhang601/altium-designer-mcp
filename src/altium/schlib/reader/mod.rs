@@ -21,9 +21,9 @@
 //! - `0x01`: Binary pin record
 
 use super::primitives::{
-    Arc, Bezier, Ellipse, EllipticalArc, FootprintModel, Image, Label, Line, Parameter, Pie, Pin,
-    PinElectricalType, PinOrientation, PinSymbol, Polygon, Polyline, Rectangle, RoundRect,
-    ShapeDisplayFlags, Text, TextFrame, TextJustification,
+    Arc, Bezier, Ellipse, EllipticalArc, FootprintModel, IeeeSymbol, Image, Label, Line, Parameter,
+    Pie, Pin, PinElectricalType, PinOrientation, PinSymbol, Polygon, Polyline, Rectangle,
+    RoundRect, ShapeDisplayFlags, TextFrame, TextJustification,
 };
 use super::Symbol;
 use crate::altium::bytes::{
@@ -294,10 +294,10 @@ fn parse_text_record_from_string(symbol: &mut Symbol, text: &str) {
             }
         }
         3 => {
-            // Text annotation
-            if let Some(mut annotation) = parse_text(&props) {
-                annotation.raw_params = record_segments(text);
-                symbol.add_text(annotation);
+            // IEEE symbol
+            if let Some(mut ieee_symbol) = parse_ieee_symbol(&props) {
+                ieee_symbol.raw_params = record_segments(text);
+                symbol.add_ieee_symbol(ieee_symbol);
             }
         }
         4 => {

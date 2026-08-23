@@ -57,9 +57,9 @@ fn samples_schlib_structure() {
     // Fifteen per-primitive-family symbols plus the coverage-enrichment symbols
     // (SHAPESTYLE, SHAPESTYLE2, SHAPECOLOR, LOCKFLAGS, JUSTIFY, FRACPINS,
     // BEZIERSYM, PIESYM, IMAGESYM, TEXTFRAMESYM, EMBIMGSYM, SWAPPIN, FRACSHAPES,
-    // DISPMODE, and batch 5's ELLARC, IMPLCHAIN, FRACSHAPES2) added to
-    // GenerateSamples.pas and regenerated on-site.
-    assert_eq!(lib.len(), 87, "expected exactly eighty-seven symbols");
+    // DISPMODE, batch 5's ELLARC, IMPLCHAIN, FRACSHAPES2 and batch 6's IEEESYM)
+    // added to GenerateSamples.pas and regenerated on-site.
+    assert_eq!(lib.len(), 88, "expected exactly eighty-eight symbols");
 
     let names = lib.names();
     for expected in [
@@ -95,6 +95,7 @@ fn samples_schlib_structure() {
         "ELLARC",
         "IMPLCHAIN",
         "FRACSHAPES2",
+        "IEEESYM",
         "LOCKFLAGS2",
     ] {
         assert!(
@@ -2212,5 +2213,62 @@ fn samples_schlib_fracshapes2() {
             SchPrimitiveKind::Parameter,
         ],
         "authoring order, the Comment parameter last"
+    );
+}
+
+/// `IEEESYM` (batch 6): the first golden `RECORD=3` records, which settled
+/// that the record is Altium's IEEE symbol — `Symbol`, `ScaleFactor`,
+/// `Orientation`, `Mirror=T`, `Color`, the display flags and no `UniqueID`
+/// — and not the text annotation earlier versions of this crate read it as.
+#[test]
+fn samples_schlib_ieeesym() {
+    let lib = SchLib::open(sample("symbols.SchLib")).expect("failed to open symbols.SchLib");
+    let sym = lib.get("IEEESYM").expect("IEEESYM symbol not found");
+    assert_eq!(sym.ieee_symbols.len(), 3, "three IEEE symbols");
+    assert!(sym.labels.is_empty(), "none of them is a text string");
+
+    let dot = &sym.ieee_symbols[0];
+    assert_eq!(dot.symbol, 1, "eDot");
+    assert!(approx_eq(dot.x, -10.0) && approx_eq(dot.y, 0.0));
+    assert!(
+        approx_eq(dot.scale_factor, 10.0),
+        "MilsToCoord(100) = 10 units"
+    );
+    assert!(approx_eq(dot.rotation, 0.0) && !dot.is_mirrored);
+    assert_eq!(dot.line_width, 1);
+    assert_eq!(dot.color, 0);
+
+    let clock = &sym.ieee_symbols[1];
+    assert_eq!(clock.symbol, 3, "eClock");
+    assert!(approx_eq(clock.rotation, 90.0), "Orientation=1");
+    assert!(clock.is_mirrored, "Mirror=T");
+
+    let active_low = &sym.ieee_symbols[2];
+    assert_eq!(active_low.symbol, 4, "eActiveLowInput");
+    assert!(approx_eq(active_low.x, 10.0));
+    assert!(approx_eq(active_low.scale_factor, 20.0));
+    assert_eq!(active_low.color, 16_711_680, "$FF0000 is blue in BGR");
+    assert!(active_low.display_flags.graphically_locked);
+
+    // Altium gives these records no UniqueID; the stored keys are exactly these.
+    let keys: Vec<&str> = active_low
+        .raw_params
+        .iter()
+        .map(|(k, _)| k.as_str())
+        .collect();
+    assert_eq!(
+        keys,
+        [
+            "RECORD",
+            "IsNotAccesible",
+            "IndexInSheet",
+            "OwnerPartId",
+            "GraphicallyLocked",
+            "Symbol",
+            "Location.X",
+            "ScaleFactor",
+            "LineWidth",
+            "Color",
+        ]
     );
 }

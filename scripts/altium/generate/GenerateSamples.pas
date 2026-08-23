@@ -361,25 +361,6 @@ begin
                                   PCBM_BoardRegisteration, Body.I_ObjectAddress);
 end;
 
-{ Probe (batch 5): a non-Latin literal assigned to the text directly, not
-  through a String-typed parameter. Everything else as AddText. }
-procedure AddTextUnicodeLiteral(Comp : IPCB_LibComponent; X : Integer; Y : Integer);
-var
-    Txt : IPCB_Text;
-begin
-    Txt := PCBServer.PCBObjectFactory(eTextObject, eNoDimension, eCreate_Default);
-    if Txt = nil then Exit;
-    Txt.XLocation := MilsToCoord(X);
-    Txt.YLocation := MilsToCoord(Y);
-    Txt.Layer     := eTopOverlay;
-    Txt.Size      := MilsToCoord(50);
-    Txt.Rotation  := 0;
-    Txt.Text      := '10 Ω';
-    Comp.AddPCBObject(Txt);
-    PCBServer.SendMessageToRobots(Comp.I_ObjectAddress, c_Broadcast,
-                                  PCBM_BoardRegisteration, Txt.I_ObjectAddress);
-end;
-
 { Body whose STEP model is REFERENCED, not embedded (batch 5): IPCB_Model.Embed
   (a documented Boolean member) cleared before the model is attached, so the
   golden pins the form a UI-authored library showed for a non-embedded model
@@ -1491,36 +1472,28 @@ begin
     except
     end;
 
-    // TEXT_ANSI_WIDE (batch 5): text whose WideStrings units leave the byte
-    // range, so a golden pins ENCODEDTEXT as UTF-16 code units of the text as
-    // ALTIUM holds it (AltiumSharp and the Latin-1 10µF of TEXT_WIN1252 were
-    // the only witnesses). Built from bytes with Chr(): the engine's strings
-    // are ANSI, and Altium widens them through the writing machine's code
-    // page — Windows-1250 here — so byte 148 becomes U+201D (8221) and byte
-    // 152, undefined in 1250, the identity control U+0098. A source LITERAL
-    // beyond Latin-1 in a TEXT reaches Altium as its UTF-8 bytes widened the
-    // same way ('10 Ω' came out as 49,48,32,206,169), unlike a component
-    // NAME, which the literal route authors correctly — see TEXT_UNI_LITERAL.
+    // TEXT_WIDE_ONLY (batch 5): a text whose WideStrings carries a code unit
+    // the Data stream cannot — the shape a UI-typed Ω has (Data byte '?',
+    // ENCODEDTEXT 937) — so a golden pins WideStrings as the authoritative
+    // form and ENCODEDTEXT as UTF-16 code units of the text as Altium holds
+    // it (AltiumSharp and the Latin-1 10µF of TEXT_WIN1252 were the only
+    // witnesses). Chr(N) yields the Unicode character N, not a byte: Chr(148)
+    // is U+0094, which every ANSI page narrows to '?' while WideStrings keeps
+    // 148. DOCUMENTED NEGATIVES (two runs, 2026-08-23): (1) a source LITERAL
+    // beyond Latin-1 in a TEXT reaches Altium as its UTF-8 bytes widened
+    // through the machine's page ('10 Ω' -> 49,48,32,206,169), assigned
+    // directly or through a String parameter alike, unlike a component NAME;
+    // (2) Chr(N) for N > 255 truncates modulo 256 (TEXT_LONG); (3) a control
+    // the writing page leaves undefined (Chr(152) on a Windows-1250 machine)
+    // narrows to its IDENTITY byte there but to '?' elsewhere — page-dependent,
+    // so it is not authored. Text beyond U+00FF needs a hand-authored fixture.
     try
         Comp := PCBServer.CreatePCBLibComp;
-        Comp.Name := 'TEXT_ANSI_WIDE';
+        Comp.Name := 'TEXT_WIDE_ONLY';
         Lib.RegisterComponent(Comp);
         PCBServer.PreProcess;
         AddText(Comp, 0,   0, '10 ' + Chr(206) + Chr(169), 50, 0, eTopOverlay);
-        AddText(Comp, 0, 100, Chr(148) + 'Q' + Chr(152) + Chr(187), 50, 0, eTopOverlay);
-        PCBServer.PostProcess;
-    except
-    end;
-
-    // TEXT_UNI_LITERAL (batch 5 probe): the same non-Latin literal assigned to
-    // IPCB_Text.Text INSIDE the helper, bypassing the String-typed parameter
-    // of AddText, to learn whether the parameter narrowed it or the engine did.
-    try
-        Comp := PCBServer.CreatePCBLibComp;
-        Comp.Name := 'TEXT_UNI_LITERAL';
-        Lib.RegisterComponent(Comp);
-        PCBServer.PreProcess;
-        AddTextUnicodeLiteral(Comp, 0, 0);
+        AddText(Comp, 0, 100, Chr(148) + 'Q' + Chr(187), 50, 0, eTopOverlay);
         PCBServer.PostProcess;
     except
     end;

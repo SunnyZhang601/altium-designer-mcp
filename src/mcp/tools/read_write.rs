@@ -1152,76 +1152,55 @@ impl McpServer {
         }
     }
 
-    /// Extracts style from a `PcbLib` file.
+    /// Extracts style from a `PcbLib` file: stroke widths of tracks and arcs
+    /// per layer, pad shapes, text heights, and the layer usage of every
+    /// primitive kind.
     pub(crate) fn extract_pcblib_style(filepath: &str) -> ToolCallResult {
+        use crate::altium::pcblib::PrimitiveKind;
         use crate::altium::PcbLib;
         use std::collections::HashMap;
 
         match PcbLib::open(filepath) {
             Ok(library) => {
-                // Track widths by layer
+                // Stroke widths by layer
                 let mut track_widths: HashMap<String, Vec<f64>> = HashMap::new();
+                let mut arc_widths: HashMap<String, Vec<f64>> = HashMap::new();
                 // Pad shapes count
                 let mut pad_shapes: HashMap<String, usize> = HashMap::new();
                 // Text heights
                 let mut text_heights: Vec<f64> = Vec::new();
-                // Layers used
+                // Layers used, by every kind that sits on one
                 let mut layers_used: HashMap<String, usize> = HashMap::new();
 
                 for fp in library.iter() {
-                    // Analyse tracks
                     for track in &fp.tracks {
-                        let layer_name = track.layer.as_str().to_string();
                         track_widths
-                            .entry(layer_name.clone())
+                            .entry(track.layer.as_str().to_string())
                             .or_default()
                             .push(track.width);
-                        *layers_used.entry(layer_name).or_insert(0) += 1;
                     }
-
-                    // Analyse pads
+                    for arc in &fp.arcs {
+                        arc_widths
+                            .entry(arc.layer.as_str().to_string())
+                            .or_default()
+                            .push(arc.width);
+                    }
                     for pad in &fp.pads {
                         let shape_name = format!("{:?}", pad.shape);
                         *pad_shapes.entry(shape_name).or_insert(0) += 1;
-                        let layer_name = pad.layer.as_str().to_string();
-                        *layers_used.entry(layer_name).or_insert(0) += 1;
                     }
-
-                    // Analyse text
                     for text in &fp.text {
                         text_heights.push(text.height);
-                        let layer_name = text.layer.as_str().to_string();
-                        *layers_used.entry(layer_name).or_insert(0) += 1;
                     }
-
-                    // Analyse regions
-                    for region in &fp.regions {
-                        let layer_name = region.layer.as_str().to_string();
-                        *layers_used.entry(layer_name).or_insert(0) += 1;
+                    for kind in PrimitiveKind::WRITE_ORDER {
+                        for layer in fp.layers_of(kind) {
+                            *layers_used.entry(layer.as_str().to_string()).or_insert(0) += 1;
+                        }
                     }
                 }
 
-                // Calculate statistics for track widths
-                #[allow(clippy::cast_precision_loss)]
-                let track_width_stats: HashMap<String, Value> = track_widths
-                    .into_iter()
-                    .map(|(layer, widths)| {
-                        let min = widths.iter().copied().fold(f64::INFINITY, f64::min);
-                        let max = widths.iter().copied().fold(f64::NEG_INFINITY, f64::max);
-                        let avg = widths.iter().sum::<f64>() / widths.len() as f64;
-                        let most_common = Self::most_common_f64(&widths);
-                        (
-                            layer,
-                            json!({
-                                "min_mm": min,
-                                "max_mm": max,
-                                "avg_mm": avg,
-                                "most_common_mm": most_common,
-                                "count": widths.len()
-                            }),
-                        )
-                    })
-                    .collect();
+                let track_width_stats = Self::width_stats_by_layer(track_widths);
+                let arc_width_stats = Self::width_stats_by_layer(arc_widths);
 
                 // Calculate text height stats
                 let text_height_stats = if text_heights.is_empty() {
@@ -1248,6 +1227,7 @@ impl McpServer {
                     "footprint_count": library.len(),
                     "style": {
                         "track_widths_by_layer": track_width_stats,
+                        "arc_widths_by_layer": arc_width_stats,
                         "pad_shapes": pad_shapes,
                         "text_heights": text_height_stats,
                         "layers_used": layers_used
@@ -1267,8 +1247,37 @@ impl McpServer {
         }
     }
 
-    /// Extracts style from a `SchLib` file.
+    /// Min / max / average / most common stroke width and the count, per
+    /// layer name.
+    #[allow(clippy::cast_precision_loss)]
+    fn width_stats_by_layer(
+        widths_by_layer: std::collections::HashMap<String, Vec<f64>>,
+    ) -> std::collections::HashMap<String, Value> {
+        widths_by_layer
+            .into_iter()
+            .map(|(layer, widths)| {
+                let min = widths.iter().copied().fold(f64::INFINITY, f64::min);
+                let max = widths.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+                let avg = widths.iter().sum::<f64>() / widths.len() as f64;
+                let most_common = Self::most_common_f64(&widths);
+                (
+                    layer,
+                    json!({
+                        "min_mm": min,
+                        "max_mm": max,
+                        "avg_mm": avg,
+                        "most_common_mm": most_common,
+                        "count": widths.len()
+                    }),
+                )
+            })
+            .collect()
+    }
+
+    /// Extracts style from a `SchLib` file: pin lengths, and the stroke
+    /// widths, stroke / fill / text colours of every record kind.
     pub(crate) fn extract_schlib_style(filepath: &str) -> ToolCallResult {
+        use crate::altium::schlib::SchPrimitiveKind;
         use crate::altium::SchLib;
         use std::collections::HashMap;
 
@@ -1281,35 +1290,38 @@ impl McpServer {
                 // Colours used
                 let mut line_colors: HashMap<String, usize> = HashMap::new();
                 let mut fill_colors: HashMap<String, usize> = HashMap::new();
+                let mut text_colors: HashMap<String, usize> = HashMap::new();
                 // Rectangle stats
                 let mut rect_filled_count = 0usize;
                 let mut rect_unfilled_count = 0usize;
 
+                let count_color = |colors: &mut HashMap<String, usize>, color: u32| {
+                    *colors.entry(format!("#{color:06X}")).or_insert(0) += 1;
+                };
                 for symbol in library.iter() {
-                    // Analyse pins
                     for pin in &symbol.pins {
                         pin_lengths.push(pin.length);
                     }
-
-                    // Analyse rectangles
                     for rect in &symbol.rectangles {
-                        line_widths.push(rect.line_width);
-                        let line_color = format!("#{:06X}", rect.line_color);
-                        let fill_color = format!("#{:06X}", rect.fill_color);
-                        *line_colors.entry(line_color).or_insert(0) += 1;
-                        *fill_colors.entry(fill_color).or_insert(0) += 1;
                         if rect.filled {
                             rect_filled_count += 1;
                         } else {
                             rect_unfilled_count += 1;
                         }
                     }
-
-                    // Analyse lines
-                    for line in &symbol.lines {
-                        line_widths.push(line.line_width);
-                        let color = format!("#{:06X}", line.color);
-                        *line_colors.entry(color).or_insert(0) += 1;
+                    for kind in SchPrimitiveKind::WRITE_ORDER {
+                        for style in symbol.styles_of(kind) {
+                            line_widths.extend(style.line_width);
+                            if let Some(color) = style.line_color {
+                                count_color(&mut line_colors, color);
+                            }
+                            if let Some(color) = style.fill_color {
+                                count_color(&mut fill_colors, color);
+                            }
+                            if let Some(color) = style.text_color {
+                                count_color(&mut text_colors, color);
+                            }
+                        }
                     }
                 }
 
@@ -1352,6 +1364,7 @@ impl McpServer {
                         "line_widths": line_width_stats,
                         "line_colors": line_colors,
                         "fill_colors": fill_colors,
+                        "text_colors": text_colors,
                         "rectangles": {
                             "filled_count": rect_filled_count,
                             "unfilled_count": rect_unfilled_count
@@ -2752,7 +2765,10 @@ mod tests {
     // ==================== extract_style ====================
 
     mod extract_style {
-        use crate::altium::pcblib::{Footprint, Layer, Pad, PcbLib, Track};
+        use crate::altium::pcblib::{
+            Arc, ComponentBody, Fill, Footprint, Layer, Pad, PcbLib, Track, Via,
+        };
+        use crate::altium::schlib::{Label, Pin, PinOrientation, Polygon, SchLib, Symbol};
         use crate::mcp::tools::test_support::{
             create_test_schlib, create_test_server, get_result_text, parse_result_json,
             test_temp_dir,
@@ -2831,6 +2847,83 @@ mod tests {
             assert_eq!(parsed["style"]["line_widths"]["count"], 1);
             assert_eq!(parsed["style"]["rectangles"]["filled_count"], 1);
             assert_eq!(parsed["style"]["rectangles"]["unfilled_count"], 0);
+        }
+
+        /// A layer used only by arcs, vias, fills or bodies is a used layer,
+        /// and silkscreen arcs report their stroke width like tracks do.
+        #[test]
+        fn extract_style_pcblib_counts_every_kind_in_layer_usage() {
+            let dir = test_temp_dir();
+            let server = create_test_server(dir.path());
+
+            let mut lib = PcbLib::new();
+            let mut fp = Footprint::new("ROUND_CAP");
+            fp.add_arc(Arc::circle(0.0, 0.0, 2.5, 0.15, Layer::TopOverlay));
+            fp.add_via(Via::new(0.0, 0.0, 0.6, 0.3));
+            fp.add_fill(Fill::new(-1.0, -1.0, 1.0, 1.0, Layer::TopPaste));
+            let mut body = ComponentBody::new("", "body.step");
+            body.layer = Layer::Mechanical13;
+            fp.add_component_body(body);
+            lib.add(fp);
+            let path = dir.path().join("Kinds.PcbLib");
+            lib.save(&path).unwrap();
+
+            let result = server.call_extract_style(&json!({
+                "filepath": path.to_string_lossy(),
+            }));
+            assert!(!result.is_error, "{}", get_result_text(&result));
+            let parsed = parse_result_json(&result);
+            let layers = &parsed["style"]["layers_used"];
+            assert_eq!(layers["Top Overlay"], 1, "{layers}");
+            assert_eq!(layers["Multi-Layer"], 1, "{layers}");
+            assert_eq!(layers["Top Paste"], 1, "{layers}");
+            assert_eq!(layers["Mechanical 13"], 1, "{layers}");
+            let arcs = &parsed["style"]["arc_widths_by_layer"]["Top Overlay"];
+            assert_eq!(arcs["count"], 1, "{arcs}");
+            assert!((arcs["most_common_mm"].as_f64().unwrap() - 0.15).abs() < 1e-9);
+            assert!(parsed["style"]["track_widths_by_layer"]
+                .as_object()
+                .unwrap()
+                .is_empty());
+        }
+
+        /// A symbol drawn with polygons (an op-amp triangle) has stroke widths
+        /// and colours; a pin's colour is a line colour, a label's a text one.
+        #[test]
+        fn extract_style_schlib_counts_every_kind_in_widths_and_colours() {
+            let dir = test_temp_dir();
+            let server = create_test_server(dir.path());
+
+            let mut lib = SchLib::new();
+            let mut sym = Symbol::new("OPAMP");
+            let mut triangle = Polygon::new(vec![(0.0, 0.0), (0.0, 40.0), (40.0, 20.0)]);
+            triangle.line_width = 2;
+            triangle.line_color = 0x00_00FF;
+            triangle.fill_color = 0xB0_FFFF;
+            sym.add_polygon(triangle);
+            let mut pin = Pin::new("1", "IN+", -10, 10, 10, PinOrientation::Right);
+            pin.colour = 0x80_0000;
+            sym.add_pin(pin);
+            let mut label = Label::new(0, 50, "OP");
+            label.color = 0x00_8000;
+            sym.add_label(label);
+            lib.add(sym);
+            let path = dir.path().join("Kinds.SchLib");
+            lib.save(&path).unwrap();
+
+            let result = server.call_extract_style(&json!({
+                "filepath": path.to_string_lossy(),
+            }));
+            assert!(!result.is_error, "{}", get_result_text(&result));
+            let parsed = parse_result_json(&result);
+            let style = &parsed["style"];
+            assert_eq!(style["line_widths"]["count"], 1, "{style}");
+            assert_eq!(style["line_widths"]["most_common"], 2, "{style}");
+            assert_eq!(style["line_colors"]["#0000FF"], 1, "{style}");
+            assert_eq!(style["line_colors"]["#800000"], 1, "{style}");
+            assert_eq!(style["fill_colors"]["#B0FFFF"], 1, "{style}");
+            assert_eq!(style["text_colors"]["#008000"], 1, "{style}");
+            assert_eq!(style["rectangles"]["filled_count"], 0);
         }
 
         #[test]

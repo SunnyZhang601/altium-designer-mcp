@@ -162,10 +162,12 @@ impl McpServer {
                 serde_json::json!({"name": "extract_style", "arguments": {"filepath": "./MyLibrary.PcbLib"}}),
             ),
             description: Some(
-                "Extract style information from an existing Altium library file. Returns \
-                     statistics about track widths, colours, pin lengths, layer usage, and other \
-                     styling parameters. Use this to learn from existing libraries and create \
-                     consistent new components."
+                "Extract style information from an existing Altium library file. A PcbLib \
+                     reports track and arc widths per layer, pad shapes, text heights and the \
+                     layer usage of every primitive kind (a via counts as Multi-Layer); a \
+                     SchLib reports pin lengths, stroke widths and the stroke, fill and text \
+                     colours of every record kind. Use this to learn from existing libraries \
+                     and create consistent new components."
                     .to_string(),
             ),
             input_schema: json!({

@@ -1559,6 +1559,34 @@ begin
     Doc.DoSafeChangeFileNameAndSave(OUT_DIR + 'footprints.PcbLib', 'PCBLIB');
 end;
 
+{ IEEE symbol (RECORD=3, batch 6): factory eSymbol (TObjectId 34 — the constant
+  is not spelled "IEEE"); ISch_Symbol carries Symbol (TIeeeSymbol: eDot=1,
+  eRightLeftSignalFlow=2, eClock=3, eActiveLowInput=4, ...), ScaleFactor (a
+  TCoord), IsMirrored, Orientation and LineWidth over the graphical base. The
+  record this crate read as a "text annotation" — settled by authoring one. }
+procedure AddIeeeSymbol(Comp : ISch_Component; X : Integer; Y : Integer;
+                        AKind : TIeeeSymbol; AScale : Integer; AMirror : Boolean;
+                        ARotate : TRotationBy90; AColor : TColor; Locked : Boolean);
+var
+    Sym : ISch_Symbol;
+begin
+    Sym := SchServer.SchObjectFactory(eSymbol, eCreate_Default);
+    if Sym = nil then Exit;
+    Sym.Location    := Point(MilsToCoord(X), MilsToCoord(Y));
+    Sym.Symbol      := AKind;
+    Sym.ScaleFactor := MilsToCoord(AScale);
+    Sym.IsMirrored  := AMirror;
+    Sym.Orientation := ARotate;
+    Sym.LineWidth   := eSmall;
+    Sym.Color       := AColor;
+    Sym.GraphicallyLocked    := Locked;
+    Sym.OwnerPartId          := 1;
+    Sym.OwnerPartDisplayMode := Comp.DisplayMode;
+    Comp.AddSchObject(Sym);
+    SchServer.RobotManager.SendMessage(Comp.I_ObjectAddress, c_BroadCast,
+                                       SCHM_PrimitiveRegistration, Sym.I_ObjectAddress);
+end;
+
 { Elliptical arc (RECORD=11, batch 5): factory eEllipticalArc; ISch_EllipticalArc
   carries Radius + SecondaryRadius + StartAngle/EndAngle + LineWidth over the
   graphical base. Off-grid when Frac is set (the +5000 idiom of AddRectFrac),
@@ -3410,6 +3438,20 @@ begin
             AddImplementation(Comp, 'SOIC-8', 'Narrow body', 'Footprints.PcbLib', True, False);
             AddImplementation(Comp, 'SOIC-8-WIDE', '', '', False, False);
             AddImplementation(Comp, 'DIP-8', 'Through-hole', '', False, True);
+        end;
+    except
+    end;
+
+    // IEEESYM (batch 6): IEEE symbols (RECORD=3) — a plain dot, a mirrored and
+    // rotated clock, and a larger, coloured, locked active-low input — so the
+    // record kind has a golden and its keys are Altium's, not this crate's.
+    try
+        Comp := NewSymbol(Lib, 'IEEESYM', 'IEEE symbols', 1);
+        if Comp <> nil then
+        begin
+            AddIeeeSymbol(Comp, -100,  0, eDot,            100, False, eRotate0,   $000000, False);
+            AddIeeeSymbol(Comp,    0,  0, eClock,          100, True,  eRotate90,  $000000, False);
+            AddIeeeSymbol(Comp,  100,  0, eActiveLowInput, 200, False, eRotate0,   $FF0000, True);
         end;
     except
     end;

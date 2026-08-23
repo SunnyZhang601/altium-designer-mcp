@@ -760,6 +760,31 @@ impl Symbol {
         sequence
     }
 
+    /// How many body graphics the symbol draws: every shape kind — rectangle,
+    /// rounded rectangle, line, polyline, polygon, arc, elliptical arc, pie,
+    /// ellipse, bezier, image, text frame — but not pins, labels, IEEE
+    /// symbols or parameters, which decorate a body rather than form one.
+    #[must_use]
+    pub fn body_graphic_count(&self) -> usize {
+        [
+            SchPrimitiveKind::Rectangle,
+            SchPrimitiveKind::RoundRect,
+            SchPrimitiveKind::Line,
+            SchPrimitiveKind::Polyline,
+            SchPrimitiveKind::Polygon,
+            SchPrimitiveKind::Arc,
+            SchPrimitiveKind::EllipticalArc,
+            SchPrimitiveKind::Pie,
+            SchPrimitiveKind::Ellipse,
+            SchPrimitiveKind::Bezier,
+            SchPrimitiveKind::Image,
+            SchPrimitiveKind::TextFrame,
+        ]
+        .into_iter()
+        .map(|kind| self.count_of(kind))
+        .sum()
+    }
+
     /// How many content records of one kind the symbol holds.
     #[must_use]
     pub fn count_of(&self, kind: SchPrimitiveKind) -> usize {

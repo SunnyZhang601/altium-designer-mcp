@@ -649,14 +649,9 @@ impl McpServer {
                 }
             }
 
-            // Check for symbols with no body (no rectangles, lines, or other graphics)
-            let has_body = !symbol.rectangles.is_empty()
-                || !symbol.lines.is_empty()
-                || !symbol.polylines.is_empty()
-                || !symbol.arcs.is_empty()
-                || !symbol.ellipses.is_empty();
-
-            if !has_body && !symbol.pins.is_empty() {
+            // A symbol with pins but nothing drawn: every shape kind counts as
+            // a body, so a polygon- or bezier-drawn symbol is not flagged.
+            if symbol.body_graphic_count() == 0 && !symbol.pins.is_empty() {
                 issues.push(json!({
                     "severity": "warning",
                     "component": name,
@@ -1789,6 +1784,85 @@ mod tests {
             .any(|i| i["issue"] == "Duplicate pin designator: '1'"));
         // The symbol has pins but no body graphics → also a warning.
         assert!(issues.iter().any(|i| i["severity"] == "warning"));
+    }
+
+    /// A body is any drawn shape, not only a rectangle, line, polyline, arc
+    /// or ellipse: a symbol drawn with a polygon, a rounded rectangle, a
+    /// bezier, a pie, an elliptical arc, an image or a text frame has one,
+    /// and is not warned about.
+    #[test]
+    fn validate_library_counts_every_shape_kind_as_a_body() {
+        use crate::altium::schlib::{
+            Bezier, Ellipse, EllipticalArc, Image, Pie, Polygon, RoundRect, TextFrame,
+        };
+        type Draw = Box<dyn Fn(&mut Symbol)>;
+
+        let dir = test_temp_dir();
+        let server = create_test_server(dir.path());
+        let mut lib = SchLib::new();
+        let pin = || Pin::new("1", "A", -10, 0, 10, PinOrientation::Right);
+        let bodies: Vec<(&str, Draw)> = vec![
+            (
+                "POLY",
+                Box::new(|s| {
+                    s.add_polygon(Polygon::new(vec![(0.0, 0.0), (10.0, 0.0), (5.0, 10.0)]));
+                }),
+            ),
+            (
+                "RRECT",
+                Box::new(|s| s.add_round_rect(RoundRect::new(0, 0, 10, 10, 2, 2))),
+            ),
+            (
+                "BEZ",
+                Box::new(|s| s.add_bezier(Bezier::new(0, 0, 3, 5, 7, 5, 10, 0))),
+            ),
+            ("PIE", Box::new(|s| s.add_pie(Pie::new(0, 0, 5, 0.0, 90.0)))),
+            (
+                "EARC",
+                Box::new(|s| s.add_elliptical_arc(EllipticalArc::new(0, 0, 5, 3, 0.0, 180.0))),
+            ),
+            ("ELL", Box::new(|s| s.add_ellipse(Ellipse::new(0, 0, 5, 3)))),
+            (
+                "IMG",
+                Box::new(|s| s.add_image(Image::new(0, 0, 10, 10, "logo.bmp"))),
+            ),
+            (
+                "FRAME",
+                Box::new(|s| s.add_text_frame(TextFrame::new(0, 0, 10, 10, "note"))),
+            ),
+        ];
+        for (name, draw) in &bodies {
+            let mut sym = Symbol::new(*name);
+            sym.add_pin(pin());
+            draw(&mut sym);
+            lib.add(sym);
+        }
+        let mut bare = Symbol::new("BARE");
+        bare.add_pin(pin());
+        lib.add(bare);
+        let path = dir.path().join("Bodies.SchLib");
+        lib.save(&path).unwrap();
+
+        let result = server.call_validate_library(&json!({ "filepath": path.to_string_lossy() }));
+        assert!(!result.is_error, "{}", get_result_text(&result));
+        let parsed = parse_result_json(&result);
+        let warned: Vec<&str> = parsed["issues"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|i| {
+                i["issue"]
+                    .as_str()
+                    .unwrap_or("")
+                    .contains("no body graphics")
+            })
+            .map(|i| i["component"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            warned,
+            ["BARE"],
+            "only the symbol with nothing drawn: {parsed}"
+        );
     }
 
     #[test]

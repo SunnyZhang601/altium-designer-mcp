@@ -231,6 +231,23 @@ impl PrimitiveKind {
         Self::ComponentBody,
     ];
 
+    /// The kind's name as the JSON boundary spells it (`component_body`,
+    /// `pad`, …): the serde form, so a report key built from it matches the
+    /// list the kind fills.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Arc => "arc",
+            Self::Pad => "pad",
+            Self::Via => "via",
+            Self::Track => "track",
+            Self::Text => "text",
+            Self::Region => "region",
+            Self::Fill => "fill",
+            Self::ComponentBody => "component_body",
+        }
+    }
+
     /// Altium's numeric object id for this kind, as a `PrimitiveGuids`
     /// record stores it.
     #[must_use]

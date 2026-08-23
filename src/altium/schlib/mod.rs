@@ -513,6 +513,31 @@ pub enum SchPrimitiveKind {
 }
 
 impl SchPrimitiveKind {
+    /// The kind's name as the JSON boundary spells it (`round_rect`,
+    /// `ieee_symbol`, …): the serde form, so a report key built from it
+    /// matches the list the kind fills.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Rectangle => "rectangle",
+            Self::Pin => "pin",
+            Self::Line => "line",
+            Self::Polyline => "polyline",
+            Self::Polygon => "polygon",
+            Self::Arc => "arc",
+            Self::Pie => "pie",
+            Self::Image => "image",
+            Self::TextFrame => "text_frame",
+            Self::Bezier => "bezier",
+            Self::Ellipse => "ellipse",
+            Self::RoundRect => "round_rect",
+            Self::EllipticalArc => "elliptical_arc",
+            Self::Label => "label",
+            Self::IeeeSymbol => "ieee_symbol",
+            Self::Parameter => "parameter",
+        }
+    }
+
     /// The order a symbol with no recorded order of its own is written in.
     ///
     /// Rectangles lead so a solid-filled body sits behind the pins; emitting

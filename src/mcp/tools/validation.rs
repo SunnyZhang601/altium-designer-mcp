@@ -63,56 +63,105 @@ impl McpServer {
         Ok(())
     }
 
-    /// Validates all coordinates in a footprint before writing.
+    /// Validates every coordinate and size a footprint will write, kind by
+    /// kind from the enum, so a primitive kind cannot go unchecked: a value
+    /// past the safe range would otherwise saturate on save and land in the
+    /// file silently wrong.
     pub(crate) fn validate_footprint_coordinates(
         footprint: &crate::altium::pcblib::Footprint,
     ) -> Result<(), String> {
+        for kind in crate::altium::pcblib::PrimitiveKind::WRITE_ORDER {
+            Self::validate_footprint_kind(footprint, kind)?;
+        }
+        Ok(())
+    }
+
+    /// The range checks of one primitive kind.
+    fn validate_footprint_kind(
+        footprint: &crate::altium::pcblib::Footprint,
+        kind: crate::altium::pcblib::PrimitiveKind,
+    ) -> Result<(), String> {
+        use crate::altium::pcblib::PrimitiveKind;
+
         let name = &footprint.name;
-
-        for (i, pad) in footprint.pads.iter().enumerate() {
-            Self::validate_coordinate(pad.x, &format!("Footprint '{name}' pad {i} x"))?;
-            Self::validate_coordinate(pad.y, &format!("Footprint '{name}' pad {i} y"))?;
-            Self::validate_coordinate(pad.width, &format!("Footprint '{name}' pad {i} width"))?;
-            Self::validate_coordinate(pad.height, &format!("Footprint '{name}' pad {i} height"))?;
-            if let Some(hole) = pad.hole_size {
-                Self::validate_coordinate(hole, &format!("Footprint '{name}' pad {i} hole_size"))?;
+        let check = |value: f64, index: usize, field: &str| {
+            Self::validate_coordinate(
+                value,
+                &format!("Footprint '{name}' {} {index} {field}", kind.name()),
+            )
+        };
+        match kind {
+            PrimitiveKind::Pad => {
+                for (i, pad) in footprint.pads.iter().enumerate() {
+                    check(pad.x, i, "x")?;
+                    check(pad.y, i, "y")?;
+                    check(pad.width, i, "width")?;
+                    check(pad.height, i, "height")?;
+                    if let Some(hole) = pad.hole_size {
+                        check(hole, i, "hole_size")?;
+                    }
+                }
+            }
+            PrimitiveKind::Via => {
+                for (i, via) in footprint.vias.iter().enumerate() {
+                    check(via.x, i, "x")?;
+                    check(via.y, i, "y")?;
+                    check(via.diameter, i, "diameter")?;
+                    check(via.hole_size, i, "hole_size")?;
+                }
+            }
+            PrimitiveKind::Track => {
+                for (i, track) in footprint.tracks.iter().enumerate() {
+                    check(track.x1, i, "x1")?;
+                    check(track.y1, i, "y1")?;
+                    check(track.x2, i, "x2")?;
+                    check(track.y2, i, "y2")?;
+                    check(track.width, i, "width")?;
+                }
+            }
+            PrimitiveKind::Arc => {
+                for (i, arc) in footprint.arcs.iter().enumerate() {
+                    check(arc.x, i, "x")?;
+                    check(arc.y, i, "y")?;
+                    check(arc.radius, i, "radius")?;
+                    check(arc.width, i, "width")?;
+                }
+            }
+            PrimitiveKind::Region => {
+                for (i, region) in footprint.regions.iter().enumerate() {
+                    for (j, vertex) in region.vertices.iter().enumerate() {
+                        check(vertex.x, i, &format!("vertex {j} x"))?;
+                        check(vertex.y, i, &format!("vertex {j} y"))?;
+                    }
+                }
+            }
+            PrimitiveKind::Text => {
+                for (i, text) in footprint.text.iter().enumerate() {
+                    check(text.x, i, "x")?;
+                    check(text.y, i, "y")?;
+                    check(text.height, i, "height")?;
+                }
+            }
+            PrimitiveKind::Fill => {
+                for (i, fill) in footprint.fills.iter().enumerate() {
+                    check(fill.x1, i, "x1")?;
+                    check(fill.y1, i, "y1")?;
+                    check(fill.x2, i, "x2")?;
+                    check(fill.y2, i, "y2")?;
+                }
+            }
+            PrimitiveKind::ComponentBody => {
+                for (i, body) in footprint.component_bodies.iter().enumerate() {
+                    for (j, (x, y)) in body.outline.iter().enumerate() {
+                        check(*x, i, &format!("outline {j} x"))?;
+                        check(*y, i, &format!("outline {j} y"))?;
+                    }
+                    check(body.overall_height, i, "overall_height")?;
+                    check(body.standoff_height, i, "standoff_height")?;
+                    check(body.z_offset, i, "z_offset")?;
+                }
             }
         }
-
-        for (i, track) in footprint.tracks.iter().enumerate() {
-            Self::validate_coordinate(track.x1, &format!("Footprint '{name}' track {i} x1"))?;
-            Self::validate_coordinate(track.y1, &format!("Footprint '{name}' track {i} y1"))?;
-            Self::validate_coordinate(track.x2, &format!("Footprint '{name}' track {i} x2"))?;
-            Self::validate_coordinate(track.y2, &format!("Footprint '{name}' track {i} y2"))?;
-            Self::validate_coordinate(track.width, &format!("Footprint '{name}' track {i} width"))?;
-        }
-
-        for (i, arc) in footprint.arcs.iter().enumerate() {
-            Self::validate_coordinate(arc.x, &format!("Footprint '{name}' arc {i} x"))?;
-            Self::validate_coordinate(arc.y, &format!("Footprint '{name}' arc {i} y"))?;
-            Self::validate_coordinate(arc.radius, &format!("Footprint '{name}' arc {i} radius"))?;
-            Self::validate_coordinate(arc.width, &format!("Footprint '{name}' arc {i} width"))?;
-        }
-
-        for (i, region) in footprint.regions.iter().enumerate() {
-            for (j, vertex) in region.vertices.iter().enumerate() {
-                Self::validate_coordinate(
-                    vertex.x,
-                    &format!("Footprint '{name}' region {i} vertex {j} x"),
-                )?;
-                Self::validate_coordinate(
-                    vertex.y,
-                    &format!("Footprint '{name}' region {i} vertex {j} y"),
-                )?;
-            }
-        }
-
-        for (i, text) in footprint.text.iter().enumerate() {
-            Self::validate_coordinate(text.x, &format!("Footprint '{name}' text {i} x"))?;
-            Self::validate_coordinate(text.y, &format!("Footprint '{name}' text {i} y"))?;
-            Self::validate_coordinate(text.height, &format!("Footprint '{name}' text {i} height"))?;
-        }
-
         Ok(())
     }
 
@@ -468,6 +517,88 @@ mod tests {
             let r = server.call_write_schlib(&json!({
                 "filepath": path.to_string_lossy(),
                 "symbols": [symbol],
+            }));
+            let text = get_result_text(&r);
+            assert!(r.is_error, "{family} was not range-checked: {text}");
+            assert!(
+                text.contains(expected),
+                "{family}: expected the error to name {expected:?}, got: {text}"
+            );
+        }
+    }
+
+    /// Every footprint primitive kind has its coordinates and sizes
+    /// range-checked — a kind the validator skipped would saturate on save.
+    #[test]
+    fn every_footprint_primitive_kind_has_its_coordinates_range_checked() {
+        use crate::altium::pcblib::PrimitiveKind;
+        use crate::mcp::tools::test_support::{create_test_server, get_result_text, test_temp_dir};
+        use serde_json::json;
+
+        let dir = test_temp_dir();
+        let server = create_test_server(dir.path());
+        let path = dir.path().join("Far.PcbLib");
+
+        let cases: [(PrimitiveKind, &str, serde_json::Value, &str); PrimitiveKind::COUNT] = [
+            (
+                PrimitiveKind::Pad,
+                "pads",
+                json!([{ "designator": "1", "x": FAR, "y": 0, "width": 1, "height": 1 }]),
+                "pad 0 x",
+            ),
+            (
+                PrimitiveKind::Via,
+                "vias",
+                json!([{ "x": 0, "y": FAR, "diameter": 0.6, "hole_size": 0.3 }]),
+                "via 0 y",
+            ),
+            (
+                PrimitiveKind::Track,
+                "tracks",
+                json!([{ "x1": 0, "y1": 0, "x2": FAR, "y2": 0, "width": 0.2, "layer": "TopOverlay" }]),
+                "track 0 x2",
+            ),
+            (
+                PrimitiveKind::Arc,
+                "arcs",
+                json!([{ "x": 0, "y": 0, "radius": FAR, "start_angle": 0, "end_angle": 360, "width": 0.2, "layer": "TopOverlay" }]),
+                "arc 0 radius",
+            ),
+            (
+                PrimitiveKind::Text,
+                "text",
+                json!([{ "x": 0, "y": 0, "text": "T", "height": FAR, "layer": "TopOverlay" }]),
+                "text 0 height",
+            ),
+            (
+                PrimitiveKind::Region,
+                "regions",
+                json!([{ "vertices": [{ "x": 0, "y": 0 }, { "x": 1, "y": 0 }, { "x": FAR, "y": 1 }], "layer": "TopCourtyard" }]),
+                "region 0 vertex 2 x",
+            ),
+            (
+                PrimitiveKind::Fill,
+                "fills",
+                json!([{ "x1": 0, "y1": 0, "x2": 1, "y2": FAR, "layer": "TopOverlay" }]),
+                "fill 0 y2",
+            ),
+            (
+                PrimitiveKind::ComponentBody,
+                "component_bodies",
+                json!([{ "outline": [[0, 0], [1, 0], [1, FAR]], "overall_height": 1 }]),
+                "component_body 0 outline 2 y",
+            ),
+        ];
+        let covered: std::collections::BTreeSet<&str> =
+            cases.iter().map(|(kind, ..)| kind.name()).collect();
+        assert_eq!(covered.len(), PrimitiveKind::COUNT, "one case per kind");
+
+        for (_, family, payload, expected) in cases {
+            let mut footprint = json!({ "name": "FAR" });
+            footprint[family] = payload;
+            let r = server.call_write_pcblib(&json!({
+                "filepath": path.to_string_lossy(),
+                "footprints": [footprint],
             }));
             let text = get_result_text(&r);
             assert!(r.is_error, "{family} was not range-checked: {text}");

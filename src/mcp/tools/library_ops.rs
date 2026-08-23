@@ -1795,12 +1795,12 @@ mod tests {
         use crate::altium::schlib::{
             Bezier, Ellipse, EllipticalArc, Image, Pie, Polygon, RoundRect, TextFrame,
         };
+        type Draw = Box<dyn Fn(&mut Symbol)>;
 
         let dir = test_temp_dir();
         let server = create_test_server(dir.path());
         let mut lib = SchLib::new();
         let pin = || Pin::new("1", "A", -10, 0, 10, PinOrientation::Right);
-        type Draw = Box<dyn Fn(&mut Symbol)>;
         let bodies: Vec<(&str, Draw)> = vec![
             (
                 "POLY",

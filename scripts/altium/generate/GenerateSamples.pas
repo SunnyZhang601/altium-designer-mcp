@@ -1037,7 +1037,7 @@ begin
     // script, and a try/except around the assignment does not help.
     //
     // Thermal-relief and power-plane setters stay out permanently — see the Pad row
-    // in docs/FIXTURE_COVERAGE.md; they crash AD24's scripting DLL.
+    // in scripts/samples/COVERAGE.md; they crash AD24's scripting DLL.
     try
         Comp := PCBServer.CreatePCBLibComp;
         Comp.Name := 'PADMASK';
@@ -2656,7 +2656,7 @@ end;
 
 { Polyline carrying every styling property it owns: a non-default LineStyle,
   both end shapes, the end-shape size, and Transparent. All five names resolve
-  in the DelphiScript identifier table (see docs/FIXTURE_COVERAGE.md for how that
+  in the DelphiScript identifier table (see scripts/samples/COVERAGE.md for how that
   is checked); whether AD24 persists each is what this fixture establishes. }
 procedure AddPolylineStyled(Comp : ISch_Component; X1 : Integer; Y1 : Integer;
                             X2 : Integer; Y2 : Integer; X3 : Integer; Y3 : Integer);
@@ -3222,14 +3222,14 @@ begin
     end;
 
     { ======================================================================
-      COVERAGE ENRICHMENT (docs/FIXTURE_COVERAGE.md): exercise the non-default
+      COVERAGE ENRICHMENT (scripts/samples/COVERAGE.md): exercise the non-default
       property values that the plain symbols above never set, so the Rust
       READ tests verify them against a REAL Altium file rather than only via a
       self-round-trip. Each symbol is in its own try/except: a runtime failure
       costs ONLY that symbol, the rest of the library still saves. An unresolved
       identifier is different — it is a COMPILE error and aborts the whole run,
       so check every property and enum name against the DelphiScript identifier
-      table first (docs/FIXTURE_COVERAGE.md gives the one-liner).
+      table first (scripts/samples/COVERAGE.md gives the one-liner).
       ====================================================================== }
 
     { ---- SHAPESTYLE — non-default LineStyle lines + a transparent rectangle + a

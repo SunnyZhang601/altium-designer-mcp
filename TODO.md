@@ -5,7 +5,7 @@ record). The specialised worklists stay the single source of truth for their are
 
 | Area | Worklist |
 |------|----------|
-| Golden-fixture enrichment and verified negatives | `docs/FIXTURE_COVERAGE.md` |
+| Golden-fixture enrichment and verified negatives | `scripts/samples/COVERAGE.md` |
 
 ## A. On-site Altium tooling
 

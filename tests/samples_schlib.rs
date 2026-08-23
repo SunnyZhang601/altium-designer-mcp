@@ -699,7 +699,7 @@ fn samples_schlib_polygons() {
 }
 
 // ---------------------------------------------------------------------------
-// Coverage-enrichment tests (docs/FIXTURE_COVERAGE.md).
+// Coverage-enrichment tests (scripts/samples/COVERAGE.md).
 //
 // These assert the NON-default property values authored by the enrichment block
 // in GenerateSamples.pas, read from the real Altium-regenerated fixture. This is

@@ -25,6 +25,44 @@
 
 pub(crate) mod base64_opt;
 pub(crate) mod bytes;
+/// Declares a primitive-kind enum together with everything that must list
+/// every variant — the write order, the variant count and the JSON-boundary
+/// name — from ONE list, so adding a kind cannot leave a list short. The
+/// variants are declared in write order.
+macro_rules! primitive_kinds {
+    (
+        $(#[$enum_doc:meta])*
+        $enum_name:ident {
+            $( $(#[$doc:meta])* $variant:ident => $name:literal ),+ $(,)?
+        }
+    ) => {
+        $(#[$enum_doc])*
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+        #[serde(rename_all = "snake_case")]
+        pub enum $enum_name {
+            $( $(#[$doc])* $variant, )+
+        }
+
+        impl $enum_name {
+            /// How many kinds there are.
+            pub const COUNT: usize = [$(stringify!($variant)),+].len();
+
+            /// Every kind, in the order a component with no recorded order of
+            /// its own is written in.
+            pub const WRITE_ORDER: [Self; Self::COUNT] = [$(Self::$variant,)+];
+
+            /// The kind's name as the JSON boundary spells it (the serde form),
+            /// so a report key built from it matches the list the kind fills.
+            #[must_use]
+            pub const fn name(self) -> &'static str {
+                match self {
+                    $(Self::$variant => $name,)+
+                }
+            }
+        }
+    };
+}
+
 pub mod error;
 pub(crate) mod framing;
 pub mod libpkg;

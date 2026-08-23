@@ -803,7 +803,8 @@ and `.SchLib` files.
 
 ## `render_footprint`
 
-Render an ASCII art visualisation of a footprint from a PcbLib file. Shows pads, tracks, and other primitives in a simple text format for quick preview.
+Render an ASCII art visualisation of a footprint from a PcbLib file: every primitive kind — pads (with designators), vias, tracks, arcs, fills, regions, text marks and
+3D-body outlines — each with its own marker, plus a per-kind count line and a legend. A quick preview, not a rendering.
 
 **Example**
 
@@ -832,8 +833,9 @@ Render an ASCII art visualisation of a footprint from a PcbLib file. Shows pads,
 
 ## `render_symbol`
 
-Render an ASCII art visualisation of a schematic symbol from a SchLib file. Shows pins, rectangles, lines, and other primitives in a simple text format for quick preview.
-Coordinates are in schematic units (10 units = 1 grid).
+Render an ASCII art visualisation of a schematic symbol from a SchLib file: every record kind of the requested part — pins (with designators), rectangles, rounded
+rectangles, lines, polylines, polygons, arcs, pies, ellipses, elliptical arcs, beziers, images, text frames, labels and IEEE symbols — each with its own marker, plus a
+per-kind count line and a legend. Coordinates are in schematic units (10 units = 1 grid).
 
 **Example**
 

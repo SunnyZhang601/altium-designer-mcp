@@ -102,8 +102,9 @@ additional details like part_count and pin_count.
 
 ## `extract_style`
 
-Extract style information from an existing Altium library file. Returns statistics about track widths, colours, pin lengths, layer usage, and other styling parameters.
-Use this to learn from existing libraries and create consistent new components.
+Extract style information from an existing Altium library file. A PcbLib reports track and arc widths per layer, pad shapes, text heights and the layer usage of every
+primitive kind (a via counts as Multi-Layer); a SchLib reports pin lengths, stroke widths and the stroke, fill and text colours of every record kind. Use this to learn
+from existing libraries and create consistent new components.
 
 **Example**
 

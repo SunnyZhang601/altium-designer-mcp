@@ -644,6 +644,27 @@ impl Footprint {
         }
     }
 
+    /// The layer each primitive of `kind` sits on, one entry per primitive.
+    /// A via spans the stack rather than sitting on one layer and counts as
+    /// `MultiLayer`, as Altium lists it.
+    #[must_use]
+    pub fn layers_of(&self, kind: PrimitiveKind) -> Vec<Layer> {
+        match kind {
+            PrimitiveKind::Arc => self.arcs.iter().map(|arc| arc.layer).collect(),
+            PrimitiveKind::Pad => self.pads.iter().map(|pad| pad.layer).collect(),
+            PrimitiveKind::Via => vec![Layer::MultiLayer; self.vias.len()],
+            PrimitiveKind::Track => self.tracks.iter().map(|track| track.layer).collect(),
+            PrimitiveKind::Text => self.text.iter().map(|text| text.layer).collect(),
+            PrimitiveKind::Region => self.regions.iter().map(|region| region.layer).collect(),
+            PrimitiveKind::Fill => self.fills.iter().map(|fill| fill.layer).collect(),
+            PrimitiveKind::ComponentBody => self
+                .component_bodies
+                .iter()
+                .map(|body| body.layer)
+                .collect(),
+        }
+    }
+
     /// How many primitives the footprint holds in total.
     #[must_use]
     pub fn primitive_count(&self) -> usize {
@@ -1025,6 +1046,34 @@ impl PcbLib {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every kind reports one layer per primitive — an arm that returned
+    /// nothing for a kind would hide that kind's layers.
+    #[test]
+    fn layers_of_reports_one_layer_per_primitive_of_every_kind() {
+        let mut fp = Footprint::new("KINDS");
+        let layer = Layer::Mechanical13;
+        fp.add_pad(Pad::smd("1", 0.0, 0.0, 1.0, 1.0));
+        fp.add_via(Via::new(0.0, 0.0, 0.6, 0.3));
+        fp.add_track(Track::new(0.0, 0.0, 1.0, 0.0, 0.1, layer));
+        fp.add_arc(Arc::circle(0.0, 0.0, 1.0, 0.1, layer));
+        fp.add_text(Text::new(0.0, 0.0, "T", 1.0, layer));
+        fp.add_region(Region::rectangle(0.0, 0.0, 1.0, 1.0, layer));
+        fp.add_fill(Fill::new(0.0, 0.0, 1.0, 1.0, layer));
+        let mut body = ComponentBody::new("", "b.step");
+        body.layer = layer;
+        fp.add_component_body(body);
+        for kind in PrimitiveKind::WRITE_ORDER {
+            let layers = fp.layers_of(kind);
+            assert_eq!(layers.len(), fp.count_of(kind), "{kind:?}");
+            let expected = match kind {
+                PrimitiveKind::Via => Layer::MultiLayer,
+                PrimitiveKind::Pad => Layer::TopLayer,
+                _ => layer,
+            };
+            assert_eq!(layers, vec![expected], "{kind:?}");
+        }
+    }
 
     /// A footprint carrying an identity on every primitive kind, plus a via
     /// whose replayed block has identity bytes and one whose block is too

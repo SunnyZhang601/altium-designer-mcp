@@ -514,6 +514,56 @@ primitive_kinds! {
     }
 }
 
+/// What one symbol record draws with, as [`Symbol::styles_of`] reports it.
+///
+/// The stroke width and colour, the fill colour and the text colour, each
+/// `None` for a kind that has no such property. Colours are BGR.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct RecordStyle {
+    /// Stroke width of an outline (`LineWidth`).
+    pub line_width: Option<u8>,
+    /// Stroke colour of an outline, or a pin's colour.
+    pub line_color: Option<u32>,
+    /// Fill colour of a fillable shape (`AreaColor`), whether or not it is
+    /// currently filled.
+    pub fill_color: Option<u32>,
+    /// Colour of the text a label, text frame or parameter shows.
+    pub text_color: Option<u32>,
+}
+
+impl RecordStyle {
+    /// An outline: a stroke width and colour, nothing filled, no text.
+    #[must_use]
+    pub const fn stroke(line_width: u8, line_color: u32) -> Self {
+        Self {
+            line_width: Some(line_width),
+            line_color: Some(line_color),
+            fill_color: None,
+            text_color: None,
+        }
+    }
+
+    /// A fillable shape: an outline plus its fill colour.
+    #[must_use]
+    pub const fn shape(line_width: u8, line_color: u32, fill_color: u32) -> Self {
+        Self {
+            fill_color: Some(fill_color),
+            ..Self::stroke(line_width, line_color)
+        }
+    }
+
+    /// Text alone, as a label or parameter draws.
+    #[must_use]
+    pub const fn text(text_color: u32) -> Self {
+        Self {
+            line_width: None,
+            line_color: None,
+            fill_color: None,
+            text_color: Some(text_color),
+        }
+    }
+}
+
 const fn default_part_count() -> u32 {
     1
 }
@@ -762,6 +812,97 @@ impl Symbol {
         .sum()
     }
 
+    /// The stroke, fill and text colours every record of `kind` draws with,
+    /// one entry per record. A property the kind lacks is `None`: a pin has
+    /// a colour but no stroke width, a label only a text colour, an arc no
+    /// fill (Altium stores an `AreaColor` on arcs it never paints).
+    #[must_use]
+    pub fn styles_of(&self, kind: SchPrimitiveKind) -> Vec<RecordStyle> {
+        use RecordStyle as S;
+        match kind {
+            SchPrimitiveKind::Rectangle => self
+                .rectangles
+                .iter()
+                .map(|r| S::shape(r.line_width, r.line_color, r.fill_color))
+                .collect(),
+            SchPrimitiveKind::Pin => self
+                .pins
+                .iter()
+                .map(|pin| S {
+                    line_color: Some(pin.colour),
+                    ..S::default()
+                })
+                .collect(),
+            SchPrimitiveKind::Line => self
+                .lines
+                .iter()
+                .map(|line| S::stroke(line.line_width, line.color))
+                .collect(),
+            SchPrimitiveKind::Polyline => self
+                .polylines
+                .iter()
+                .map(|p| S::stroke(p.line_width, p.color))
+                .collect(),
+            SchPrimitiveKind::Polygon => self
+                .polygons
+                .iter()
+                .map(|p| S::shape(p.line_width, p.line_color, p.fill_color))
+                .collect(),
+            SchPrimitiveKind::Arc => self
+                .arcs
+                .iter()
+                .map(|arc| S::stroke(arc.line_width, arc.color))
+                .collect(),
+            SchPrimitiveKind::Pie => self
+                .pies
+                .iter()
+                .map(|pie| S::shape(pie.line_width, pie.line_color, pie.fill_color))
+                .collect(),
+            SchPrimitiveKind::Image => self
+                .images
+                .iter()
+                .map(|i| S::shape(i.line_width, i.line_color, i.fill_color))
+                .collect(),
+            SchPrimitiveKind::TextFrame => self
+                .text_frames
+                .iter()
+                .map(|f| S {
+                    text_color: Some(f.text_color),
+                    ..S::shape(f.line_width, f.color, f.area_color)
+                })
+                .collect(),
+            SchPrimitiveKind::Bezier => self
+                .beziers
+                .iter()
+                .map(|b| S::stroke(b.line_width, b.color))
+                .collect(),
+            SchPrimitiveKind::Ellipse => self
+                .ellipses
+                .iter()
+                .map(|e| S::shape(e.line_width, e.line_color, e.fill_color))
+                .collect(),
+            SchPrimitiveKind::RoundRect => self
+                .round_rects
+                .iter()
+                .map(|r| S::shape(r.line_width, r.line_color, r.fill_color))
+                .collect(),
+            SchPrimitiveKind::EllipticalArc => self
+                .elliptical_arcs
+                .iter()
+                .map(|arc| S::stroke(arc.line_width, arc.color))
+                .collect(),
+            SchPrimitiveKind::Label => self.labels.iter().map(|l| S::text(l.color)).collect(),
+            SchPrimitiveKind::IeeeSymbol => self
+                .ieee_symbols
+                .iter()
+                .map(|i| S::stroke(i.line_width, i.color))
+                .collect(),
+            SchPrimitiveKind::Parameter => {
+                self.parameters.iter().map(|p| S::text(p.color)).collect()
+            }
+        }
+    }
+
     /// How many content records of one kind the symbol holds.
     #[must_use]
     pub fn count_of(&self, kind: SchPrimitiveKind) -> usize {
@@ -789,6 +930,58 @@ impl Symbol {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every kind reports one style per record, and a record's colours land
+    /// in the right slot: strokes for outlines and pins, fills for fillable
+    /// shapes and frames, text colours for labels, frames and parameters.
+    #[test]
+    fn styles_of_reports_one_style_per_record_of_every_kind() {
+        use SchPrimitiveKind as K;
+
+        let mut sym = Symbol::new("KINDS");
+        sym.add_pin(Pin::new("1", "A", -10, 0, 10, PinOrientation::Right));
+        sym.add_rectangle(Rectangle::new(0, 0, 10, 10));
+        sym.add_line(Line::new(0, 0, 10, 10));
+        sym.add_polyline(Polyline::new(vec![(0.0, 0.0), (5.0, 5.0)]));
+        sym.add_polygon(Polygon::new(vec![(0.0, 0.0), (10.0, 0.0), (5.0, 10.0)]));
+        sym.add_arc(Arc::new(0, 0, 5, 0.0, 90.0));
+        sym.add_pie(Pie::new(0, 0, 5, 0.0, 90.0));
+        sym.add_image(Image::new(0, 0, 10, 10, "logo.bmp"));
+        sym.add_text_frame(TextFrame::new(0, 0, 10, 10, "note"));
+        sym.add_bezier(Bezier::new(0, 0, 3, 5, 7, 5, 10, 0));
+        sym.add_ellipse(Ellipse::new(0, 0, 5, 3));
+        sym.add_round_rect(RoundRect::new(0, 0, 10, 10, 2, 2));
+        sym.add_elliptical_arc(EllipticalArc::new(0, 0, 5, 3, 0.0, 180.0));
+        sym.add_label(Label::new(0, 0, "L"));
+        sym.add_ieee_symbol(IeeeSymbol::new(1, 0.0, 0.0));
+        sym.add_parameter(Parameter::new("Value", "1k"));
+
+        for kind in SchPrimitiveKind::WRITE_ORDER {
+            let styles = sym.styles_of(kind);
+            assert_eq!(styles.len(), sym.count_of(kind), "{kind:?}");
+            let style = styles[0];
+            let strokes = !matches!(kind, K::Pin | K::Label | K::Parameter);
+            assert_eq!(style.line_width.is_some(), strokes, "{kind:?} width");
+            assert_eq!(
+                style.line_color.is_some(),
+                strokes || kind == K::Pin,
+                "{kind:?} stroke colour"
+            );
+            let fills = matches!(
+                kind,
+                K::Rectangle
+                    | K::Polygon
+                    | K::Pie
+                    | K::Image
+                    | K::TextFrame
+                    | K::Ellipse
+                    | K::RoundRect
+            );
+            assert_eq!(style.fill_color.is_some(), fills, "{kind:?} fill");
+            let text = matches!(kind, K::Label | K::TextFrame | K::Parameter);
+            assert_eq!(style.text_color.is_some(), text, "{kind:?} text colour");
+        }
+    }
 
     /// A name that exactly fills the 31-unit storage cap is listed in
     /// `SectionKeys` although nothing was truncated — a UI-authored

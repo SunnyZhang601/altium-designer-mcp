@@ -2106,7 +2106,13 @@ impl McpServer {
                 description: Some(
                     "Update specific properties of a primitive (track, arc, text, fill, region or \
                      via) in a PcbLib footprint. Find the primitive by type and index (its position \
-                     in read_pcblib's list for that type), apply only the specified updates."
+                     in read_pcblib's list for that type), apply only the specified updates. \
+                     Moving a primitive to another layer drops the layer carriers it was read \
+                     with (a region's v7_layer, an unmapped raw_layer_id) so the new layer's own \
+                     token is written. On a stacked via (diameter_stack_mode other than simple) \
+                     a diameter change also reaches per_layer_diameters: layers that shared the \
+                     old diameter follow it, layers with their own value keep it, and the \
+                     response reports how many followed."
                         .to_string(),
                 ),
                 input_schema: json!({

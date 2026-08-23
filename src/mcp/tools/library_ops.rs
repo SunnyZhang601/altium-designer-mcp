@@ -1805,7 +1805,7 @@ mod tests {
             (
                 "POLY",
                 Box::new(|s| {
-                    s.add_polygon(Polygon::new(vec![(0.0, 0.0), (10.0, 0.0), (5.0, 10.0)]))
+                    s.add_polygon(Polygon::new(vec![(0.0, 0.0), (10.0, 0.0), (5.0, 10.0)]));
                 }),
             ),
             (

@@ -536,6 +536,11 @@ below; every coordinate accepts a `_Frac` companion.
 Two distinct record types sharing one field set. This crate reads/writes RECORD=3 as a
 general-purpose text annotation and RECORD=4 as a label.
 
+> **Caveat (unsettled):** Altium's own record table has RECORD=3 as the **IEEE symbol** (a
+> graphic with `Symbol`/`ScaleFactor`), and RECORD=4 as the text string. Treating RECORD=3
+> as text is this crate's reading, not verified against Altium: no golden carries one,
+> because AD24's scripting API cannot place an IEEE symbol. See `TODO.md` § A.
+
 | Property | Type | Description |
 |----------|------|-------------|
 | `Location.X` / `Location.Y` | coord | Anchor position |
@@ -803,7 +808,11 @@ A parameter-record variant selected by `Name=Designator`. As written by this cra
   The record is carried and replayed like every content record (`raw_params`, see
   [Component Header Record](#component-header-record1)): a UI-authored link also carries
   `IntegratedModel=T|DatabaseModel=T`, which this crate does not model, and omits `Description`
-  while it is empty, all of which come back as stored.
+  while it is empty, all of which come back as stored. A link **without a datafile** omits
+  the whole datafile group — `DatafileCount`, `ModelDatafile0`, `ModelDatafileEntity0`,
+  `ModelDatafileKind0` (the `IMPLCHAIN` golden's name-only links); this crate writes the group
+  for a from-scratch link, which is what lets Altium resolve the footprint, and keeps a read
+  link as it was unless a path is given.
 
 - **RECORD=46 (MapDefinerList)** and **RECORD=48 (ImplementationParameters)** — written as empty
   children of each RECORD=45 (`|RECORD=46|OwnerIndex={45's index}` / `|RECORD=48|OwnerIndex=...`).

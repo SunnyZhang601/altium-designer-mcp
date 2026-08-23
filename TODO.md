@@ -12,14 +12,14 @@ record). The specialised worklists stay the single source of truth for their are
 
 Found while fixing something else; each needs its own verification or a fixture first.
 
-- [ ] **`EllipticalArc` and `Text` (RECORD=11 / RECORD=3) carry no display flags**
-      (`graphically_locked`, `disabled`, `dimmed`, `owner_part_display_mode`) in the model,
-      while the other 13 graphics do — almost certainly a gap, but no golden record exists
-      to verify the keys AD24 emits. Blocked on the fixture (see `docs/FIXTURE_COVERAGE.md`).
-- [ ] **Mechanical 17-32 on pads, arcs, text, fills, regions and bodies** is stored the way
-      hand-authored *tracks* store it (byte 72 + V7 id `0x010200nn`, `MECHANICAL{nn}` token
-      for regions/bodies) — inferred from the one kind seen, not verified per kind. Blocked on
-      the fixture (`docs/FIXTURE_COVERAGE.md`, PcbLib backlog).
+- [ ] **`Text` (RECORD=3) is almost certainly the IEEE symbol record, not a text**
+      annotation: Altium's record table has 3 = IEEE Symbol (4 = the text string this
+      crate calls `Label`), and the format RE archive flagged the same. Our `Text` type
+      writes RECORD=3 with label keys, which Altium would read as a symbol with missing
+      keys. No fixture can settle it — AD24's scripting API cannot place an IEEE symbol
+      (`TIeeeSymbol` exists only as a pin decoration), so it needs a hand-authored
+      library. Until then: model RECORD=3 as an IEEE symbol carried verbatim, and route
+      text authoring to RECORD=4.
 
 ## B. On-site Altium tooling
 

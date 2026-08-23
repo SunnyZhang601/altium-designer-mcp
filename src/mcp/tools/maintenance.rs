@@ -940,6 +940,9 @@ impl McpServer {
                     if let Some(layer) = parse_layer(layer_str) {
                         changes.push(json!({"property": "layer", "old": format!("{:?}", track.layer), "new": layer_str}));
                         track.layer = layer;
+                        // A header byte carried from the read names the old
+                        // layer; the new one derives its own.
+                        track.raw_layer_id = None;
                     } else {
                         return ToolCallResult::error(format!("Invalid layer: {layer_str}"));
                     }
@@ -993,6 +996,9 @@ impl McpServer {
                     if let Some(layer) = parse_layer(layer_str) {
                         changes.push(json!({"property": "layer", "old": format!("{:?}", arc.layer), "new": layer_str}));
                         arc.layer = layer;
+                        // A header byte carried from the read names the old
+                        // layer; the new one derives its own.
+                        arc.raw_layer_id = None;
                     } else {
                         return ToolCallResult::error(format!("Invalid layer: {layer_str}"));
                     }
@@ -1036,6 +1042,9 @@ impl McpServer {
                     if let Some(layer) = parse_layer(layer_str) {
                         changes.push(json!({"property": "layer", "old": format!("{:?}", text.layer), "new": layer_str}));
                         text.layer = layer;
+                        // A header byte carried from the read names the old
+                        // layer; the new one derives its own.
+                        text.raw_layer_id = None;
                     } else {
                         return ToolCallResult::error(format!("Invalid layer: {layer_str}"));
                     }
@@ -1085,6 +1094,9 @@ impl McpServer {
                     if let Some(layer) = parse_layer(layer_str) {
                         changes.push(json!({"property": "layer", "old": format!("{:?}", fill.layer), "new": layer_str}));
                         fill.layer = layer;
+                        // A header byte carried from the read names the old
+                        // layer; the new one derives its own.
+                        fill.raw_layer_id = None;
                     } else {
                         return ToolCallResult::error(format!("Invalid layer: {layer_str}"));
                     }
@@ -1897,6 +1909,45 @@ mod tests {
         fp.add_track(Track::new(-1.0, -1.0, 1.0, -1.0, 0.2, Layer::TopOverlay));
         lib.add(fp);
         lib.save(path).expect("Failed to create primitives PcbLib");
+    }
+
+    /// A primitive read off an unmapped header byte sits on the Multi-Layer
+    /// catch-all with the byte carried; moving it to a layer the model can
+    /// name drops the byte, so the file gets that layer's own, not 100.
+    #[test]
+    fn update_primitive_moving_a_primitive_drops_its_carried_byte() {
+        let dir = test_temp_dir();
+        let server = create_test_server(dir.path());
+        let path = dir.path().join("Carried.PcbLib");
+        let mut lib = PcbLib::new();
+        let mut fp = Footprint::new("CARRY");
+        let mut track = Track::new(-1.0, 0.0, 1.0, 0.0, 0.2, Layer::MultiLayer);
+        track.raw_layer_id = Some(100);
+        fp.add_track(track);
+        lib.add(fp);
+        lib.save(&path).expect("save");
+        let read = PcbLib::open(&path).expect("reopen");
+        assert_eq!(
+            read.get("CARRY").unwrap().tracks[0].raw_layer_id,
+            Some(100),
+            "byte 100 was written and read back"
+        );
+
+        let result = server.call_update_primitive(&json!({
+            "filepath": path.to_string_lossy(),
+            "component_name": "CARRY",
+            "primitive_type": "track",
+            "index": 0,
+            "updates": { "layer": "Top Overlay" },
+        }));
+        assert!(!result.is_error, "{}", get_result_text(&result));
+        let moved = PcbLib::open(&path).expect("reopen");
+        let track = &moved.get("CARRY").unwrap().tracks[0];
+        assert_eq!(track.layer, Layer::TopOverlay);
+        assert_eq!(
+            track.raw_layer_id, None,
+            "the new layer's own byte is on file"
+        );
     }
 
     #[test]

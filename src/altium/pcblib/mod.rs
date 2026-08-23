@@ -163,6 +163,39 @@ pub struct Footprint {
     pub primitive_order: Vec<PrimitiveKind>,
 }
 
+/// How many primitives of each kind [`Footprint::move_layer`] moved.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct LayerMove {
+    /// Tracks moved.
+    pub tracks: usize,
+    /// Arcs moved.
+    pub arcs: usize,
+    /// Text moved.
+    pub text: usize,
+    /// Fills moved.
+    pub fills: usize,
+    /// Regions moved.
+    pub regions: usize,
+    /// Pads moved.
+    pub pads: usize,
+    /// Component bodies moved.
+    pub component_bodies: usize,
+}
+
+impl LayerMove {
+    /// Every primitive moved, all kinds together.
+    #[must_use]
+    pub const fn total(self) -> usize {
+        self.tracks
+            + self.arcs
+            + self.text
+            + self.fills
+            + self.regions
+            + self.pads
+            + self.component_bodies
+    }
+}
+
 /// One of a [`Footprint`]'s primitive lists, as named by `primitive_order`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -422,6 +455,68 @@ impl Footprint {
     pub fn add_component_body(&mut self, body: primitives::ComponentBody) {
         self.component_bodies.push(body);
         self.primitive_order.push(PrimitiveKind::ComponentBody);
+    }
+
+    /// Moves every primitive on `from` to `to` — tracks, arcs, text, fills,
+    /// regions, pads and component bodies, every kind that sits on a layer —
+    /// and returns how many of each moved. A carrier that named the old
+    /// layer (a header byte kept as `raw_layer_id`, a region's or body's
+    /// `V7_LAYER` token) is dropped so the writer derives it from the new
+    /// layer instead of replaying a stale one. Vias span layers and are not
+    /// on one; they are untouched.
+    pub fn move_layer(&mut self, from: Layer, to: Layer) -> LayerMove {
+        let mut moved = LayerMove::default();
+        for track in &mut self.tracks {
+            if track.layer == from {
+                track.layer = to;
+                track.raw_layer_id = None;
+                moved.tracks += 1;
+            }
+        }
+        for arc in &mut self.arcs {
+            if arc.layer == from {
+                arc.layer = to;
+                arc.raw_layer_id = None;
+                moved.arcs += 1;
+            }
+        }
+        for text in &mut self.text {
+            if text.layer == from {
+                text.layer = to;
+                text.raw_layer_id = None;
+                moved.text += 1;
+            }
+        }
+        for fill in &mut self.fills {
+            if fill.layer == from {
+                fill.layer = to;
+                fill.raw_layer_id = None;
+                moved.fills += 1;
+            }
+        }
+        for region in &mut self.regions {
+            if region.layer == from {
+                region.layer = to;
+                region.v7_layer = None;
+                moved.regions += 1;
+            }
+        }
+        for pad in &mut self.pads {
+            if pad.layer == from {
+                pad.layer = to;
+                pad.raw_layer_id = None;
+                moved.pads += 1;
+            }
+        }
+        for body in &mut self.component_bodies {
+            if body.layer == from {
+                body.layer = to;
+                body.raw_layer_id = None;
+                body.v7_layer = None;
+                moved.component_bodies += 1;
+            }
+        }
+        moved
     }
 
     /// Keeps the component bodies `keep` accepts and drops the rest together
@@ -1139,6 +1234,70 @@ mod tests {
         assert_eq!(kept.len(), 2);
         assert!(kept.iter().any(|cb| !cb.embedded));
         assert!(kept.iter().any(|cb| cb.model_id.is_empty()));
+    }
+
+    #[test]
+    fn moving_a_layer_takes_every_kind_and_drops_the_stale_carriers() {
+        // One of each layered kind on Mechanical 13, one track elsewhere, and
+        // the carriers a read primitive may hold: an unmapped header byte and
+        // a region's / body's V7_LAYER token, which named the old layer.
+        let mut fp = Footprint::new("MOVE");
+        let (from, to) = (Layer::Mechanical13, Layer::Mechanical20);
+        fp.add_track(Track::new(0.0, 0.0, 1.0, 0.0, 0.1, from));
+        fp.add_track(Track::new(0.0, 1.0, 1.0, 1.0, 0.1, Layer::TopOverlay));
+        fp.add_arc(Arc::circle(0.0, 0.0, 1.0, 0.1, from));
+        let mut text = Text::new(0.0, 0.0, "T", 1.0, from);
+        text.raw_layer_id = Some(100);
+        fp.add_text(text);
+        fp.add_fill(Fill::new(0.0, 0.0, 1.0, 1.0, from));
+        let mut region = Region::rectangle(0.0, 0.0, 1.0, 1.0, from);
+        region.v7_layer = Some("MECHANICAL13".to_string());
+        fp.add_region(region);
+        let mut pad = Pad::smd("1", 0.0, 0.0, 1.0, 1.0);
+        pad.layer = from;
+        fp.add_pad(pad);
+        let mut body = ComponentBody::new("", "body.step");
+        body.layer = from;
+        body.v7_layer = Some("MECHANICAL13".to_string());
+        fp.add_component_body(body);
+
+        let moved = fp.move_layer(from, to);
+        assert_eq!(
+            moved,
+            LayerMove {
+                tracks: 1,
+                arcs: 1,
+                text: 1,
+                fills: 1,
+                regions: 1,
+                pads: 1,
+                component_bodies: 1,
+            }
+        );
+        assert_eq!(moved.total(), 7);
+        assert_eq!(fp.tracks[0].layer, to);
+        assert_eq!(
+            fp.tracks[1].layer,
+            Layer::TopOverlay,
+            "another layer is untouched"
+        );
+        assert_eq!(fp.arcs[0].layer, to);
+        assert_eq!(fp.text[0].layer, to);
+        assert_eq!(
+            fp.text[0].raw_layer_id, None,
+            "the carried byte went with the move"
+        );
+        assert_eq!(fp.fills[0].layer, to);
+        assert_eq!(fp.regions[0].layer, to);
+        assert_eq!(fp.regions[0].v7_layer, None, "the stale token went too");
+        assert_eq!(fp.pads[0].layer, to);
+        assert_eq!(fp.component_bodies[0].layer, to);
+        assert_eq!(fp.component_bodies[0].v7_layer, None);
+        assert_eq!(
+            fp.move_layer(from, to),
+            LayerMove::default(),
+            "nothing left on it"
+        );
     }
 
     #[test]

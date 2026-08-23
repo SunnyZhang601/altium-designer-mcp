@@ -424,6 +424,44 @@ impl Footprint {
         self.primitive_order.push(PrimitiveKind::ComponentBody);
     }
 
+    /// Keeps the component bodies `keep` accepts and drops the rest together
+    /// with their slots in [`Self::primitive_order`], so every other primitive
+    /// keeps its place in the file; a bare `retain` on the list leaves the
+    /// order one slot long per body and the later bodies each move up one.
+    /// Returns how many were dropped.
+    pub fn retain_component_bodies(
+        &mut self,
+        mut keep: impl FnMut(&primitives::ComponentBody) -> bool,
+    ) -> usize {
+        let dropped: Vec<usize> = self
+            .component_bodies
+            .iter()
+            .enumerate()
+            .filter(|(_, body)| !keep(body))
+            .map(|(index, _)| index)
+            .collect();
+        for &index in dropped.iter().rev() {
+            self.component_bodies.remove(index);
+            self.forget_order_slot(PrimitiveKind::ComponentBody, index);
+        }
+        dropped.len()
+    }
+
+    /// Removes the `index`-th slot of `kind` from [`Self::primitive_order`],
+    /// if the order records one.
+    fn forget_order_slot(&mut self, kind: PrimitiveKind, index: usize) {
+        let slot = self
+            .primitive_order
+            .iter()
+            .enumerate()
+            .filter(|(_, k)| **k == kind)
+            .nth(index)
+            .map(|(position, _)| position);
+        if let Some(position) = slot {
+            self.primitive_order.remove(position);
+        }
+    }
+
     /// The footprint's primitives in the order they are written, as
     /// `(kind, index into that kind's list)` pairs.
     ///
@@ -866,8 +904,7 @@ impl PcbLib {
         let mut results = Vec::new();
 
         for footprint in &mut self.footprints {
-            let original_count = footprint.component_bodies.len();
-            footprint.component_bodies.retain(|cb| {
+            let removed = footprint.retain_component_bodies(|cb| {
                 // Keep external references (embedded: false) - they don't need model data
                 if !cb.embedded {
                     return true;
@@ -879,7 +916,6 @@ impl PcbLib {
                 // Keep only if the model exists in the library
                 available.contains(&cb.model_id.to_lowercase())
             });
-            let removed = original_count - footprint.component_bodies.len();
             if removed > 0 {
                 tracing::debug!(
                     footprint = %footprint.name,
@@ -1103,6 +1139,54 @@ mod tests {
         assert_eq!(kept.len(), 2);
         assert!(kept.iter().any(|cb| !cb.embedded));
         assert!(kept.iter().any(|cb| cb.model_id.is_empty()));
+    }
+
+    #[test]
+    fn dropping_a_body_leaves_the_other_primitives_where_they_were() {
+        // Interleaved as a file might store it: body A, pad 1, body B, pad 2.
+        // Removing A must not move B in front of pad 1, which is what a bare
+        // `retain` on the list does once the order has one slot too many.
+        let mut fp = Footprint::new("ORDER");
+        let mut a = ComponentBody::new("{A}", "a.step");
+        a.embedded = true;
+        fp.add_component_body(a);
+        fp.add_pad(Pad::smd("1", 0.0, 0.0, 1.0, 1.0));
+        let mut b = ComponentBody::new("{B}", "b.step");
+        b.embedded = true;
+        fp.add_component_body(b);
+        fp.add_pad(Pad::smd("2", 1.0, 0.0, 1.0, 1.0));
+
+        assert_eq!(fp.retain_component_bodies(|cb| cb.model_id != "{A}"), 1);
+        assert_eq!(fp.component_bodies.len(), 1);
+        assert_eq!(fp.component_bodies[0].model_id, "{B}");
+        assert_eq!(
+            fp.write_sequence(),
+            vec![
+                (PrimitiveKind::Pad, 0),
+                (PrimitiveKind::ComponentBody, 0),
+                (PrimitiveKind::Pad, 1),
+            ]
+        );
+
+        // The library-level repair goes through the same path.
+        let mut lib = PcbLib::new();
+        let mut fp = Footprint::new("REPAIR");
+        let mut orphan = ComponentBody::new("{GONE}", "gone.step");
+        orphan.embedded = true;
+        fp.add_component_body(orphan);
+        fp.add_pad(Pad::smd("1", 0.0, 0.0, 1.0, 1.0));
+        let mut anonymous = ComponentBody::new("", "anon.step");
+        anonymous.embedded = true;
+        fp.add_component_body(anonymous);
+        lib.add(fp);
+        assert_eq!(
+            lib.remove_orphaned_component_bodies(),
+            vec![("REPAIR".to_string(), 1)]
+        );
+        assert_eq!(
+            lib.get("REPAIR").expect("footprint").write_sequence(),
+            vec![(PrimitiveKind::Pad, 0), (PrimitiveKind::ComponentBody, 0)]
+        );
     }
 
     #[test]

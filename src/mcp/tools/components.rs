@@ -574,10 +574,11 @@ impl McpServer {
         // Handle missing models
         if !missing_model_ids.is_empty() {
             if ignore_missing_models {
-                // Remove component bodies that reference missing models
-                new_footprint
-                    .component_bodies
-                    .retain(|cb| !cb.embedded || !missing_model_ids.contains(&cb.model_id));
+                // Drop the bodies that reference missing models, keeping every
+                // other primitive where it was.
+                new_footprint.retain_component_bodies(|cb| {
+                    !cb.embedded || !missing_model_ids.contains(&cb.model_id)
+                });
             } else {
                 return ToolCallResult::error(format!(
                     "Component '{}' references missing embedded model(s): {}. \
@@ -2319,8 +2320,14 @@ mod tests {
         fn lib_with_missing_model(path: &std::path::Path, model_id: &str) {
             let mut lib = PcbLib::new();
             let mut fp = Footprint::new("QFN_MISSING");
-            fp.add_pad(Pad::smd("1", -1.0, 0.0, 0.3, 0.8));
+            // Interleaved — body, pad, body, pad — so dropping the dangling
+            // body is observable in the order the rest keeps.
             fp.add_component_body(ComponentBody::new(model_id, "missing.step"));
+            fp.add_pad(Pad::smd("1", -1.0, 0.0, 0.3, 0.8));
+            let mut external = ComponentBody::new("", "kept.step");
+            external.embedded = false;
+            fp.add_component_body(external);
+            fp.add_pad(Pad::smd("2", 1.0, 0.0, 0.3, 0.8));
             lib.add(fp);
             lib.save(path).unwrap();
         }
@@ -2348,7 +2355,24 @@ mod tests {
                 .iter()
                 .any(|w| w.as_str().unwrap_or("").contains("component body")));
             let out = PcbLib::open(&target).unwrap();
-            assert_eq!(out.get("QFN_MISSING").unwrap().component_bodies.len(), 0);
+            let copied = out.get("QFN_MISSING").unwrap();
+            assert_eq!(
+                copied.component_bodies.len(),
+                1,
+                "the external reference stays"
+            );
+            assert_eq!(copied.component_bodies[0].model_name, "kept.step");
+            // The dangling body went; everything else kept its place: pad 1,
+            // the kept body, pad 2 — not the kept body in front of pad 1.
+            assert_eq!(
+                copied.primitive_order,
+                [
+                    crate::altium::pcblib::PrimitiveKind::Pad,
+                    crate::altium::pcblib::PrimitiveKind::ComponentBody,
+                    crate::altium::pcblib::PrimitiveKind::Pad,
+                ],
+                "the copy keeps the source's order minus the dropped body"
+            );
         }
 
         #[test]

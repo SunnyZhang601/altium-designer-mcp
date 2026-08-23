@@ -145,7 +145,7 @@ impl McpServer {
                         },
                         "include_metadata": {
                             "type": "boolean",
-                            "description": "If true, return objects with metadata (part_count, pin_count, etc.) instead of just names. Default: false"
+                            "description": "If true, return objects with metadata instead of just names: a footprint's description, one count per primitive kind and has_3d_model; a symbol's description, designator, part_count, pin_count and footprint_count. Default: false"
                         }
                     },
                     "required": ["filepath"]

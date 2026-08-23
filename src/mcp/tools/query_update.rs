@@ -192,61 +192,13 @@ impl McpServer {
                     old.description, new.description
                 ));
             }
-            if old.pads.len() != new.pads.len() {
-                changes.push(format!(
-                    "pad_count: {} -> {}",
-                    old.pads.len(),
-                    new.pads.len()
-                ));
-            }
-            if old.tracks.len() != new.tracks.len() {
-                changes.push(format!(
-                    "track_count: {} -> {}",
-                    old.tracks.len(),
-                    new.tracks.len()
-                ));
-            }
-            if old.arcs.len() != new.arcs.len() {
-                changes.push(format!(
-                    "arc_count: {} -> {}",
-                    old.arcs.len(),
-                    new.arcs.len()
-                ));
-            }
-            if old.regions.len() != new.regions.len() {
-                changes.push(format!(
-                    "region_count: {} -> {}",
-                    old.regions.len(),
-                    new.regions.len()
-                ));
-            }
-            if old.text.len() != new.text.len() {
-                changes.push(format!(
-                    "text_count: {} -> {}",
-                    old.text.len(),
-                    new.text.len()
-                ));
-            }
-            if old.vias.len() != new.vias.len() {
-                changes.push(format!(
-                    "via_count: {} -> {}",
-                    old.vias.len(),
-                    new.vias.len()
-                ));
-            }
-            if old.fills.len() != new.fills.len() {
-                changes.push(format!(
-                    "fill_count: {} -> {}",
-                    old.fills.len(),
-                    new.fills.len()
-                ));
-            }
-            if old.component_bodies.len() != new.component_bodies.len() {
-                changes.push(format!(
-                    "component_body_count: {} -> {}",
-                    old.component_bodies.len(),
-                    new.component_bodies.len()
-                ));
+            // Every primitive kind, from the enum, so the preview cannot miss
+            // an added or removed kind.
+            for kind in crate::altium::pcblib::PrimitiveKind::WRITE_ORDER {
+                let (old_len, new_len) = (old.count_of(kind), new.count_of(kind));
+                if old_len != new_len {
+                    changes.push(format!("{}_count: {old_len} -> {new_len}", kind.name()));
+                }
             }
         } else {
             changes.push("component will be created".to_string());
@@ -410,59 +362,20 @@ impl McpServer {
                     old.part_count, new.part_count
                 ));
             }
-            // Every primitive family, so the dry-run preview can never miss an
-            // added/removed family (a new family = one line here).
-            let family_counts = [
-                ("pin_count", old.pins.len(), new.pins.len()),
-                (
-                    "rectangle_count",
-                    old.rectangles.len(),
-                    new.rectangles.len(),
-                ),
-                ("line_count", old.lines.len(), new.lines.len()),
-                ("polyline_count", old.polylines.len(), new.polylines.len()),
-                ("arc_count", old.arcs.len(), new.arcs.len()),
-                ("ellipse_count", old.ellipses.len(), new.ellipses.len()),
-                ("label_count", old.labels.len(), new.labels.len()),
-                (
-                    "ieee_symbol_count",
-                    old.ieee_symbols.len(),
-                    new.ieee_symbols.len(),
-                ),
-                (
-                    "parameter_count",
-                    old.parameters.len(),
-                    new.parameters.len(),
-                ),
-                (
-                    "round_rect_count",
-                    old.round_rects.len(),
-                    new.round_rects.len(),
-                ),
-                ("polygon_count", old.polygons.len(), new.polygons.len()),
-                ("pie_count", old.pies.len(), new.pies.len()),
-                ("image_count", old.images.len(), new.images.len()),
-                (
-                    "text_frame_count",
-                    old.text_frames.len(),
-                    new.text_frames.len(),
-                ),
-                ("bezier_count", old.beziers.len(), new.beziers.len()),
-                (
-                    "elliptical_arc_count",
-                    old.elliptical_arcs.len(),
-                    new.elliptical_arcs.len(),
-                ),
-                (
-                    "footprint_count",
-                    old.footprints.len(),
-                    new.footprints.len(),
-                ),
-            ];
-            for (label, old_len, new_len) in family_counts {
+            // Every record kind, from the enum, so the preview cannot miss an
+            // added or removed kind; footprint links are not a kind.
+            for kind in crate::altium::schlib::SchPrimitiveKind::WRITE_ORDER {
+                let (old_len, new_len) = (old.count_of(kind), new.count_of(kind));
                 if old_len != new_len {
-                    changes.push(format!("{label}: {old_len} -> {new_len}"));
+                    changes.push(format!("{}_count: {old_len} -> {new_len}", kind.name()));
                 }
+            }
+            if old.footprints.len() != new.footprints.len() {
+                changes.push(format!(
+                    "footprint_count: {} -> {}",
+                    old.footprints.len(),
+                    new.footprints.len()
+                ));
             }
         } else {
             changes.push("component will be created".to_string());

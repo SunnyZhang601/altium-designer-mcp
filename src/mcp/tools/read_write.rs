@@ -1008,16 +1008,21 @@ impl McpServer {
                             .skip(offset)
                             .take(limit.unwrap_or(usize::MAX))
                             .map(|fp| {
-                                json!({
-                                    "name": fp.name,
-                                    "description": fp.description,
-                                    "pad_count": fp.pads.len(),
-                                    "track_count": fp.tracks.len(),
-                                    "arc_count": fp.arcs.len(),
-                                    "region_count": fp.regions.len(),
-                                    "text_count": fp.text.len(),
-                                    "has_3d_model": fp.model_3d.is_some() || !fp.component_bodies.is_empty(),
-                                })
+                                let mut entry = serde_json::Map::new();
+                                entry.insert("name".to_string(), json!(fp.name));
+                                entry.insert("description".to_string(), json!(fp.description));
+                                // One count per primitive kind, every kind.
+                                for kind in crate::altium::pcblib::PrimitiveKind::WRITE_ORDER {
+                                    entry.insert(
+                                        format!("{}_count", kind.name()),
+                                        json!(fp.count_of(kind)),
+                                    );
+                                }
+                                entry.insert(
+                                    "has_3d_model".to_string(),
+                                    json!(fp.model_3d.is_some() || !fp.component_bodies.is_empty()),
+                                );
+                                Value::Object(entry)
                             })
                             .collect()
                     } else {
@@ -3345,6 +3350,15 @@ mod tests {
             assert_eq!(p["include_metadata"], true);
             assert_eq!(p["components"][0]["pad_count"], 2);
             assert_eq!(p["components"][0]["has_3d_model"], false);
+            // One count per primitive kind, every kind.
+            for kind in crate::altium::pcblib::PrimitiveKind::WRITE_ORDER {
+                let key = format!("{}_count", kind.name());
+                assert!(
+                    p["components"][0][&key].is_u64(),
+                    "{key} missing: {}",
+                    p["components"][0]
+                );
+            }
 
             let paged = server.call_list_components(&json!({
                 "filepath": path.to_string_lossy(), "limit": 1, "offset": 0,

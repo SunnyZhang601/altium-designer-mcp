@@ -228,6 +228,29 @@ pub struct Polyline {
     pub raw_params: Vec<(String, String)>,
 }
 
+impl Polyline {
+    /// Creates a plain polyline through `points`: a small black solid stroke
+    /// with no end shapes, not accessible.
+    #[must_use]
+    pub fn new(points: Vec<(f64, f64)>) -> Self {
+        Self {
+            points,
+            line_width: 1,
+            color: 0,
+            line_style: 0,
+            start_line_shape: 0,
+            end_line_shape: 0,
+            line_shape_size: 0,
+            transparent: false,
+            is_not_accessible: true,
+            owner_part_id: 1,
+            display_flags: ShapeDisplayFlags::default(),
+            unique_id: None,
+            raw_params: Vec::new(),
+        }
+    }
+}
+
 /// A filled polygon.
 ///
 /// Vertex coordinates are `f64` schematic units (see `super::coord`); `Eq` is
@@ -358,6 +381,36 @@ pub struct Arc {
     /// canonical form.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub raw_params: Vec<(String, String)>,
+}
+
+impl Arc {
+    /// Creates an arc centred on (`x`, `y`) with the given radius, from
+    /// `start_angle` to `end_angle` in degrees, at the defaults a from-scratch
+    /// arc gets (small black stroke, not accessible).
+    #[must_use]
+    pub fn new(
+        x: impl Into<f64>,
+        y: impl Into<f64>,
+        radius: impl Into<f64>,
+        start_angle: f64,
+        end_angle: f64,
+    ) -> Self {
+        Self {
+            x: x.into(),
+            y: y.into(),
+            radius: radius.into(),
+            is_not_accessible: true,
+            start_angle,
+            end_angle,
+            line_width: 1,
+            color: 0,
+            fill_color: 0,
+            owner_part_id: 1,
+            display_flags: ShapeDisplayFlags::default(),
+            unique_id: None,
+            raw_params: Vec::new(),
+        }
+    }
 }
 
 const fn default_end_angle() -> f64 {

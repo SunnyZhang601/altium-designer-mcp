@@ -52,6 +52,29 @@ pub struct Label {
     pub raw_params: Vec<(String, String)>,
 }
 
+impl Label {
+    /// Creates a label reading `text` at (`x`, `y`) with Altium's defaults:
+    /// font 1, black, bottom-left anchored, unrotated, visible.
+    #[must_use]
+    pub fn new(x: impl Into<f64>, y: impl Into<f64>, text: impl Into<String>) -> Self {
+        Self {
+            x: x.into(),
+            y: y.into(),
+            text: text.into(),
+            font_id: 1,
+            color: 0,
+            justification: TextJustification::BottomLeft,
+            rotation: 0.0,
+            is_mirrored: false,
+            is_hidden: false,
+            owner_part_id: 1,
+            display_flags: ShapeDisplayFlags::default(),
+            unique_id: None,
+            raw_params: Vec::new(),
+        }
+    }
+}
+
 /// A bordered multi-line text box — `SchLib` `RECORD=28`.
 ///
 /// Distinct from [`Label`]: the text lives inside a frame rectangle

@@ -1414,7 +1414,7 @@ impl McpServer {
                                 },
                                 "param_name": {
                                     "type": "string",
-                                    "description": "For update_parameters: parameter name to update (e.g., 'Value')"
+                                    "description": "For update_parameters: parameter name to update (e.g., 'Value'); matched without regard to case, as Altium treats parameter names"
                                 },
                                 "param_value": {
                                     "type": "string",
@@ -1845,7 +1845,7 @@ impl McpServer {
                         },
                         "parameter_name": {
                             "type": "string",
-                            "description": "Name of the parameter (required for get, set, add, delete)"
+                            "description": "Name of the parameter (required for get, set, add, delete); matched without regard to case, as Altium treats parameter names"
                         },
                         "value": {
                             "type": "string",

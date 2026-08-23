@@ -170,9 +170,10 @@ impl McpServer {
             let mut updated_in_symbol = false;
             let mut added_in_symbol = false;
 
-            // Try to find and update existing parameter
+            // Find and update the existing parameter; names match without
+            // regard to case, as Altium and manage_schlib_parameters treat them.
             for param in &mut symbol.parameters {
-                if param.name == param_name {
+                if param.name.eq_ignore_ascii_case(param_name) {
                     let old_value = param.value.clone();
                     if !dry_run {
                         param.value = param_value.to_string();
@@ -843,6 +844,43 @@ mod tests {
         let lib = SchLib::open(&path).unwrap();
         assert_eq!(lib.get("RESISTOR").unwrap().parameters[0].value, "Initech");
         assert_eq!(lib.get("CAPACITOR").unwrap().parameters[0].value, "ACME");
+    }
+
+    /// A parameter name matches without regard to case, as Altium and
+    /// `manage_schlib_parameters` treat it: `MANUFACTURER` updates
+    /// `Manufacturer` rather than adding a case-twin beside it.
+    #[test]
+    fn schlib_update_parameters_matches_names_without_regard_to_case() {
+        let dir = test_temp_dir();
+        let server = create_test_server(dir.path());
+        let path = dir.path().join("BatchParamCase.SchLib");
+        create_test_schlib(&path);
+        let filepath = path.to_string_lossy().to_string();
+
+        for (name, value) in [("Manufacturer", "ACME"), ("MANUFACTURER", "Initech")] {
+            let result = server.call_batch_update(&json!({
+                "filepath": filepath,
+                "operation": "update_parameters",
+                "parameters": {
+                    "param_name": name,
+                    "param_value": value,
+                    "add_if_missing": true,
+                },
+            }));
+            assert!(!result.is_error, "{}", get_result_text(&result));
+        }
+
+        let lib = SchLib::open(&path).unwrap();
+        for symbol in lib.iter() {
+            let manufacturers: Vec<&str> = symbol
+                .parameters
+                .iter()
+                .filter(|p| p.name.eq_ignore_ascii_case("manufacturer"))
+                .map(|p| p.value.as_str())
+                .collect();
+            assert_eq!(manufacturers, ["Initech"], "{}", symbol.name);
+            assert_eq!(symbol.parameters[0].name, "Manufacturer", "{}", symbol.name);
+        }
     }
 
     #[test]

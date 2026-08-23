@@ -234,6 +234,13 @@ fn json_guidless_opt(json: &Value, key: &str) -> Option<String> {
 
 /// Accepted pad-shape spellings, quoted in every shape error so the two tools
 /// give identical guidance.
+/// The spellings every layer-name field accepts; appended to each "invalid
+/// layer" error so a caller learns the rule, not just the rejection.
+pub const LAYER_NAME_HELP: &str =
+    "Valid layer names are Altium's ('Top Overlay', 'Mechanical 13', \
+                                   'Mid-Layer 2') or the camel-case form ('TopOverlay', \
+                                   'Mechanical13', 'MidLayer2'), in any case.";
+
 pub const PAD_SHAPE_HELP: &str = "Valid shapes are: rectangle (or rectangular), round (or \
      circle), oval, octagonal, rounded_rectangle. Matching is case-insensitive and ignores \
      '_'/'-' separators.";
@@ -1026,10 +1033,7 @@ impl McpServer {
         let layer_str = json.get("layer").and_then(Value::as_str);
         let layer = match layer_str {
             Some(s) => Layer::parse(s).ok_or_else(|| {
-                format!(
-                    "Pad '{designator}' has invalid layer '{s}'. \
-                     Valid layers include: Top Layer, Bottom Layer, Multi-Layer, Top Overlay, etc."
-                )
+                format!("Pad '{designator}' has invalid layer '{s}'. {LAYER_NAME_HELP}")
             })?,
             // SMD pads default to Top Layer, through-hole pads default to Multi-Layer
             None => {
@@ -1273,12 +1277,8 @@ impl McpServer {
 
         let layer_str = json.get("layer").and_then(Value::as_str);
         let layer = match layer_str {
-            Some(s) => Layer::parse(s).ok_or_else(|| {
-                format!(
-                    "Track has invalid layer '{s}'. \
-                     Valid layers include: Top Layer, Bottom Layer, Top Overlay, Top Assembly, etc."
-                )
-            })?,
+            Some(s) => Layer::parse(s)
+                .ok_or_else(|| format!("Track has invalid layer '{s}'. {LAYER_NAME_HELP}"))?,
             None => Layer::TopOverlay, // Default for tracks is Top Overlay
         };
 
@@ -1328,12 +1328,8 @@ impl McpServer {
 
         let layer_str = json.get("layer").and_then(Value::as_str);
         let layer = match layer_str {
-            Some(s) => Layer::parse(s).ok_or_else(|| {
-                format!(
-                    "Arc has invalid layer '{s}'. \
-                     Valid layers include: Top Layer, Bottom Layer, Top Overlay, Top Assembly, etc."
-                )
-            })?,
+            Some(s) => Layer::parse(s)
+                .ok_or_else(|| format!("Arc has invalid layer '{s}'. {LAYER_NAME_HELP}"))?,
             None => Layer::TopOverlay, // Default for arcs is Top Overlay
         };
 
@@ -1840,20 +1836,12 @@ impl McpServer {
         let mut via = Via::new(x, y, diameter, hole_size);
 
         if let Some(s) = json.get("from_layer").and_then(Value::as_str) {
-            via.from_layer = Layer::parse(s).ok_or_else(|| {
-                format!(
-                    "Via has invalid from_layer '{s}'. \
-                     Valid layers include: Top Layer, Bottom Layer, Mid-Layer 1, etc."
-                )
-            })?;
+            via.from_layer = Layer::parse(s)
+                .ok_or_else(|| format!("Via has invalid from_layer '{s}'. {LAYER_NAME_HELP}"))?;
         }
         if let Some(s) = json.get("to_layer").and_then(Value::as_str) {
-            via.to_layer = Layer::parse(s).ok_or_else(|| {
-                format!(
-                    "Via has invalid to_layer '{s}'. \
-                     Valid layers include: Top Layer, Bottom Layer, Mid-Layer 1, etc."
-                )
-            })?;
+            via.to_layer = Layer::parse(s)
+                .ok_or_else(|| format!("Via has invalid to_layer '{s}'. {LAYER_NAME_HELP}"))?;
         }
 
         if let Some(v) = json.get("solder_mask_expansion").and_then(Value::as_f64) {
@@ -2002,12 +1990,8 @@ impl McpServer {
 
         let layer_str = json.get("layer").and_then(Value::as_str);
         let layer = match layer_str {
-            Some(s) => Layer::parse(s).ok_or_else(|| {
-                format!(
-                    "Fill has invalid layer '{s}'. \
-                     Valid layers include: Top Layer, Bottom Layer, Top Overlay, Mechanical 1, etc."
-                )
-            })?,
+            Some(s) => Layer::parse(s)
+                .ok_or_else(|| format!("Fill has invalid layer '{s}'. {LAYER_NAME_HELP}"))?,
             None => Layer::TopLayer, // Default for fills is Top Layer
         };
 

@@ -196,58 +196,29 @@ impl LayerMove {
     }
 }
 
-/// One of a [`Footprint`]'s primitive lists, as named by `primitive_order`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum PrimitiveKind {
-    /// [`Footprint::arcs`].
-    Arc,
-    /// [`Footprint::pads`].
-    Pad,
-    /// [`Footprint::vias`].
-    Via,
-    /// [`Footprint::tracks`].
-    Track,
-    /// [`Footprint::text`].
-    Text,
-    /// [`Footprint::regions`].
-    Region,
-    /// [`Footprint::fills`].
-    Fill,
-    /// [`Footprint::component_bodies`].
-    ComponentBody,
+primitive_kinds! {
+    /// One of a [`Footprint`]'s primitive lists, as named by `primitive_order`.
+    PrimitiveKind {
+        /// [`Footprint::arcs`].
+        Arc => "arc",
+        /// [`Footprint::pads`].
+        Pad => "pad",
+        /// [`Footprint::vias`].
+        Via => "via",
+        /// [`Footprint::tracks`].
+        Track => "track",
+        /// [`Footprint::text`].
+        Text => "text",
+        /// [`Footprint::regions`].
+        Region => "region",
+        /// [`Footprint::fills`].
+        Fill => "fill",
+        /// [`Footprint::component_bodies`].
+        ComponentBody => "component_body",
+    }
 }
 
 impl PrimitiveKind {
-    /// The order a footprint with no recorded order of its own is written in.
-    pub const WRITE_ORDER: [Self; 8] = [
-        Self::Arc,
-        Self::Pad,
-        Self::Via,
-        Self::Track,
-        Self::Text,
-        Self::Region,
-        Self::Fill,
-        Self::ComponentBody,
-    ];
-
-    /// The kind's name as the JSON boundary spells it (`component_body`,
-    /// `pad`, …): the serde form, so a report key built from it matches the
-    /// list the kind fills.
-    #[must_use]
-    pub const fn name(self) -> &'static str {
-        match self {
-            Self::Arc => "arc",
-            Self::Pad => "pad",
-            Self::Via => "via",
-            Self::Track => "track",
-            Self::Text => "text",
-            Self::Region => "region",
-            Self::Fill => "fill",
-            Self::ComponentBody => "component_body",
-        }
-    }
-
     /// Altium's numeric object id for this kind, as a `PrimitiveGuids`
     /// record stores it.
     #[must_use]

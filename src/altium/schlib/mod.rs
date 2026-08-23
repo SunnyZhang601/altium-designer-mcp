@@ -470,96 +470,48 @@ pub struct Symbol {
     pub primitive_order: Vec<SchPrimitiveKind>,
 }
 
-/// One of a [`Symbol`]'s content-record lists, as named by `primitive_order`.
-///
-/// Footprint models are absent on purpose: they are written in the
-/// implementation section after the content records and take no `IndexInSheet`
-/// slot.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum SchPrimitiveKind {
-    /// [`Symbol::rectangles`].
-    Rectangle,
-    /// [`Symbol::pins`].
-    Pin,
-    /// [`Symbol::lines`].
-    Line,
-    /// [`Symbol::polylines`].
-    Polyline,
-    /// [`Symbol::polygons`].
-    Polygon,
-    /// [`Symbol::arcs`].
-    Arc,
-    /// [`Symbol::pies`].
-    Pie,
-    /// [`Symbol::images`].
-    Image,
-    /// [`Symbol::text_frames`].
-    TextFrame,
-    /// [`Symbol::beziers`].
-    Bezier,
-    /// [`Symbol::ellipses`].
-    Ellipse,
-    /// [`Symbol::round_rects`].
-    RoundRect,
-    /// [`Symbol::elliptical_arcs`].
-    EllipticalArc,
-    /// [`Symbol::labels`].
-    Label,
-    /// [`Symbol::ieee_symbols`].
-    IeeeSymbol,
-    /// [`Symbol::parameters`].
-    Parameter,
-}
-
-impl SchPrimitiveKind {
-    /// The kind's name as the JSON boundary spells it (`round_rect`,
-    /// `ieee_symbol`, …): the serde form, so a report key built from it
-    /// matches the list the kind fills.
-    #[must_use]
-    pub const fn name(self) -> &'static str {
-        match self {
-            Self::Rectangle => "rectangle",
-            Self::Pin => "pin",
-            Self::Line => "line",
-            Self::Polyline => "polyline",
-            Self::Polygon => "polygon",
-            Self::Arc => "arc",
-            Self::Pie => "pie",
-            Self::Image => "image",
-            Self::TextFrame => "text_frame",
-            Self::Bezier => "bezier",
-            Self::Ellipse => "ellipse",
-            Self::RoundRect => "round_rect",
-            Self::EllipticalArc => "elliptical_arc",
-            Self::Label => "label",
-            Self::IeeeSymbol => "ieee_symbol",
-            Self::Parameter => "parameter",
-        }
-    }
-
-    /// The order a symbol with no recorded order of its own is written in.
+primitive_kinds! {
+    /// One of a [`Symbol`]'s content-record lists, as named by `primitive_order`.
     ///
-    /// Rectangles lead so a solid-filled body sits behind the pins; emitting
-    /// pins first lets the body paint over the pin names inside it.
-    pub const WRITE_ORDER: [Self; 16] = [
-        Self::Rectangle,
-        Self::Pin,
-        Self::Line,
-        Self::Polyline,
-        Self::Polygon,
-        Self::Arc,
-        Self::Pie,
-        Self::Image,
-        Self::TextFrame,
-        Self::Bezier,
-        Self::Ellipse,
-        Self::RoundRect,
-        Self::EllipticalArc,
-        Self::Label,
-        Self::IeeeSymbol,
-        Self::Parameter,
-    ];
+    /// Footprint models are absent on purpose: they are written in the
+    /// implementation section after the content records and take no
+    /// `IndexInSheet` slot. The write order leads with rectangles so a
+    /// solid-filled body sits behind the pins; emitting pins first would let
+    /// the body paint over the pin names inside it.
+    SchPrimitiveKind {
+        /// [`Symbol::rectangles`].
+        Rectangle => "rectangle",
+        /// [`Symbol::pins`].
+        Pin => "pin",
+        /// [`Symbol::lines`].
+        Line => "line",
+        /// [`Symbol::polylines`].
+        Polyline => "polyline",
+        /// [`Symbol::polygons`].
+        Polygon => "polygon",
+        /// [`Symbol::arcs`].
+        Arc => "arc",
+        /// [`Symbol::pies`].
+        Pie => "pie",
+        /// [`Symbol::images`].
+        Image => "image",
+        /// [`Symbol::text_frames`].
+        TextFrame => "text_frame",
+        /// [`Symbol::beziers`].
+        Bezier => "bezier",
+        /// [`Symbol::ellipses`].
+        Ellipse => "ellipse",
+        /// [`Symbol::round_rects`].
+        RoundRect => "round_rect",
+        /// [`Symbol::elliptical_arcs`].
+        EllipticalArc => "elliptical_arc",
+        /// [`Symbol::labels`].
+        Label => "label",
+        /// [`Symbol::ieee_symbols`].
+        IeeeSymbol => "ieee_symbol",
+        /// [`Symbol::parameters`].
+        Parameter => "parameter",
+    }
 }
 
 const fn default_part_count() -> u32 {

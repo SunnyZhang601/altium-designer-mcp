@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- The old `docs/CLAUDE_CODE_GUIDE.md` and `docs/ANTIGRAVITY_GUIDE.md` addresses,
+  still linked from search results and MCP directories, point at the merged
+  `docs/CLIENT_SETUP.md` instead of a missing page.
+
 ## [0.2.0] - 2026-08-24
 
 Everything in this release is the result of one campaign: hold the library

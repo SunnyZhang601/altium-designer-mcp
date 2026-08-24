@@ -9,7 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Everything in this section is the result of one campaign: hold the library
+## [0.2.0] - 2026-08-24
+
+Everything in this release is the result of one campaign: hold the library
 files we write to exactly what Altium itself writes, and refuse — rather than
 quietly reinterpret — anything a caller gets wrong.
 

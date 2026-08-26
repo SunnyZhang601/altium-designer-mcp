@@ -110,3 +110,10 @@ nursery = { level = "warn", priority = -1 }
 cargo = { level = "warn", priority = -1 }
 # Allow multiple versions of transitive dependencies (we can't control these)
 multiple_crate_versions = "allow"
+
+# cfb 0.14 walks the whole mini-stream FAT chain on every access to a small
+# stream, so a library of n components costs O(n^2) to read or write. This is
+# the fix sent upstream as mdsteele/rust-cfb#57's resolution; drop the patch
+# once a release carries it.
+[patch.crates-io]
+cfb = { git = "https://github.com/MatejGomboc/rust-cfb", rev = "e3d61a77d2f072cf2ee0a6c65b4859546960bdd0" }

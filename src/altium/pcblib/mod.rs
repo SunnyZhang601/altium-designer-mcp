@@ -780,9 +780,13 @@ impl PcbLib {
     /// Returns an error if the file cannot be read or is not a valid `PcbLib`.
     pub fn open(path: impl AsRef<std::path::Path>) -> AltiumResult<Self> {
         let path = path.as_ref();
-        let file = std::fs::File::open(path).map_err(|e| AltiumError::file_read(path, e))?;
+        // The whole file is read into memory first: a compound-file reader
+        // seeks through its sector chains constantly, and each seek against
+        // an unbuffered file is a system call — several times the cost of
+        // parsing the same bytes from memory.
+        let bytes = std::fs::read(path).map_err(|e| AltiumError::file_read(path, e))?;
 
-        let mut lib = Self::read(file)?;
+        let mut lib = Self::read(std::io::Cursor::new(bytes))?;
         lib.filepath = Some(path.display().to_string());
         Ok(lib)
     }
@@ -800,7 +804,7 @@ impl PcbLib {
     pub fn save(&mut self, path: impl AsRef<std::path::Path>) -> AltiumResult<()> {
         let path = path.as_ref();
         self.filepath = Some(path.display().to_string());
-        crate::altium::save_atomic(path, "pcblib.tmp", |file| self.write(file))
+        crate::altium::save_atomic(path, "pcblib.tmp", |image| self.write(image))
     }
 
     /// Returns the number of footprints in the library.

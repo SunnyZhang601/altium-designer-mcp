@@ -18,6 +18,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   authored from JSON now take the canonical write order, which leads with the
   body graphics. An explicit `primitive_order` (as `read_schlib` echoes for a
   read-modify-write) still overrides it, unchanged.
+- **Saving a library is about 40× faster, opening one about 6×.** Both
+  writers serialised straight into an unbuffered file, and a compound-file
+  writer rewrites its sector and directory tables constantly — a disk round
+  trip each time; the readers seeked through an unbuffered file the same way.
+  A library is now built in memory and written once, and read into memory
+  before it is parsed; the bytes are identical.
+- **Reading and writing a library now scale linearly with its size.** The
+  compound-file crate rebuilt the whole mini-stream chain on every access to
+  a small stream and walked an unbalanced directory tree on every path
+  lookup, so a library of `n` components cost a term in `n²`: 500 footprints
+  opened in 135 ms where 50 took 4 ms. Both are fixed in a patched `cfb`
+  the build pins until the fix is released upstream; 500 footprints now open
+  in 20 ms, and the bytes written are identical.
+- The performance tests assert what they can prove: that saving and opening
+  scale linearly with library size (the accidental-quadratic guard, valid in
+  any build), and absolute bounds only in an optimised build, which CI now
+  runs. A wall-clock bound on a debug build measured the machine, not the
+  code, and failed on a slow one.
 - The old `docs/CLAUDE_CODE_GUIDE.md` and `docs/ANTIGRAVITY_GUIDE.md` addresses,
   still linked from search results and MCP directories, point at the merged
   `docs/CLIENT_SETUP.md` instead of a missing page.

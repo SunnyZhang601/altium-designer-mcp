@@ -565,9 +565,10 @@ impl McpServer {
             Ok(path) => path,
             Err(e) => return ToolCallResult::error(e),
         };
-        let written = crate::altium::save_atomic(Path::new(filepath), "restore.tmp", |mut file| {
+        let written = crate::altium::save_atomic(Path::new(filepath), "restore.tmp", |image| {
             use std::io::Write as _;
-            file.write_all(&bytes)
+            image
+                .write_all(&bytes)
                 .map_err(|e| crate::altium::AltiumError::file_write(Path::new(filepath), e))
         });
         if let Err(e) = written {

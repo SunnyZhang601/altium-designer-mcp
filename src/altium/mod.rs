@@ -554,26 +554,28 @@ pub(crate) fn create_storage<F: std::io::Read + std::io::Write + std::io::Seek>(
 
 /// Writes a library to `path` atomically.
 ///
-/// Serialises into a sibling temp file (named with `tmp_ext`) via `write`, then
-/// renames it over the destination, so a failed or partial write never clobbers
-/// an existing file. The temp file is removed on any failure. Shared by both
-/// library writers — they differ only in the temp extension and whether
-/// serialisation needs `&mut self`, both captured by `write`.
+/// `write` serialises into memory; the bytes then go to a sibling temp file
+/// (named with `tmp_ext`) in one write, which is renamed over the
+/// destination, so a failed or partial write never clobbers an existing
+/// file and nothing is left behind on failure. Serialising in memory rather
+/// than straight into the file matters: a compound-file writer seeks and
+/// rewrites its sector and directory tables constantly, and doing that
+/// against an unbuffered file costs a disk round trip each time — some 40×
+/// the time of building the image and writing it once. Shared by both
+/// library writers and by `restore_backup`.
 pub(crate) fn save_atomic(
     path: &std::path::Path,
     tmp_ext: &str,
-    write: impl FnOnce(std::fs::File) -> AltiumResult<()>,
+    write: impl FnOnce(&mut std::io::Cursor<Vec<u8>>) -> AltiumResult<()>,
 ) -> AltiumResult<()> {
+    let mut image = std::io::Cursor::new(Vec::new());
+    write(&mut image)?;
+
     // Temp file in the same directory ensures the rename stays on one filesystem.
     let temp_path = path.with_extension(tmp_ext);
-
-    let file =
-        std::fs::File::create(&temp_path).map_err(|e| AltiumError::file_write(&temp_path, e))?;
-
-    // Attempt to write; clean up the temp file on failure.
-    if let Err(e) = write(file) {
+    if let Err(e) = std::fs::write(&temp_path, image.get_ref()) {
         let _ = std::fs::remove_file(&temp_path);
-        return Err(e);
+        return Err(AltiumError::file_write(&temp_path, e));
     }
 
     // Atomically rename the temp file over the target (overwrites existing).

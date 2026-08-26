@@ -800,7 +800,7 @@ impl PcbLib {
     pub fn save(&mut self, path: impl AsRef<std::path::Path>) -> AltiumResult<()> {
         let path = path.as_ref();
         self.filepath = Some(path.display().to_string());
-        crate::altium::save_atomic(path, "pcblib.tmp", |file| self.write(file))
+        crate::altium::save_atomic(path, "pcblib.tmp", |image| self.write(image))
     }
 
     /// Returns the number of footprints in the library.

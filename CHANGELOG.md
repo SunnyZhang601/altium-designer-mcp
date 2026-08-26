@@ -11,6 +11,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Saving a library is about 40× faster.** Both writers serialised straight
+  into an unbuffered file, and a compound-file writer rewrites its sector and
+  directory tables constantly — a disk round trip each time. The image is now
+  built in memory and written once; the bytes are identical.
+- The performance tests assert what they can prove: that saving and opening
+  scale linearly with library size (the accidental-quadratic guard, valid in
+  any build), and absolute bounds only in an optimised build, which CI now
+  runs. A wall-clock bound on a debug build measured the machine, not the
+  code, and failed on a slow one.
 - The old `docs/CLAUDE_CODE_GUIDE.md` and `docs/ANTIGRAVITY_GUIDE.md` addresses,
   still linked from search results and MCP directories, point at the merged
   `docs/CLIENT_SETUP.md` instead of a missing page.

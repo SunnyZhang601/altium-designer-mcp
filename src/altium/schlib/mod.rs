@@ -296,7 +296,7 @@ impl SchLib {
     ///
     /// Returns an error if the file cannot be written.
     pub fn save(&self, path: impl AsRef<Path>) -> AltiumResult<()> {
-        crate::altium::save_atomic(path.as_ref(), "schlib.tmp", |file| self.write(file))
+        crate::altium::save_atomic(path.as_ref(), "schlib.tmp", |image| self.write(image))
     }
 }
 

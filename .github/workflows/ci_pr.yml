@@ -166,6 +166,12 @@ jobs:
             - name: Run tests
               run: cargo test --locked --verbose
 
+            # The absolute timing bounds in tests/perf_tests.rs are asserted
+            # only in an optimised build (a debug build measures the build,
+            # not the code); the release artefacts above make this cheap.
+            - name: Run performance bounds (release)
+              run: cargo test --locked --release --test perf_tests -- --nocapture
+
             # Independent-reader gate: confirm generated files are Altium-readable
             # (issue #68) by parsing them with pyaltiumlib. Dependencies are pinned
             # (requirements.txt) and isolated in a venv so the install is

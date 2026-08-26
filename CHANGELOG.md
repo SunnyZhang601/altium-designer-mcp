@@ -11,10 +11,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **Saving a library is about 40× faster.** Both writers serialised straight
-  into an unbuffered file, and a compound-file writer rewrites its sector and
-  directory tables constantly — a disk round trip each time. The image is now
-  built in memory and written once; the bytes are identical.
+- **Saving a library is about 40× faster, opening one about 6×.** Both
+  writers serialised straight into an unbuffered file, and a compound-file
+  writer rewrites its sector and directory tables constantly — a disk round
+  trip each time; the readers seeked through an unbuffered file the same way.
+  A library is now built in memory and written once, and read into memory
+  before it is parsed; the bytes are identical.
 - The performance tests assert what they can prove: that saving and opening
   scale linearly with library size (the accidental-quadratic guard, valid in
   any build), and absolute bounds only in an optimised build, which CI now

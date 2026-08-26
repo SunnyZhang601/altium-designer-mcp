@@ -65,16 +65,19 @@ fn build_library(n: usize) -> PcbLib {
     lib
 }
 
-/// The smaller and larger library sizes the scaling checks compare.
-const SMALL: usize = 20;
-const LARGE: usize = 200;
+/// The smaller and larger library sizes the scaling checks compare. The
+/// small one is big enough that its timing is the code's, not the timer's:
+/// a library that opens in a couple of milliseconds measures scheduler
+/// noise, and a noisy denominator makes the ratio meaningless.
+const SMALL: usize = 50;
+const LARGE: usize = 500;
 
 /// The most the large library may cost relative to the small one. Linear
 /// work would give `LARGE / SMALL` = 10; a fixed per-file cost pulls the
-/// ratio below that, while a quadratic would push it towards 100. A ceiling
-/// well above 10 keeps the check quiet under ordinary noise and still
-/// catches the regression it exists for.
-const MAX_SCALING_RATIO: f64 = 25.0;
+/// ratio below that, while a quadratic would push it towards 100. Measured
+/// ratios sit between 8 and 14; the ceiling leaves room for a noisy runner
+/// and none for a quadratic.
+const MAX_SCALING_RATIO: f64 = 30.0;
 
 /// Asserts that `large` cost no more than [`MAX_SCALING_RATIO`] times
 /// `small`, printing both so a `--nocapture` run shows the numbers.
@@ -121,9 +124,9 @@ fn pcblib_save_scales_linearly_with_footprint_count() {
     let large_time = measure_min(5, || large.save(&large_path).expect("save"));
     assert_scales("PcbLib save", small_time, large_time);
     assert_bound(
-        "PcbLib save (200 footprints)",
+        &format!("PcbLib save ({LARGE} footprints)"),
         large_time,
-        Duration::from_millis(500),
+        Duration::from_secs(1),
     );
 }
 
@@ -143,9 +146,9 @@ fn pcblib_open_scales_linearly_with_footprint_count() {
     });
     assert_scales("PcbLib open", small_time, large_time);
     assert_bound(
-        "PcbLib open (200 footprints)",
+        &format!("PcbLib open ({LARGE} footprints)"),
         large_time,
-        Duration::from_millis(500),
+        Duration::from_secs(1),
     );
 }
 

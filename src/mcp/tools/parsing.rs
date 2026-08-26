@@ -918,13 +918,23 @@ impl McpServer {
         // The interleaved record order `read_schlib` reported; replaying it
         // replaces the grouped order the add_* calls accumulated, so a
         // read-modify-write keeps the source's record order.
-        if let Some(order) = sym_json.get("primitive_order") {
-            match serde_json::from_value(order.clone()) {
+        //
+        // With no order to replay the accumulated one is discarded rather than
+        // kept: the add_* calls above ran in this function's parse order, which
+        // takes pins before rectangles. That is not an authoring order, and
+        // emitting it writes a solid-filled body *after* the pins it encloses,
+        // where it paints over their names. Clearing hands the sequence back to
+        // `SchPrimitiveKind::WRITE_ORDER`, which leads with the body graphics
+        // for exactly this reason.
+        match sym_json.get("primitive_order") {
+            Some(order) => match serde_json::from_value(order.clone()) {
                 Ok(kinds) => symbol.primitive_order = kinds,
                 Err(e) => {
                     tracing::debug!(error = %e, "invalid primitive_order; using default order");
+                    symbol.primitive_order.clear();
                 }
-            }
+            },
+            None => symbol.primitive_order.clear(),
         }
 
         // Out-of-range or non-finite geometry is refused here so both tools

@@ -2734,6 +2734,50 @@ mod tests {
             assert_eq!(symbol_after["part_id_locked"], true);
         }
 
+        /// A JSON-authored symbol has no authoring order to replay, so it
+        /// takes `SchPrimitiveKind::WRITE_ORDER` — body graphics first. The
+        /// parse order (pins, then rectangles) must not leak out as one: the
+        /// records render in stream order, so a solid-filled body emitted
+        /// after the pins paints over the pin names inside it.
+        #[test]
+        fn a_json_authored_symbol_writes_its_filled_body_before_the_pins() {
+            let dir = test_temp_dir();
+            let server = create_test_server(dir.path());
+
+            let sch = dir.path().join("Body.SchLib");
+            let write = server.call_write_schlib(&json!({
+                "filepath": sch.to_string_lossy(),
+                "symbols": [{
+                    "name": "BODY",
+                    "pins": [
+                        { "designator": "1", "name": "VIN", "x": -50, "y": 20,
+                          "length": 30, "orientation": "left" },
+                        { "designator": "2", "name": "GND", "x": 50, "y": 20,
+                          "length": 30, "orientation": "right" },
+                    ],
+                    "rectangles": [
+                        { "x1": -50, "y1": 40, "x2": 50, "y2": -40, "filled": true },
+                    ],
+                }],
+            }));
+            assert!(!write.is_error, "{}", get_result_text(&write));
+
+            let read = server.call_read_schlib(&json!({
+                "filepath": sch.to_string_lossy(),
+            }));
+            assert!(!read.is_error, "{}", get_result_text(&read));
+            let symbol = parse_result_json(&read)["symbols"][0].clone();
+            assert_eq!(
+                symbol["primitive_order"],
+                json!(["rectangle", "pin", "pin"]),
+                "the filled body must precede the pins it encloses"
+            );
+            assert_eq!(
+                symbol["rectangles"][0]["filled"], true,
+                "the body stays filled — transparency is not the fix"
+            );
+        }
+
         /// A malformed `primitive_order` is ignored with the default grouped
         /// order rather than failing the write — it is advisory, exactly as
         /// on the struct.

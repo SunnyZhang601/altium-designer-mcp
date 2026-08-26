@@ -11,6 +11,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A solid symbol body no longer paints over the pin names inside it.**
+  `write_schlib` recorded the order it happened to parse its input in — pins
+  before rectangles — and replayed that as if it were an authoring order, so a
+  `"filled": true` body went out after the pins and hid their names. Symbols
+  authored from JSON now take the canonical write order, which leads with the
+  body graphics. An explicit `primitive_order` (as `read_schlib` echoes for a
+  read-modify-write) still overrides it, unchanged.
 - The old `docs/CLAUDE_CODE_GUIDE.md` and `docs/ANTIGRAVITY_GUIDE.md` addresses,
   still linked from search results and MCP directories, point at the merged
   `docs/CLIENT_SETUP.md` instead of a missing page.

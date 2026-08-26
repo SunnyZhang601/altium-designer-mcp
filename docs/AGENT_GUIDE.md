@@ -43,6 +43,15 @@ Overbar (active-low) pin names use a backslash **after** each barred character
 conventions and examples:
 [AI_WORKFLOW.md § Symbol Pin Conventions](AI_WORKFLOW.md#symbol-pin-conventions).
 
+## Symbol draw order
+
+Schematic records render in the order they are stored, so a filled body drawn
+after a pin hides that pin's name. You do not have to manage this: a symbol you
+author from JSON is written body-graphics-first, so `"filled": true` bodies sit
+behind their pin names. Keep bodies solid — a transparent body is not the fix
+for hidden pin names. Supply `primitive_order` only to reproduce an order you
+read off an existing file; it overrides the default.
+
 ## Filesystem sandbox
 
 Only paths inside the configured `allowed_paths` (see `config.json`) can be read

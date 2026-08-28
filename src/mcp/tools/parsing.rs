@@ -467,6 +467,29 @@ pub const PAD_SHAPE_HELP: &str = "Valid shapes are: rectangle (or rectangular), 
      circle), oval, octagonal, rounded_rectangle. Matching is case-insensitive and ignores \
      '_'/'-' separators.";
 
+/// Longest component description Altium will accept. A library holding a
+/// longer one is written without complaint but then fails to import, so an
+/// over-length description is refused at the API boundary rather than baked
+/// into a file the user cannot open.
+pub const DESCRIPTION_MAX_LEN: usize = 256;
+
+/// Refuses a description Altium could not import. `kind` names the object
+/// ("Footprint", "Symbol") so the error says which one to shorten, and the
+/// message carries the overshoot so a caller can fix it in one edit.
+///
+/// The limit is counted in characters, matching how Altium states it; for the
+/// ASCII text these fields almost always hold, that is also the byte count.
+pub fn check_description_len(kind: &str, name: &str, desc: &str) -> Result<(), String> {
+    let len = desc.chars().count();
+    if len > DESCRIPTION_MAX_LEN {
+        return Err(format!(
+            "{kind} '{name}' has a {len}-character description, but Altium will not import a library whose description exceeds {DESCRIPTION_MAX_LEN} characters. Shorten it by {} characters.",
+            len - DESCRIPTION_MAX_LEN
+        ));
+    }
+    Ok(())
+}
+
 impl McpServer {
     /// Parses a pad shape name, shared by `write_pcblib` and `update_pad` so the
     /// same spelling is accepted everywhere.
@@ -518,6 +541,13 @@ impl McpServer {
         let mut symbol = Symbol::new(name);
 
         if let Some(desc) = sym_json.get("description").and_then(Value::as_str) {
+            if let Err(e) = check_description_len("Symbol", name, desc) {
+                return Err(ToolCallResult::error_with_context(
+                    ErrorContext::new(operation, e)
+                        .with_filepath(filepath)
+                        .with_component(name),
+                ));
+            }
             symbol.description = desc.to_string();
         }
 
@@ -883,6 +913,13 @@ impl McpServer {
                 {
                     let mut fp = FootprintModel::new(fp_name);
                     if let Some(desc) = fp_json.get("description").and_then(Value::as_str) {
+                        if let Err(e) = check_description_len("Footprint link", fp_name, desc) {
+                            return Err(ToolCallResult::error_with_context(
+                                ErrorContext::new(operation, e)
+                                    .with_filepath(filepath)
+                                    .with_component(name),
+                            ));
+                        }
                         fp.description = desc.to_string();
                     }
                     // Optional PcbLib path -> ModelDatafile0, so Altium can
@@ -998,6 +1035,13 @@ impl McpServer {
         let mut footprint = Footprint::new(name);
 
         if let Some(desc) = fp_json.get("description").and_then(Value::as_str) {
+            if let Err(e) = check_description_len("Footprint", name, desc) {
+                return Err(ToolCallResult::error_with_context(
+                    ErrorContext::new(operation, e)
+                        .with_filepath(filepath)
+                        .with_component(name),
+                ));
+            }
             footprint.description = desc.to_string();
         }
 

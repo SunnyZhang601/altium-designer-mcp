@@ -3492,6 +3492,7 @@ mod tests {
     // contract and needs a test each. Grouped by handler, in call order.
 
     mod failure_paths {
+        use crate::mcp::tools::parsing::DESCRIPTION_MAX_LEN;
         use crate::mcp::tools::test_support::{
             create_test_server, get_result_text, parse_result_json, test_temp_dir,
         };
@@ -3522,6 +3523,171 @@ mod tests {
         /// Writes bytes that are not an OLE compound file, so `open` fails.
         fn write_garbage(path: &std::path::Path) {
             std::fs::write(path, b"not an OLE compound document").unwrap();
+        }
+
+        // ---------------------------------------------------------------
+        // Description length. Altium refuses to import a library whose
+        // component description exceeds 256 characters, and it gives no clue
+        // which component is at fault -- so an over-length description is
+        // rejected here instead of being written into an unopenable file.
+        // ---------------------------------------------------------------
+
+        /// A description of exactly `n` characters.
+        fn desc(n: usize) -> String {
+            "d".repeat(n)
+        }
+
+        #[test]
+        fn a_footprint_description_at_the_limit_is_accepted_and_round_trips() {
+            let dir = test_temp_dir();
+            let server = create_test_server(dir.path());
+            let path = dir.path().join("AtLimit.PcbLib");
+            let at_limit = desc(DESCRIPTION_MAX_LEN);
+
+            let write = server.call_write_pcblib(&json!({
+                "filepath": path.to_string_lossy(),
+                "footprints": [{
+                    "name": "FP", "description": at_limit, "pads": [pad("1")],
+                }],
+            }));
+            assert!(!write.is_error, "{}", get_result_text(&write));
+
+            let read = server.call_read_pcblib(&json!({
+                "filepath": path.to_string_lossy(),
+            }));
+            let got = parse_result_json(&read)["footprints"][0]["description"]
+                .as_str()
+                .unwrap()
+                .to_string();
+            assert_eq!(got.chars().count(), DESCRIPTION_MAX_LEN);
+            assert_eq!(got, at_limit, "a description at the limit must survive");
+        }
+
+        #[test]
+        fn an_over_length_footprint_description_is_refused() {
+            let dir = test_temp_dir();
+            let server = create_test_server(dir.path());
+            let path = dir.path().join("TooLong.PcbLib");
+
+            let write = server.call_write_pcblib(&json!({
+                "filepath": path.to_string_lossy(),
+                "footprints": [{
+                    "name": "WIDE_DESC",
+                    "description": desc(DESCRIPTION_MAX_LEN + 1),
+                    "pads": [pad("1")],
+                }],
+            }));
+            assert!(
+                write.is_error,
+                "one character over the limit must be refused"
+            );
+            let text = get_result_text(&write);
+            assert!(
+                text.contains("WIDE_DESC"),
+                "must name the footprint: {text}"
+            );
+            assert!(
+                text.contains(&DESCRIPTION_MAX_LEN.to_string()),
+                "must state the limit: {text}"
+            );
+            assert!(
+                text.contains("Shorten it by 1 characters"),
+                "must state the overshoot: {text}"
+            );
+            assert!(
+                !path.exists(),
+                "the refusal must come before the file is written"
+            );
+        }
+
+        #[test]
+        fn an_over_length_symbol_description_is_refused() {
+            let dir = test_temp_dir();
+            let server = create_test_server(dir.path());
+            let path = dir.path().join("TooLong.SchLib");
+
+            let mut sym = symbol("WIDE_SYM");
+            sym["description"] = json!(desc(DESCRIPTION_MAX_LEN + 40));
+            let write = server.call_write_schlib(&json!({
+                "filepath": path.to_string_lossy(),
+                "symbols": [sym],
+            }));
+            assert!(
+                write.is_error,
+                "an over-length symbol description must be refused"
+            );
+            let text = get_result_text(&write);
+            assert!(text.contains("WIDE_SYM"), "must name the symbol: {text}");
+            assert!(
+                text.contains("Shorten it by 40 characters"),
+                "must state the overshoot: {text}"
+            );
+            assert!(!path.exists(), "nothing should be written");
+        }
+
+        #[test]
+        fn an_over_length_footprint_link_description_is_refused() {
+            let dir = test_temp_dir();
+            let server = create_test_server(dir.path());
+            let path = dir.path().join("Link.SchLib");
+
+            let mut sym = symbol("SYM");
+            sym["footprints"] = json!([{
+                "name": "LINKED_FP",
+                "description": desc(DESCRIPTION_MAX_LEN + 5),
+            }]);
+            let write = server.call_write_schlib(&json!({
+                "filepath": path.to_string_lossy(),
+                "symbols": [sym],
+            }));
+            assert!(
+                write.is_error,
+                "the description on a footprint link is stored in the SchLib too"
+            );
+            assert!(
+                get_result_text(&write).contains("LINKED_FP"),
+                "must name the link: {}",
+                get_result_text(&write)
+            );
+        }
+
+        /// `validate_library` has to catch libraries this server did not
+        /// author -- an older build, or a description copied in from another
+        /// library -- so the check exists in the validator as well as at the
+        /// API boundary. Built through the library API to sidestep the
+        /// parse-time refusal.
+        #[test]
+        fn validate_library_reports_an_over_length_description_as_an_error() {
+            use crate::altium::pcblib::{Footprint, Pad, PcbLib};
+
+            let dir = test_temp_dir();
+            let server = create_test_server(dir.path());
+            let path = dir.path().join("Legacy.PcbLib");
+
+            let mut fp = Footprint::new("LEGACY_FP");
+            fp.description = desc(DESCRIPTION_MAX_LEN + 90);
+            fp.add_pad(Pad::smd("1", 0.0, 0.0, 1.0, 1.0));
+            let mut lib = PcbLib::new();
+            lib.add(fp);
+            lib.save(&path).expect("writing directly must succeed");
+
+            let result = server.call_validate_library(&json!({
+                "filepath": path.to_string_lossy(),
+            }));
+            let json_out = parse_result_json(&result);
+            assert!(
+                json_out["error_count"].as_u64().unwrap() >= 1,
+                "an unopenable description must count as an error: {json_out}"
+            );
+            let issues = json_out["issues"].as_array().unwrap();
+            assert!(
+                issues.iter().any(|i| {
+                    i["severity"] == "error"
+                        && i["component"] == "LEGACY_FP"
+                        && i["issue"].as_str().unwrap_or("").contains("Description is")
+                }),
+                "the offending component must be named: {json_out}"
+            );
         }
 
         /// Flips a file's read-only bit, used to make a save fail without

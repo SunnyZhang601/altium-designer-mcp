@@ -3,6 +3,7 @@
 use serde_json::{json, Value};
 
 use crate::mcp::server::{McpServer, ToolCallResult};
+use crate::mcp::tools::parsing::DESCRIPTION_MAX_LEN;
 
 /// The footprint kinds a CSV export counts, in reading order — every kind,
 /// pads first (a test holds this to `PrimitiveKind::WRITE_ORDER`).
@@ -45,6 +46,22 @@ const SCH_CSV_KINDS: [crate::altium::schlib::SchPrimitiveKind;
         K::Parameter,
     ]
 };
+
+/// Records the "description too long" finding shared by all four validators,
+/// so the rule and its wording live in one place. An over-length description
+/// stops the whole library importing, hence `error` rather than `warning`.
+fn push_over_length_description(issues: &mut Vec<Value>, name: &str, description: &str) {
+    let desc_len = description.chars().count();
+    if desc_len > DESCRIPTION_MAX_LEN {
+        issues.push(json!({
+            "severity": "error",
+            "component": name,
+            "issue": format!(
+                "Description is {desc_len} characters; Altium will not import a library whose description exceeds {DESCRIPTION_MAX_LEN}"
+            )
+        }));
+    }
+}
 
 impl McpServer {
     // ==================== Library Management Tools ====================
@@ -414,6 +431,9 @@ impl McpServer {
                 }));
             }
 
+            // Altium refuses to import a library whose description is too long.
+            push_over_length_description(&mut issues, name, &fp.description);
+
             // Check for no pads
             if fp.pads.is_empty() {
                 issues.push(json!({
@@ -639,6 +659,9 @@ impl McpServer {
                 }));
             }
 
+            // Altium refuses to import a library whose description is too long.
+            push_over_length_description(&mut issues, name, &symbol.description);
+
             // Check for no pins
             if symbol.pins.is_empty() {
                 issues.push(json!({
@@ -740,6 +763,9 @@ impl McpServer {
                     "issue": "Footprint has empty name"
                 }));
             }
+
+            // Altium refuses to import a library whose description is too long.
+            push_over_length_description(&mut issues, name, &fp.description);
 
             // Check for duplicate pad designators
             let mut seen_designators: HashSet<&str> = HashSet::new();
@@ -858,6 +884,9 @@ impl McpServer {
                     "issue": "Symbol has empty name"
                 }));
             }
+
+            // Altium refuses to import a library whose description is too long.
+            push_over_length_description(&mut issues, name, &symbol.description);
 
             // Check for duplicate pin designators
             let mut seen_designators: HashSet<&str> = HashSet::new();

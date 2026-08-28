@@ -231,7 +231,7 @@ impl McpServer {
                                     },
                                     "description": {
                                         "type": "string",
-                                        "description": "Footprint description"
+                                        "description": "Footprint description. Max 256 characters — Altium will not import a library with a longer description, so an over-length value is refused."
                                     },
                                     "pads": {
                                         "type": "array",
@@ -637,7 +637,7 @@ impl McpServer {
                                 "type": "object",
                                 "properties": {
                                     "name": { "type": "string" },
-                                    "description": { "type": "string" },
+                                    "description": { "type": "string", "description": "Symbol description. Max 256 characters — Altium will not import a library with a longer description, so an over-length value is refused." },
                                     "designator_prefix": { "type": "string", "description": "Reference-designator class letter, e.g. 'R' for resistors, 'U' for ICs. Written as '<prefix>?'. If omitted, falls back to 'component_type' (IEEE 315 / ASME Y14.44 mapping), then to 'U'." },
                                     "designator_x": { "type": "number", "description": "X position of the designator text. Default: -5 (Altium's from-scratch placement)" },
                                     "designator_y": { "type": "number", "description": "Y position of the designator text. Default: 5 (Altium's from-scratch placement)" },
@@ -1911,7 +1911,7 @@ impl McpServer {
                         },
                         "description": {
                             "type": "string",
-                            "description": "Footprint description (optional for add)"
+                            "description": "Footprint description (optional for add). Max 256 characters — Altium will not import a library with a longer description, so an over-length value is refused."
                         },
                         "library_path": {
                             "type": "string",

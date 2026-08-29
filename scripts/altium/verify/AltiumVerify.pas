@@ -99,6 +99,44 @@ begin
     Result := Result + ']';
 end;
 
+{ Returns the currently-open PcbLib's component description lengths (in
+  characters, as Altium reads them) as a JSON array, in iterator order — the
+  same order ComponentNames uses. Altium's importer refuses a library whose
+  description is over-long, so the length it reports for one we wrote is the
+  ground truth for where that limit sits. Returns [] for a SchLib. }
+function DescriptionLengths(const Kind : String) : String;
+var
+    PcbLib  : IPCB_Library;
+    PcbComp : IPCB_LibComponent;
+    PcbIter : IPCB_LibraryIterator;
+    First   : Boolean;
+begin
+    Result := '[';
+    First  := True;
+    try
+        if Kind = 'PCBLIB' then
+        begin
+            PcbLib := PCBServer.GetCurrentPCBLibrary;
+            if PcbLib <> nil then
+            begin
+                PcbIter := PcbLib.LibraryIterator_Create;
+                PcbIter.SetState_FilterAll;
+                PcbComp := PcbIter.FirstPCBObject;
+                while PcbComp <> nil do
+                begin
+                    if not First then Result := Result + ',';
+                    Result := Result + IntToStr(Length(PcbComp.Description));
+                    First := False;
+                    PcbComp := PcbIter.NextPCBObject;
+                end;
+                PcbLib.LibraryIterator_Destroy(PcbIter);
+            end;
+        end;
+    except
+    end;
+    Result := Result + ']';
+end;
+
 procedure Run;
 var
     RequestFile, ResponseFile : String;
@@ -171,7 +209,8 @@ begin
             // The component names Altium itself resolved. "Opened" only proves the
             // file parses; a name check proves the components are reachable and
             // their text survived, which is what a round-trip claim needs.
-            Json := Json + ',"components":' + Names + '}';
+            Json := Json + ',"components":' + Names;
+            Json := Json + ',"description_lengths":' + DescriptionLengths(Kind) + '}';
             Inc(Emitted);
         end;
         Json := Json + ']';

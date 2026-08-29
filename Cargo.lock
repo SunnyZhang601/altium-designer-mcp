@@ -165,7 +165,7 @@ dependencies = [
 [[package]]
 name = "cfb"
 version = "0.14.0"
-source = "git+https://github.com/MatejGomboc/rust-cfb?rev=e3d61a77d2f072cf2ee0a6c65b4859546960bdd0#e3d61a77d2f072cf2ee0a6c65b4859546960bdd0"
+source = "git+https://github.com/mdsteele/rust-cfb?rev=8c1ec76#8c1ec76fb687a0b078032fc4d3f032cfb8c5c796"
 dependencies = [
  "fnv",
  "uuid",

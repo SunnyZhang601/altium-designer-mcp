@@ -111,9 +111,10 @@ cargo = { level = "warn", priority = -1 }
 # Allow multiple versions of transitive dependencies (we can't control these)
 multiple_crate_versions = "allow"
 
-# cfb 0.14 walks the whole mini-stream FAT chain on every access to a small
-# stream, so a library of n components costs O(n^2) to read or write. This is
-# the fix sent upstream as mdsteele/rust-cfb#57's resolution; drop the patch
-# once a release carries it.
+# cfb 0.14.0 walks the whole mini-stream FAT chain on every access to a small
+# stream and every path lookup walks an unbalanced tree, so a library of n
+# components costs O(n^2) to read or write. Fixed upstream in
+# mdsteele/rust-cfb#81 (merged 2026-08-28); pinned to that merge until a
+# release carries it — then bump `cfb` above and delete this block.
 [patch.crates-io]
-cfb = { git = "https://github.com/MatejGomboc/rust-cfb", rev = "e3d61a77d2f072cf2ee0a6c65b4859546960bdd0" }
+cfb = { git = "https://github.com/mdsteele/rust-cfb", rev = "8c1ec76" }

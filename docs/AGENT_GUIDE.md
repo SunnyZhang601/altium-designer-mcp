@@ -52,6 +52,15 @@ behind their pin names. Keep bodies solid — a transparent body is not the fix
 for hidden pin names. Supply `primitive_order` only to reproduce an order you
 read off an existing file; it overrides the default.
 
+## Description length
+
+Altium will not import a library if any component description exceeds **256
+characters** — and it reports neither which library nor which component is at
+fault. `write_pcblib` and `write_schlib` therefore refuse an over-length
+`description` before writing anything, naming the component and the overshoot.
+Keep footprint, symbol and footprint-link descriptions inside the limit; put
+the long-form reasoning in your own notes, not the description field.
+
 ## Filesystem sandbox
 
 Only paths inside the configured `allowed_paths` (see `config.json`) can be read

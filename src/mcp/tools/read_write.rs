@@ -1125,7 +1125,7 @@ impl McpServer {
                 let result = json!({
                     "status": "error",
                     "filepath": filepath,
-                    "error": "Unknown file type. Expected .PcbLib or .SchLib extension.",
+                    "error": super::unsupported_file_type(filepath),
                 });
                 ToolCallResult::error(serde_json::to_string_pretty(&result).unwrap())
             }
@@ -1156,7 +1156,7 @@ impl McpServer {
                 let result = json!({
                     "status": "error",
                     "filepath": filepath,
-                    "error": "Unknown file type. Expected .PcbLib or .SchLib extension.",
+                    "error": super::unsupported_file_type(filepath),
                 });
                 ToolCallResult::error(serde_json::to_string_pretty(&result).unwrap())
             }
@@ -3142,7 +3142,7 @@ mod tests {
                 "filepath": txt.to_string_lossy(),
             }));
             assert!(result.is_error);
-            assert!(get_result_text(&result).contains("Unknown file type"));
+            assert!(get_result_text(&result).contains("Unsupported file type"));
 
             // Unreadable library.
             let missing = dir.path().join("Missing.PcbLib");

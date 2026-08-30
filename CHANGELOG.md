@@ -108,6 +108,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   backup is made — naming the substitute for schematic text. Strings kept in binary fields — a pad
   designator, a PCB text's string, a pin's name and designator — may carry
   one.
+- **A path that is neither a `.PcbLib` nor a `.SchLib` is refused in one
+  voice.** Eighteen tools said it six ways (`Unknown file type`,
+  `Unsupported file type: .csv`, `File has no extension`, …); all now say
+  `Unsupported file type '.csv' for 'Parts.csv': expected .PcbLib or
+  .SchLib`, and a path without an extension says so.
 
 - **A solid symbol body no longer paints over the pin names inside it.**
   `write_schlib` recorded the order it happened to parse its input in — pins

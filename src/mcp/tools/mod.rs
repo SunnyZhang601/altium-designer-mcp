@@ -83,9 +83,23 @@ pub fn page_arguments(arguments: &serde_json::Value) -> Result<(Option<usize>, u
     Ok((limit, offset))
 }
 
+/// The error for a path that is neither a `.PcbLib` nor a `.SchLib`: the
+/// extension the caller gave (or its absence), the file's name and the two
+/// kinds accepted, in the same words from every tool that opens a library.
+pub fn unsupported_file_type(filepath: &str) -> String {
+    let path = std::path::Path::new(filepath);
+    let name = crate::altium::error::sanitise_path_for_client(path);
+    path.extension().and_then(|e| e.to_str()).map_or_else(
+        || format!("'{name}' has no file extension: expected .PcbLib or .SchLib"),
+        |ext| format!("Unsupported file type '.{ext}' for '{name}': expected .PcbLib or .SchLib"),
+    )
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{component_not_found, component_not_found_in, page_arguments};
+    use super::{
+        component_not_found, component_not_found_in, page_arguments, unsupported_file_type,
+    };
     use serde_json::json;
 
     /// Absent means all / from the start; a zero or negative limit, a
@@ -148,6 +162,20 @@ mod tests {
         assert_eq!(
             component_not_found_in("X", "source library", &names(1)),
             "Component 'X' not found in source library. Available: C1"
+        );
+    }
+
+    /// The message names the extension given, or its absence, and only the
+    /// file's name — never its directory.
+    #[test]
+    fn an_unsupported_file_type_is_named_with_the_file_alone() {
+        assert_eq!(
+            unsupported_file_type("C:/secret/dir/Parts.csv"),
+            "Unsupported file type '.csv' for 'Parts.csv': expected .PcbLib or .SchLib"
+        );
+        assert_eq!(
+            unsupported_file_type("/srv/libs/Parts"),
+            "'Parts' has no file extension: expected .PcbLib or .SchLib"
         );
     }
 }

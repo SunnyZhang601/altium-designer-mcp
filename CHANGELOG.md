@@ -88,6 +88,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **An empty `filepath` is refused as empty.** It was reported as "cannot
   create a file at the filesystem root" — the message for a path with no
   parent directory, which an empty path also happens to lack.
+- **A GUID the writer cannot encode is refused, not silently dropped or
+  replaced.** A primitive's or footprint's `guid` that was not 32 hex digits
+  vanished from the file's identity stream without a word, and a pad's
+  `identity_guid` / `identity_guid_b` was quietly swapped for a fresh random
+  one. Each is now refused by record and key — `Pad '1' identity_guid
+  'not-a-guid' is not a GUID ({XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX})` —
+  while any spelling of the 32 hex digits is kept as given. A component body
+  on a layer the model does not know is likewise refused instead of being
+  placed on Top 3D Body, and a body that cannot be built is named by index
+  like every other primitive.
 
 - **A solid symbol body no longer paints over the pin names inside it.**
   `write_schlib` recorded the order it happened to parse its input in — pins

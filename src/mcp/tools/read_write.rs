@@ -1920,6 +1920,49 @@ mod tests {
             }
         }
 
+        /// A footprint's own GUID is held to the GUID form, and a component
+        /// body that cannot be built is refused by kind and index like a pad.
+        #[test]
+        fn write_pcblib_refuses_a_bad_footprint_guid_and_names_a_bad_body_by_index() {
+            let dir = test_temp_dir();
+            let server = create_test_server(dir.path());
+            let path = dir.path().join("Guid.PcbLib");
+            let pad = json!({ "designator": "1", "x": 0.0, "y": 0.0, "width": 1.0, "height": 1.0 });
+
+            let result = server.call_write_pcblib(&json!({
+                "filepath": path.to_string_lossy(),
+                "footprints": [{ "name": "F", "pads": [pad], "guid": "not-a-guid" }],
+            }));
+            assert!(result.is_error);
+            let text = get_result_text(&result);
+            assert!(
+                text.contains("Footprint 'F' guid 'not-a-guid' is not a GUID"),
+                "{text}"
+            );
+
+            let result = server.call_write_pcblib(&json!({
+                "filepath": path.to_string_lossy(),
+                "footprints": [{
+                    "name": "F", "pads": [pad],
+                    "component_bodies": [
+                        { "overall_height": 1.0 },
+                        { "overall_height": 1.0, "layer": "Nowhere" },
+                    ],
+                }],
+            }));
+            assert!(result.is_error);
+            let text = get_result_text(&result);
+            assert!(
+                text.contains("Component body has invalid layer 'Nowhere'"),
+                "{text}"
+            );
+            assert!(
+                text.contains("Failed to parse component body at index 1"),
+                "{text}"
+            );
+            assert!(!path.exists(), "nothing written");
+        }
+
         /// A misspelled key on any `PcbLib` object is refused, not ignored —
         /// an ignored typo is a pad of the wrong shape or a track on the
         /// wrong layer, found in Altium.

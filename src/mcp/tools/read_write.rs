@@ -3526,10 +3526,11 @@ mod tests {
         }
 
         // ---------------------------------------------------------------
-        // Description length. Altium refuses to import a library whose
-        // component description exceeds 256 characters, and it gives no clue
-        // which component is at fault -- so an over-length description is
-        // rejected here instead of being written into an unopenable file.
+        // Description length. The Altium 365 library importer refuses a
+        // component whose description exceeds 256 characters and names
+        // neither library nor component; Altium Designer itself opens and
+        // reads such a library whole. So the write goes ahead and the
+        // post-write validation carries a warning that names the component.
         // ---------------------------------------------------------------
 
         /// A description of exactly `n` characters.
@@ -3537,8 +3538,28 @@ mod tests {
             "d".repeat(n)
         }
 
+        /// The validation warnings a write reported, as `component: issue`.
+        fn warnings(result: &crate::mcp::server::ToolCallResult) -> Vec<String> {
+            parse_result_json(result)["validation"]["issues"]
+                .as_array()
+                .map(|issues| {
+                    issues
+                        .iter()
+                        .filter(|i| i["severity"] == "warning")
+                        .map(|i| {
+                            format!(
+                                "{}: {}",
+                                i["component"].as_str().unwrap_or(""),
+                                i["issue"].as_str().unwrap_or("")
+                            )
+                        })
+                        .collect()
+                })
+                .unwrap_or_default()
+        }
+
         #[test]
-        fn a_footprint_description_at_the_limit_is_accepted_and_round_trips() {
+        fn a_footprint_description_at_the_limit_is_accepted_without_a_warning() {
             let dir = test_temp_dir();
             let server = create_test_server(dir.path());
             let path = dir.path().join("AtLimit.PcbLib");
@@ -3551,6 +3572,13 @@ mod tests {
                 }],
             }));
             assert!(!write.is_error, "{}", get_result_text(&write));
+            assert!(
+                warnings(&write)
+                    .iter()
+                    .all(|w| !w.contains("Description is")),
+                "at the limit is not over it: {:?}",
+                warnings(&write)
+            );
 
             let read = server.call_read_pcblib(&json!({
                 "filepath": path.to_string_lossy(),
@@ -3559,12 +3587,11 @@ mod tests {
                 .as_str()
                 .unwrap()
                 .to_string();
-            assert_eq!(got.chars().count(), DESCRIPTION_MAX_LEN);
             assert_eq!(got, at_limit, "a description at the limit must survive");
         }
 
         #[test]
-        fn an_over_length_footprint_description_is_refused() {
+        fn an_over_length_footprint_description_is_written_with_a_warning() {
             let dir = test_temp_dir();
             let server = create_test_server(dir.path());
             let path = dir.path().join("TooLong.PcbLib");
@@ -3578,30 +3605,43 @@ mod tests {
                 }],
             }));
             assert!(
-                write.is_error,
-                "one character over the limit must be refused"
+                !write.is_error,
+                "Altium Designer opens such a library; it is written: {}",
+                get_result_text(&write)
             );
-            let text = get_result_text(&write);
+            assert!(path.exists(), "the library is written as asked");
+            let found = warnings(&write);
+            let warning = found
+                .iter()
+                .find(|w| w.starts_with("WIDE_DESC: Description is"))
+                .unwrap_or_else(|| panic!("a warning must name the footprint: {found:?}"));
             assert!(
-                text.contains("WIDE_DESC"),
-                "must name the footprint: {text}"
-            );
-            assert!(
-                text.contains(&DESCRIPTION_MAX_LEN.to_string()),
-                "must state the limit: {text}"
-            );
-            assert!(
-                text.contains("Shorten it by 1 characters"),
-                "must state the overshoot: {text}"
+                warning.contains("Altium 365"),
+                "must name the importer: {warning}"
             );
             assert!(
-                !path.exists(),
-                "the refusal must come before the file is written"
+                warning.contains(&DESCRIPTION_MAX_LEN.to_string()),
+                "must state the limit: {warning}"
             );
+            assert!(
+                warning.contains("shorten it by 1 characters"),
+                "must state the overshoot: {warning}"
+            );
+
+            // The description itself is untouched on disk.
+            let read = server.call_read_pcblib(&json!({
+                "filepath": path.to_string_lossy(),
+            }));
+            let got = parse_result_json(&read)["footprints"][0]["description"]
+                .as_str()
+                .unwrap()
+                .chars()
+                .count();
+            assert_eq!(got, DESCRIPTION_MAX_LEN + 1, "written whole, not truncated");
         }
 
         #[test]
-        fn an_over_length_symbol_description_is_refused() {
+        fn an_over_length_symbol_description_is_written_with_a_warning() {
             let dir = test_temp_dir();
             let server = create_test_server(dir.path());
             let path = dir.path().join("TooLong.SchLib");
@@ -3612,21 +3652,19 @@ mod tests {
                 "filepath": path.to_string_lossy(),
                 "symbols": [sym],
             }));
+            assert!(!write.is_error, "{}", get_result_text(&write));
+            let found = warnings(&write);
             assert!(
-                write.is_error,
-                "an over-length symbol description must be refused"
+                found
+                    .iter()
+                    .any(|w| w.starts_with("WIDE_SYM: Description is")
+                        && w.contains("shorten it by 40 characters")),
+                "must name the symbol and the overshoot: {found:?}"
             );
-            let text = get_result_text(&write);
-            assert!(text.contains("WIDE_SYM"), "must name the symbol: {text}");
-            assert!(
-                text.contains("Shorten it by 40 characters"),
-                "must state the overshoot: {text}"
-            );
-            assert!(!path.exists(), "nothing should be written");
         }
 
         #[test]
-        fn an_over_length_footprint_link_description_is_refused() {
+        fn an_over_length_footprint_link_description_is_written_with_a_warning() {
             let dir = test_temp_dir();
             let server = create_test_server(dir.path());
             let path = dir.path().join("Link.SchLib");
@@ -3640,24 +3678,21 @@ mod tests {
                 "filepath": path.to_string_lossy(),
                 "symbols": [sym],
             }));
+            assert!(!write.is_error, "{}", get_result_text(&write));
+            let found = warnings(&write);
             assert!(
-                write.is_error,
-                "the description on a footprint link is stored in the SchLib too"
-            );
-            assert!(
-                get_result_text(&write).contains("LINKED_FP"),
-                "must name the link: {}",
-                get_result_text(&write)
+                found
+                    .iter()
+                    .any(|w| w.starts_with("SYM -> LINKED_FP: Description is")),
+                "the link's description is stored in the SchLib too, and named: {found:?}"
             );
         }
 
-        /// `validate_library` has to catch libraries this server did not
-        /// author -- an older build, or a description copied in from another
-        /// library -- so the check exists in the validator as well as at the
-        /// API boundary. Built through the library API to sidestep the
-        /// parse-time refusal.
+        /// `validate_library` reports the same finding on libraries this
+        /// server did not author — an older build, or a description carried
+        /// in by a copy — as a warning that names the component.
         #[test]
-        fn validate_library_reports_an_over_length_description_as_an_error() {
+        fn validate_library_reports_an_over_length_description_as_a_warning() {
             use crate::altium::pcblib::{Footprint, Pad, PcbLib};
 
             let dir = test_temp_dir();
@@ -3675,16 +3710,20 @@ mod tests {
                 "filepath": path.to_string_lossy(),
             }));
             let json_out = parse_result_json(&result);
-            assert!(
-                json_out["error_count"].as_u64().unwrap() >= 1,
-                "an unopenable description must count as an error: {json_out}"
+            assert_eq!(
+                json_out["error_count"].as_u64().unwrap(),
+                0,
+                "Altium Designer opens it, so not an error: {json_out}"
             );
             let issues = json_out["issues"].as_array().unwrap();
             assert!(
                 issues.iter().any(|i| {
-                    i["severity"] == "error"
+                    i["severity"] == "warning"
                         && i["component"] == "LEGACY_FP"
-                        && i["issue"].as_str().unwrap_or("").contains("Description is")
+                        && i["issue"]
+                            .as_str()
+                            .unwrap_or("")
+                            .contains("shorten it by 90 characters")
                 }),
                 "the offending component must be named: {json_out}"
             );

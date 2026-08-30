@@ -247,7 +247,6 @@ impl McpServer {
 
     /// Reads a `PcbLib` file and returns its contents.
     /// Supports pagination via limit/offset and filtering by `component_name`.
-    #[allow(clippy::cast_possible_truncation)]
     #[allow(clippy::too_many_lines)] // Complex formatting logic for compact mode
     pub(crate) fn call_read_pcblib(&self, arguments: &Value) -> ToolCallResult {
         use crate::altium::pcblib::primitives::PadStackMode;
@@ -264,14 +263,10 @@ impl McpServer {
 
         // Parse optional pagination/filter parameters
         let component_name = arguments.get("component_name").and_then(Value::as_str);
-        let limit = arguments
-            .get("limit")
-            .and_then(Value::as_u64)
-            .map(|v| v as usize);
-        let offset = arguments
-            .get("offset")
-            .and_then(Value::as_u64)
-            .map_or(0, |v| v as usize);
+        let (limit, offset) = match super::page_arguments(arguments) {
+            Ok(page) => page,
+            Err(e) => return ToolCallResult::error(e),
+        };
 
         // Parse compact parameter (default: true - omit redundant per-layer data)
         let compact = arguments
@@ -672,7 +667,6 @@ impl McpServer {
 
     /// Reads a `SchLib` file and returns its contents.
     /// Supports pagination via limit/offset and filtering by `component_name`.
-    #[allow(clippy::cast_possible_truncation)]
     pub(crate) fn call_read_schlib(&self, arguments: &Value) -> ToolCallResult {
         use crate::altium::SchLib;
 
@@ -687,14 +681,10 @@ impl McpServer {
 
         // Parse optional pagination/filter parameters
         let component_name = arguments.get("component_name").and_then(Value::as_str);
-        let limit = arguments
-            .get("limit")
-            .and_then(Value::as_u64)
-            .map(|v| v as usize);
-        let offset = arguments
-            .get("offset")
-            .and_then(Value::as_u64)
-            .map_or(0, |v| v as usize);
+        let (limit, offset) = match super::page_arguments(arguments) {
+            Ok(page) => page,
+            Err(e) => return ToolCallResult::error(e),
+        };
 
         match SchLib::open(filepath) {
             Ok(library) => {
@@ -980,7 +970,7 @@ impl McpServer {
     }
 
     /// Lists component names in a library file.
-    #[allow(clippy::cast_possible_truncation, clippy::too_many_lines)]
+    #[allow(clippy::too_many_lines)]
     pub(crate) fn call_list_components(&self, arguments: &Value) -> ToolCallResult {
         use crate::altium::{PcbLib, SchLib};
 
@@ -994,14 +984,10 @@ impl McpServer {
         }
 
         // Parse optional pagination parameters
-        let limit = arguments
-            .get("limit")
-            .and_then(Value::as_u64)
-            .map(|v| v as usize);
-        let offset = arguments
-            .get("offset")
-            .and_then(Value::as_u64)
-            .map_or(0, |v| v as usize);
+        let (limit, offset) = match super::page_arguments(arguments) {
+            Ok(page) => page,
+            Err(e) => return ToolCallResult::error(e),
+        };
 
         // Parse include_metadata parameter (default: false)
         let include_metadata = arguments

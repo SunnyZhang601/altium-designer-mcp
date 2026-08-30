@@ -301,12 +301,62 @@ fn value_has_schema_type(value: &Value, type_name: &str) -> bool {
         "string" => value.is_string(),
         "boolean" => value.is_boolean(),
         "number" => value.is_number(),
-        "integer" => value.as_f64().is_some_and(|n| n.fract() == 0.0),
+        "integer" => value
+            .as_f64()
+            .is_some_and(|n| n.fract() == 0.0 && n.abs() <= EXACT_INTEGER_MAX),
         "array" => value.is_array(),
         "object" => value.is_object(),
         "null" => value.is_null(),
         // A type this checker does not know is not a reason to refuse.
         _ => true,
+    }
+}
+
+/// The largest magnitude a JSON number can carry as an exact integer
+/// (2^53): a whole float beyond it has no exact integer to become.
+const EXACT_INTEGER_MAX: f64 = 9_007_199_254_740_992.0;
+
+/// Rewrites, in place, every whole float under a schema node typed
+/// `integer` (alone or in a union) into a JSON integer, so a handler
+/// reading the field with `as_u64` / `as_i64` sees `2` where the caller
+/// sent `2.0` — the type check accepts both, as JSON Schema requires, and
+/// the handlers must not disagree with it by reading the float as absent.
+/// Descends the object `properties` and array `items` the schema describes.
+fn canonicalise_integers(value: &mut Value, schema: &Value) {
+    let integer_typed = match &schema["type"] {
+        Value::String(t) => t == "integer",
+        Value::Array(ts) => ts.iter().any(|t| t == "integer"),
+        _ => false,
+    };
+    if integer_typed && value.is_f64() {
+        if let Some(whole) = value
+            .as_f64()
+            .filter(|n| n.fract() == 0.0 && n.abs() <= EXACT_INTEGER_MAX)
+        {
+            #[allow(clippy::cast_possible_truncation)] // bounded by EXACT_INTEGER_MAX
+            let integer = whole as i64;
+            *value = Value::from(integer);
+        }
+    }
+    match value {
+        Value::Object(fields) => {
+            if let Some(properties) = schema["properties"].as_object() {
+                for (key, child) in fields.iter_mut() {
+                    if let Some(child_schema) = properties.get(key) {
+                        canonicalise_integers(child, child_schema);
+                    }
+                }
+            }
+        }
+        Value::Array(elements) => {
+            let items = &schema["items"];
+            if items.is_object() {
+                for element in elements.iter_mut() {
+                    canonicalise_integers(element, items);
+                }
+            }
+        }
+        _ => {}
     }
 }
 
@@ -458,6 +508,16 @@ impl McpServer {
         }
         check_value_against_schema(arguments, schema, "")
             .map_err(|e| format!("{e} (tool '{name}')"))
+    }
+
+    /// Hands the handler the arguments in the form it reads: every whole
+    /// float the schema types as an integer becomes one (see
+    /// [`canonicalise_integers`]). Runs only after [`Self::check_tool_arguments`]
+    /// has passed them.
+    fn canonicalise_tool_arguments(name: &str, arguments: &mut Value) {
+        if let Some(schema) = Self::tool_schemas().get(name) {
+            canonicalise_integers(arguments, schema);
+        }
     }
 
     /// Returns `true` if the named tool mutates a library file on disk.
@@ -901,7 +961,7 @@ impl McpServer {
     fn handle_tools_call(&self, req: &JsonRpcRequest) -> Result<JsonRpcResponse, JsonRpcError> {
         self.require_running(&req.id)?;
 
-        let params: ToolCallParams = req
+        let mut params: ToolCallParams = req
             .params
             .as_ref()
             .map(|p| serde_json::from_value(p.clone()))
@@ -918,7 +978,9 @@ impl McpServer {
 
         // Throttle mutating operations so a runaway AI loop cannot thrash the
         // disk with repeated full-file rewrites + backups. Reads are unmetered.
-        let result = if let Err(e) = Self::check_tool_arguments(&params.name, &params.arguments) {
+        let checked = Self::check_tool_arguments(&params.name, &params.arguments)
+            .map(|()| Self::canonicalise_tool_arguments(&params.name, &mut params.arguments));
+        let result = if let Err(e) = checked {
             ToolCallResult::error(e)
         } else if Self::is_mutating_tool(params.name.as_str()) && !self.rate_limiter.try_acquire() {
             tracing::warn!(
@@ -3144,7 +3206,7 @@ mod tests {
         /// otherwise get `None` and silently take the default.
         #[test]
         fn tools_call_refuses_a_value_of_the_wrong_type_wherever_it_is_nested() {
-            let cases: [(&str, Value, &str); 6] = [
+            let cases: [(&str, Value, &str); 7] = [
                 (
                     "write_schlib",
                     json!({
@@ -3193,6 +3255,11 @@ mod tests {
                     json!({ "filepath": "x.PcbLib", "limit": 2.5 }),
                     "Argument 'limit' must be an integer, got number 2.5",
                 ),
+                (
+                    "list_components",
+                    json!({ "filepath": "x.PcbLib", "limit": 1e20 }),
+                    "Argument 'limit' must be an integer, got number 1e+20",
+                ),
             ];
             for (tool, arguments, expected) in cases {
                 let err = McpServer::check_tool_arguments(tool, &arguments)
@@ -3212,6 +3279,67 @@ mod tests {
         /// however it is written, a union type in either of its forms, a key
         /// the schema does not describe (the tools' allow-lists judge those),
         /// and a string that only looks long.
+        #[test]
+        fn a_whole_float_reaches_the_handler_as_the_integer_it_is() {
+            // Under `integer` (alone or in a union) a whole float becomes an
+            // integer; a fraction, a number-typed field and a float beyond
+            // 2^53 are left as they are.
+            let mut arguments = json!({
+                "filepath": "x.PcbLib",
+                "footprints": [{
+                    "name": "F",
+                    "pads": [{
+                        "designator": "1", "x": 0, "y": 0, "width": 1.5, "height": 1,
+                        "corner_radius_percent": 25.0, "net_index": 65535.0, "flags": 4.0,
+                        "per_layer_corner_radii": [10.0, 20.0],
+                    }],
+                }],
+            });
+            McpServer::canonicalise_tool_arguments("write_pcblib", &mut arguments);
+            let pad = &arguments["footprints"][0]["pads"][0];
+            assert!(pad["corner_radius_percent"].is_i64(), "{pad}");
+            assert_eq!(pad["corner_radius_percent"].as_u64(), Some(25));
+            assert_eq!(pad["net_index"].as_u64(), Some(65535));
+            assert_eq!(pad["flags"].as_u64(), Some(4), "union with integer");
+            assert_eq!(
+                pad["per_layer_corner_radii"][1].as_u64(),
+                Some(20),
+                "array items"
+            );
+            assert!(pad["width"].is_f64(), "a number-typed field is untouched");
+
+            let mut arguments = json!({ "filepath": "x.PcbLib", "limit": 2.0, "offset": 1e300 });
+            McpServer::canonicalise_tool_arguments("list_components", &mut arguments);
+            assert_eq!(arguments["limit"].as_u64(), Some(2));
+            assert!(
+                arguments["offset"].is_f64(),
+                "beyond 2^53 has no exact integer"
+            );
+
+            // End to end: a page of `1.0` pages by one.
+            let dir = test_temp_dir();
+            let path = dir.path().join("Page.PcbLib");
+            create_test_pcblib(&path);
+            let mut server = McpServer::new(vec![dir.path().to_path_buf()]);
+            server.state = ServerState::Running;
+            let r = req(
+                "tools/call",
+                Some(json!({
+                    "name": "list_components",
+                    "arguments": { "filepath": path.to_string_lossy(), "limit": 1.0 },
+                })),
+            );
+            let response = server.handle_tools_call(&r).unwrap();
+            let result = &response.result;
+            assert_ne!(result["is_error"], true, "{result}");
+            let text = result["content"][0]["text"]
+                .as_str()
+                .expect("a text result");
+            let page: Value = serde_json::from_str(text).unwrap();
+            assert_eq!(page["returned_count"], 1, "{page}");
+            assert_eq!(page["has_more"], true, "{page}");
+        }
+
         #[test]
         fn tools_call_accepts_every_type_the_schema_allows() {
             let accepted: [(&str, Value); 5] = [

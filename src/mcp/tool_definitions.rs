@@ -63,11 +63,11 @@ impl McpServer {
                         },
                         "limit": {
                             "type": "integer",
-                            "description": "Optional: maximum number of footprints to return (default: all)"
+                            "description": "Optional: maximum number of footprints to return, 1 or more (default: all)"
                         },
                         "offset": {
                             "type": "integer",
-                            "description": "Optional: skip first N footprints (default: 0)"
+                            "description": "Optional: skip the first N footprints, 0 or more (default: 0)"
                         },
                         "compact": {
                             "type": "boolean",
@@ -110,11 +110,11 @@ impl McpServer {
                         },
                         "limit": {
                             "type": "integer",
-                            "description": "Optional: maximum number of symbols to return (default: all)"
+                            "description": "Optional: maximum number of symbols to return, 1 or more (default: all)"
                         },
                         "offset": {
                             "type": "integer",
-                            "description": "Optional: skip first N symbols (default: 0)"
+                            "description": "Optional: skip the first N symbols, 0 or more (default: 0)"
                         }
                     },
                     "required": ["filepath"]
@@ -138,11 +138,11 @@ impl McpServer {
                         },
                         "limit": {
                             "type": "integer",
-                            "description": "Maximum number of components to return (optional, default: all)"
+                            "description": "Maximum number of components to return, 1 or more (optional, default: all)"
                         },
                         "offset": {
                             "type": "integer",
-                            "description": "Number of components to skip (optional, default: 0)"
+                            "description": "Number of components to skip, 0 or more (optional, default: 0)"
                         },
                         "include_metadata": {
                             "type": "boolean",
@@ -1431,11 +1431,11 @@ impl McpServer {
                         },
                         "limit": {
                             "type": "integer",
-                            "description": "Maximum number of models to list (for 'list' mode)"
+                            "description": "Maximum number of models to list, 1 or more (for 'list' mode)"
                         },
                         "offset": {
                             "type": "integer",
-                            "description": "Number of models to skip when listing (for 'list' mode)"
+                            "description": "Number of models to skip when listing, 0 or more (for 'list' mode)"
                         }
                     },
                     "required": ["filepath"]

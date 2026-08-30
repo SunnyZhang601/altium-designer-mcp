@@ -60,9 +60,68 @@ pub fn component_not_found_in(component_name: &str, which: &str, names: &[String
     format!("Component '{component_name}' not found in {which}. Available: {available}")
 }
 
+/// The `limit` / `offset` pair every paging tool takes: `limit` a whole
+/// number of 1 or more (absent = all), `offset` a whole number of 0 or more
+/// (absent = 0). Anything else is refused by name — `0` would page forever
+/// and a negative used to read as absent.
+pub fn page_arguments(arguments: &serde_json::Value) -> Result<(Option<usize>, usize), String> {
+    use serde_json::Value;
+
+    let whole = |value: &Value| value.as_u64().and_then(|n| usize::try_from(n).ok());
+    let limit =
+        match arguments.get("limit") {
+            None | Some(Value::Null) => None,
+            Some(value) => Some(whole(value).filter(|n| *n >= 1).ok_or_else(|| {
+                format!("limit must be a whole number of 1 or more, got {value}")
+            })?),
+        };
+    let offset = match arguments.get("offset") {
+        None | Some(Value::Null) => 0,
+        Some(value) => whole(value)
+            .ok_or_else(|| format!("offset must be a whole number of 0 or more, got {value}"))?,
+    };
+    Ok((limit, offset))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{component_not_found, component_not_found_in};
+    use super::{component_not_found, component_not_found_in, page_arguments};
+    use serde_json::json;
+
+    /// Absent means all / from the start; a zero or negative limit, a
+    /// negative offset and a fraction are refused by name.
+    #[test]
+    fn page_arguments_take_a_positive_limit_and_a_non_negative_offset() {
+        assert_eq!(page_arguments(&json!({})), Ok((None, 0)));
+        assert_eq!(
+            page_arguments(&json!({ "limit": null, "offset": null })),
+            Ok((None, 0))
+        );
+        assert_eq!(
+            page_arguments(&json!({ "limit": 3, "offset": 1 })),
+            Ok((Some(3), 1))
+        );
+        for (arguments, expected) in [
+            (
+                json!({ "limit": 0 }),
+                "limit must be a whole number of 1 or more, got 0",
+            ),
+            (
+                json!({ "limit": -1 }),
+                "limit must be a whole number of 1 or more, got -1",
+            ),
+            (
+                json!({ "limit": 2.5 }),
+                "limit must be a whole number of 1 or more, got 2.5",
+            ),
+            (
+                json!({ "offset": -1 }),
+                "offset must be a whole number of 0 or more, got -1",
+            ),
+        ] {
+            assert_eq!(page_arguments(&arguments), Err(expected.to_string()));
+        }
+    }
 
     /// The message names the request, then the first ten names on file and
     /// how many more there are; an empty library says so.

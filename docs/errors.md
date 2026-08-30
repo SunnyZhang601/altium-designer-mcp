@@ -139,7 +139,7 @@ The envelope serialises to the standard MCP shape: a `content` array of typed it
     "content": [
         {
             "type": "text",
-            "text": "Component 'SOIC-99' not found in library"
+            "text": "Component 'SOIC-99' not found in library. Available: SOIC-8, SOIC-14, SOIC-16"
         }
     ],
     "isError": true

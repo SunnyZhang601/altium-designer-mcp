@@ -108,6 +108,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   backup is made — naming the substitute for schematic text. Strings kept in binary fields — a pad
   designator, a PCB text's string, a pin's name and designator — may carry
   one.
+- **A font name longer than a Windows face name is refused, not written
+  cut short.** A text's `font_name` or `barcode_font_name` past 31 UTF-16
+  units — all the record's field holds — was truncated on write without a
+  word; it is now refused by field with its length.
 - **A path that is neither a `.PcbLib` nor a `.SchLib` is refused in one
   voice.** Eighteen tools said it six ways (`Unknown file type`,
   `Unsupported file type: .csv`, `File has no extension`, …); all now say

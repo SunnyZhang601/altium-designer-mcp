@@ -3355,6 +3355,17 @@ mod tests {
         // vocabulary happens to use.
         assert_eq!(v7_layer_token(Layer::TopOverlay), "TOPOVERLAY");
         assert_eq!(v7_layer_token(Layer::BottomSolder), "BOTTOMSOLDER");
+        // Every layer has a token, in the vocabulary's shape — including the
+        // ones it has no word for, which take their display name squeezed.
+        for layer in Layer::ALL {
+            let token = v7_layer_token(layer);
+            assert!(!token.is_empty(), "{layer:?}");
+            assert_eq!(
+                token,
+                token.replace(' ', "").to_uppercase(),
+                "{layer:?}: {token}"
+            );
+        }
 
         // A region on Top Courtyard must serialize V7_LAYER=MECHANICAL4.
         let region = Region {
@@ -4362,5 +4373,26 @@ mod tests {
         encode_track(&mut data, &track);
         assert_eq!(data[4], 33);
         assert_eq!(layer_byte(None, Layer::MultiLayer), 74);
+    }
+
+    /// A GUID string is its 32 hex digits, however dashed or braced; any
+    /// other count of digits is no GUID.
+    #[test]
+    fn parse_guid_needs_exactly_32_hex_digits() {
+        assert!(parse_guid("{01234567-89AB-CDEF-0123-456789ABCDEF}").is_some());
+        assert!(parse_guid("0123456789ABCDEF0123456789ABCDEF").is_some());
+        assert!(parse_guid("not-a-guid").is_none());
+        assert!(parse_guid("{01234567-89AB-CDEF-0123-456789ABCDE}").is_none());
+    }
+
+    /// The name block is a Pascal string: a name over 255 bytes is refused
+    /// by the writer, naming the field, rather than written wrapped.
+    #[test]
+    fn encode_data_stream_refuses_a_name_longer_than_a_pascal_string() {
+        let footprint = Footprint::new("N".repeat(256));
+        let err = encode_data_stream(&footprint).expect_err("a 256-byte name must be refused");
+        let text = err.to_string();
+        assert!(text.contains("footprint.name"), "{text}");
+        assert!(text.contains("exceeds maximum of 255 bytes"), "{text}");
     }
 }

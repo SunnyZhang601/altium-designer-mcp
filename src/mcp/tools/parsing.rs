@@ -491,6 +491,20 @@ pub const PAD_SHAPE_HELP: &str = "Valid shapes are: rectangle (or rectangular), 
 /// the warning does.
 pub const DESCRIPTION_MAX_LEN: usize = 256;
 
+/// A Windows font face name: at most 31 UTF-16 units, which is all the
+/// text record's 64-byte field holds beside its terminator. A longer name
+/// would be written cut short without a word.
+fn font_face_name<'a>(name: &'a str, field: &str) -> Result<&'a str, String> {
+    let units = name.encode_utf16().count();
+    if units <= 31 {
+        Ok(name)
+    } else {
+        Err(format!(
+            "{field} '{name}' is {units} UTF-16 units long; a Windows font face name has at most 31"
+        ))
+    }
+}
+
 /// A corner-radius percentage: a whole number from 0 to 100. Anything else —
 /// negative, fractional, over 100 — is refused, since the writer would
 /// otherwise store "no radius" for it without a word.
@@ -2026,10 +2040,10 @@ impl McpServer {
             .get("is_designator")
             .and_then(Value::as_bool)
             .unwrap_or(false);
-        let font_name = json
-            .get("font_name")
-            .and_then(Value::as_str)
-            .map_or_else(|| "Arial".to_string(), ToString::to_string);
+        let font_name = match json.get("font_name").and_then(Value::as_str) {
+            None => "Arial".to_string(),
+            Some(name) => font_face_name(name, "Text font_name")?.to_string(),
+        };
         // The from-scratch default is `BottomLeft` (encodes to the template's
         // 0x03 byte, keeping a default text byte-identical).
         let justification: TextJustification = enum_field(
@@ -2100,11 +2114,10 @@ impl McpServer {
                     .unwrap_or(0),
             )
             .unwrap_or(0),
-            barcode_font_name: json
-                .get("barcode_font_name")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_string(),
+            barcode_font_name: match json.get("barcode_font_name").and_then(Value::as_str) {
+                None => String::new(),
+                Some(name) => font_face_name(name, "Text barcode_font_name")?.to_string(),
+            },
             barcode_inverted: json
                 .get("barcode_inverted")
                 .and_then(Value::as_bool)
@@ -5028,6 +5041,38 @@ mod tests {
             let err = with("hole_shape", json!(5));
             assert!(err.contains("hole_shape must be a string, got 5"), "{err}");
             assert!(err.contains("round, square, slot"), "{err}");
+        }
+
+        /// A font name is held to a Windows face name's 31 UTF-16 units — the
+        /// record's field holds no more — rather than written cut short.
+        #[test]
+        fn parse_text_refuses_a_font_name_longer_than_a_face_name() {
+            let with = |key: &str, name: String| {
+                let mut json = json!({ "x": 0.0, "y": 0.0, "text": "T", "height": 1.0 });
+                json[key] = json!(name);
+                McpServer::parse_text(&json)
+            };
+            let longest = "F".repeat(31);
+            assert_eq!(
+                with("font_name", longest.clone()).unwrap().font_name,
+                longest
+            );
+            assert_eq!(
+                with("barcode_font_name", longest.clone())
+                    .unwrap()
+                    .barcode_font_name,
+                longest
+            );
+            let err = with("font_name", "F".repeat(32)).unwrap_err();
+            assert!(
+                err.contains(
+                    "Text font_name 'FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF' is 32 UTF-16 units long"
+                ),
+                "{err}"
+            );
+            // Units, not chars: a surrogate pair counts twice.
+            let err = with("barcode_font_name", "\u{1F600}".repeat(16)).unwrap_err();
+            assert!(err.contains("is 32 UTF-16 units long"), "{err}");
         }
 
         /// A `PcbLib` text's kind, stroke font and justification refuse an

@@ -4340,6 +4340,38 @@ mod tests {
             assert_eq!(p["has_more"], false);
         }
 
+        /// Each listing handler refuses an unusable page by name itself, so a
+        /// direct caller gets the same answer the dispatch check gives.
+        #[test]
+        fn paging_arguments_are_refused_by_each_listing_handler() {
+            use crate::mcp::tools::test_support::{create_test_pcblib, create_test_schlib};
+
+            let dir = test_temp_dir();
+            let server = create_test_server(dir.path());
+            let pcb = dir.path().join("Page.PcbLib");
+            create_test_pcblib(&pcb);
+            let sch = dir.path().join("Page.SchLib");
+            create_test_schlib(&sch);
+
+            let cases = [
+                server.call_read_pcblib(&json!({ "filepath": pcb.to_string_lossy(), "limit": 0 })),
+                server.call_read_schlib(&json!({ "filepath": sch.to_string_lossy(), "limit": 0 })),
+                server.call_list_components(&json!({
+                    "filepath": pcb.to_string_lossy(), "offset": -1,
+                })),
+            ];
+            let expected = [
+                "limit must be a whole number of 1 or more, got 0",
+                "limit must be a whole number of 1 or more, got 0",
+                "offset must be a whole number of 0 or more, got -1",
+            ];
+            for (result, expected) in cases.iter().zip(expected) {
+                assert!(result.is_error);
+                let text = get_result_text(result);
+                assert!(text.contains(expected), "{text}");
+            }
+        }
+
         /// The read tools resolve a requested component as every other tool
         /// does — regardless of case, answering with the spelling on file —
         /// and report a miss rather than returning an empty success.

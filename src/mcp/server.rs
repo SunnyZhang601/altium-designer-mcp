@@ -293,6 +293,93 @@ pub struct McpServer {
     audit_logger: Option<AuditLogger>,
 }
 
+/// The JSON types a schema `type` names, as `serde_json` sees a value. A
+/// number with no fractional part is an `integer` as well as a `number`, as
+/// JSON Schema has it.
+fn value_has_schema_type(value: &Value, type_name: &str) -> bool {
+    match type_name {
+        "string" => value.is_string(),
+        "boolean" => value.is_boolean(),
+        "number" => value.is_number(),
+        "integer" => value.as_f64().is_some_and(|n| n.fract() == 0.0),
+        "array" => value.is_array(),
+        "object" => value.is_object(),
+        "null" => value.is_null(),
+        // A type this checker does not know is not a reason to refuse.
+        _ => true,
+    }
+}
+
+/// Describes a value's JSON type for an error message.
+const fn json_type_name(value: &Value) -> &'static str {
+    match value {
+        Value::Null => "null",
+        Value::Bool(_) => "boolean",
+        Value::Number(_) => "number",
+        Value::String(_) => "string",
+        Value::Array(_) => "array",
+        Value::Object(_) => "object",
+    }
+}
+
+/// Checks `value` against `schema`'s `type`, and recurses into the object
+/// `properties` and array `items` the schema describes. Keys the schema does
+/// not mention are left alone (the tools' own allow-lists refuse unknown keys
+/// where that matters); `enum`, `required` and ranges are the parsers' to
+/// judge, since several fields accept spellings the schema lists only by
+/// example. `path` names the value in the error (`footprints[0].pads[1].width`).
+fn check_value_against_schema(value: &Value, schema: &Value, path: &str) -> Result<(), String> {
+    let allowed: Vec<&str> = match &schema["type"] {
+        Value::String(t) => vec![t.as_str()],
+        Value::Array(ts) => ts.iter().filter_map(Value::as_str).collect(),
+        _ => Vec::new(),
+    };
+    if !allowed.is_empty() && !allowed.iter().any(|t| value_has_schema_type(value, t)) {
+        let expected = allowed.join(" or ");
+        let shown = match value {
+            Value::String(s) if s.chars().count() > 40 => {
+                format!("\"{}…\"", s.chars().take(40).collect::<String>())
+            }
+            other => other.to_string(),
+        };
+        return Err(format!(
+            "Argument '{path}' must be {} {expected}, got {} {shown}",
+            article(&expected),
+            json_type_name(value)
+        ));
+    }
+    if let (Some(properties), Some(object)) = (schema["properties"].as_object(), value.as_object())
+    {
+        for (key, child) in object {
+            if let Some(child_schema) = properties.get(key) {
+                let child_path = if path.is_empty() {
+                    key.clone()
+                } else {
+                    format!("{path}.{key}")
+                };
+                check_value_against_schema(child, child_schema, &child_path)?;
+            }
+        }
+    }
+    if let (Some(items), Some(array)) = (schema.get("items"), value.as_array()) {
+        if items.is_object() {
+            for (index, element) in array.iter().enumerate() {
+                check_value_against_schema(element, items, &format!("{path}[{index}]"))?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// "a" or "an", for the expected type in a message.
+fn article(noun: &str) -> &'static str {
+    if noun.starts_with(['a', 'e', 'i', 'o', 'u']) {
+        "an"
+    } else {
+        "a"
+    }
+}
+
 impl McpServer {
     /// Creates a new MCP server with the given allowed paths.
     ///
@@ -334,43 +421,43 @@ impl McpServer {
         self
     }
 
-    /// Every tool's documented argument names, from the same schemas
-    /// `tools/list` serves and `docs/TOOLS.md` is generated from.
-    fn tool_argument_names() -> &'static std::collections::HashMap<String, Vec<String>> {
-        static NAMES: std::sync::OnceLock<std::collections::HashMap<String, Vec<String>>> =
+    /// Every tool's input schema, from the same definitions `tools/list`
+    /// serves and `docs/TOOLS.md` is generated from.
+    fn tool_schemas() -> &'static std::collections::HashMap<String, Value> {
+        static SCHEMAS: std::sync::OnceLock<std::collections::HashMap<String, Value>> =
             std::sync::OnceLock::new();
-        NAMES.get_or_init(|| {
+        SCHEMAS.get_or_init(|| {
             Self::get_tool_definitions()
                 .into_iter()
-                .map(|tool| {
-                    let names = tool.input_schema["properties"]
-                        .as_object()
-                        .map(|props| props.keys().cloned().collect())
-                        .unwrap_or_default();
-                    (tool.name, names)
-                })
+                .map(|tool| (tool.name, tool.input_schema))
                 .collect()
         })
     }
 
-    /// Refuses a call carrying an argument the tool's schema does not
-    /// document — a typo (`dryrun`, `compnent_name`) every handler would
-    /// otherwise ignore, silently taking the default. An unknown tool name
-    /// is left to dispatch to report.
+    /// Refuses a call whose arguments the tool's schema does not describe:
+    /// an argument name the schema does not document — a typo (`dryrun`,
+    /// `compnent_name`) every handler would otherwise ignore, silently taking
+    /// the default — or a value of the wrong JSON type anywhere in the
+    /// arguments, however deeply nested, which a handler would likewise
+    /// ignore (`"filled": "true"` is not `true`; `"width": "1.5"` is not
+    /// `1.5`). An unknown tool name is left to dispatch to report.
     fn check_tool_arguments(name: &str, arguments: &Value) -> Result<(), String> {
-        let (Some(known), Some(given)) =
-            (Self::tool_argument_names().get(name), arguments.as_object())
+        let (Some(schema), Some(given)) = (Self::tool_schemas().get(name), arguments.as_object())
         else {
             return Ok(());
         };
-        given
-            .keys()
-            .find(|key| !known.contains(key))
-            .map_or(Ok(()), |unknown| {
-                Err(format!(
-                    "Unknown argument '{unknown}' for tool '{name}'. Accepted arguments are: {known:?}"
-                ))
-            })
+        let known: Vec<&String> = schema["properties"]
+            .as_object()
+            .map(|props| props.keys().collect())
+            .unwrap_or_default();
+        if let Some(unknown) = given.keys().find(|key| !known.contains(key)) {
+            let known: Vec<&str> = known.iter().map(|s| s.as_str()).collect();
+            return Err(format!(
+                "Unknown argument '{unknown}' for tool '{name}'. Accepted arguments are: {known:?}"
+            ));
+        }
+        check_value_against_schema(arguments, schema, "")
+            .map_err(|e| format!("{e} (tool '{name}')"))
     }
 
     /// Returns `true` if the named tool mutates a library file on disk.
@@ -3109,6 +3196,199 @@ mod tests {
             // Non-object arguments and unknown tools are left to dispatch.
             assert!(McpServer::check_tool_arguments("read_pcblib", &json!(null)).is_ok());
             assert!(McpServer::check_tool_arguments("no_such_tool", &json!({ "x": 1 })).is_ok());
+        }
+
+        /// A value of the wrong JSON type is refused wherever it sits, with
+        /// its path: a handler reading it with `as_bool` / `as_f64` would
+        /// otherwise get `None` and silently take the default.
+        #[test]
+        fn tools_call_refuses_a_value_of_the_wrong_type_wherever_it_is_nested() {
+            let cases: [(&str, Value, &str); 6] = [
+                (
+                    "write_schlib",
+                    json!({
+                        "filepath": "x.SchLib",
+                        "symbols": [{
+                            "name": "S",
+                            "rectangles": [{ "x1": 0, "y1": 0, "x2": 1, "y2": 1, "filled": "true" }],
+                        }],
+                    }),
+                    "Argument 'symbols[0].rectangles[0].filled' must be a boolean, got string \"true\"",
+                ),
+                (
+                    "write_pcblib",
+                    json!({
+                        "filepath": "x.PcbLib",
+                        "footprints": [{
+                            "name": "F",
+                            "pads": [{ "designator": "1", "x": 0, "y": 0, "width": "1.5", "height": 1 }],
+                        }],
+                    }),
+                    "Argument 'footprints[0].pads[0].width' must be a number, got string \"1.5\"",
+                ),
+                (
+                    "update_pad",
+                    json!({
+                        "filepath": "x.PcbLib", "component_name": "F", "designator": "1",
+                        "updates": { "width": "wide" },
+                    }),
+                    "Argument 'updates.width' must be a number, got string \"wide\"",
+                ),
+                (
+                    "write_pcblib",
+                    json!({ "filepath": "x.PcbLib", "footprints": "not a list" }),
+                    "Argument 'footprints' must be an array, got string",
+                ),
+                (
+                    "write_schlib",
+                    json!({
+                        "filepath": "x.SchLib",
+                        "symbols": [{ "name": "S", "pins": [{ "designator": 1 }] }],
+                    }),
+                    "Argument 'symbols[0].pins[0].designator' must be a string, got number 1",
+                ),
+                (
+                    "list_components",
+                    json!({ "filepath": "x.PcbLib", "limit": 2.5 }),
+                    "Argument 'limit' must be an integer, got number 2.5",
+                ),
+            ];
+            for (tool, arguments, expected) in cases {
+                let err = McpServer::check_tool_arguments(tool, &arguments)
+                    .expect_err(&format!("{tool}: {arguments} must be refused"));
+                assert!(
+                    err.contains(expected),
+                    "{tool}: expected {expected:?}, got {err:?}"
+                );
+                assert!(
+                    err.contains(tool),
+                    "{tool}: the error names the tool: {err:?}"
+                );
+            }
+        }
+
+        /// What the check must not refuse: a whole number for an `integer`
+        /// however it is written, a union type in either of its forms, a key
+        /// the schema does not describe (the tools' allow-lists judge those),
+        /// and a string that only looks long.
+        #[test]
+        fn tools_call_accepts_every_type_the_schema_allows() {
+            let accepted: [(&str, Value); 5] = [
+                (
+                    "list_components",
+                    json!({ "filepath": "x.PcbLib", "limit": 2.0 }),
+                ),
+                (
+                    "write_pcblib",
+                    json!({
+                        "filepath": "x.PcbLib",
+                        "footprints": [{
+                            "name": "F",
+                            "regions": [
+                                { "layer": "Top Overlay", "vertices": [], "kind": "cutout" },
+                                { "layer": "Top Overlay", "vertices": [], "kind": 4 },
+                            ],
+                            "pads": [{ "designator": "1", "x": 0, "y": 0, "width": 1, "height": 1,
+                                       "flags": "LOCKED" },
+                                     { "designator": "2", "x": 0, "y": 0, "width": 1, "height": 1,
+                                       "flags": 4 }],
+                        }],
+                    }),
+                ),
+                (
+                    "write_schlib",
+                    json!({
+                        "filepath": "x.SchLib",
+                        "symbols": [{ "name": "S", "pins": [{ "designator": "1", "not_in_schema": "?" }] }],
+                    }),
+                ),
+                (
+                    "read_pcblib",
+                    json!({ "filepath": "x.PcbLib", "component_name": "F" }),
+                ),
+                (
+                    "write_pcblib",
+                    json!({ "filepath": "x.PcbLib", "footprints": [{ "name": "F", "description": "d".repeat(500) }] }),
+                ),
+            ];
+            for (tool, arguments) in accepted {
+                assert!(
+                    McpServer::check_tool_arguments(tool, &arguments).is_ok(),
+                    "{tool}: {arguments} must pass the type check"
+                );
+            }
+        }
+
+        /// The schemas describe what the read tools emit: every golden
+        /// library, read through `read_pcblib` / `read_schlib`, passes the
+        /// type check when handed back to `write_pcblib` / `write_schlib`
+        /// and `update_component`. A schema that mislabels a field's type
+        /// would refuse a faithful read-modify-write here.
+        #[test]
+        fn every_golden_read_passes_the_type_check_as_write_arguments() {
+            use crate::mcp::tools::test_support::parse_result_json;
+            let samples = std::path::Path::new("scripts/samples")
+                .canonicalize()
+                .unwrap();
+            let server = McpServer::new(vec![samples.clone()]);
+            let mut checked = 0;
+            for entry in std::fs::read_dir(&samples).unwrap().flatten() {
+                let path = entry.path();
+                let ext = path
+                    .extension()
+                    .map(|e| e.to_string_lossy().to_lowercase())
+                    .unwrap_or_default();
+                let (read, list_key, write_tool, item_key) = match ext.as_str() {
+                    "pcblib" => (
+                        server.call_read_pcblib(&json!({ "filepath": path.to_string_lossy() })),
+                        "footprints",
+                        "write_pcblib",
+                        "footprint",
+                    ),
+                    "schlib" => (
+                        server.call_read_schlib(&json!({ "filepath": path.to_string_lossy() })),
+                        "symbols",
+                        "write_schlib",
+                        "symbol",
+                    ),
+                    _ => continue,
+                };
+                assert!(
+                    !read.is_error,
+                    "{}: {}",
+                    path.display(),
+                    get_result_text(&read)
+                );
+                let components = parse_result_json(&read)[list_key].clone();
+                let write_args =
+                    json!({ "filepath": path.to_string_lossy(), list_key: components });
+                McpServer::check_tool_arguments(write_tool, &write_args).unwrap_or_else(|e| {
+                    panic!(
+                        "{}: a faithful read must pass {write_tool}: {e}",
+                        path.display()
+                    )
+                });
+                for component in write_args[list_key].as_array().unwrap() {
+                    let update_args = json!({
+                        "filepath": path.to_string_lossy(),
+                        "component_name": component["name"],
+                        item_key: component,
+                    });
+                    McpServer::check_tool_arguments("update_component", &update_args)
+                        .unwrap_or_else(|e| {
+                            panic!(
+                                "{}: {} must pass update_component: {e}",
+                                path.display(),
+                                component["name"]
+                            )
+                        });
+                    checked += 1;
+                }
+            }
+            assert!(
+                checked > 100,
+                "the golden samples were read: {checked} components"
+            );
         }
 
         #[test]

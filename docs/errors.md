@@ -178,7 +178,14 @@ Every `tools/call` is first checked against the called tool's own schema (the on
 `tools/list` serves): an argument the schema does not document —
 `Unknown argument 'dryrun' for tool 'update_pad'. Accepted arguments are: [...]` — is
 refused before the handler runs, because every handler would otherwise ignore it and
-silently take the default (`src/mcp/server.rs`, `check_tool_arguments`).
+silently take the default (`src/mcp/server.rs`, `check_tool_arguments`). So is a value
+of the wrong JSON type anywhere in the arguments, named by its path —
+`Argument 'footprints[0].pads[1].width' must be a number, got string "1.5"` — since a
+handler reading `"true"` where it expects `true`, or `"1.5"` where it expects `1.5`,
+would likewise take the default without a word. A whole number is accepted wherever an
+integer is expected (`2` and `2.0` alike); a field the schema types as several kinds
+(`flags`, a region's `kind`) accepts any of them. The parsers judge the *values*
+themselves — spellings, ranges, layer names — and say so in their own errors.
 
 `write_pcblib`, `write_schlib`, `update_component`, `update_pad`, `update_primitive` and
 `batch_update` refuse any JSON object key they do not know —

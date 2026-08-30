@@ -11,6 +11,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A value of the wrong JSON type is refused, not silently defaulted.**
+  Every tool call is now type-checked against the tool's own schema, however
+  deeply the value sits: `"filled": "true"` or `"width": "1.5"` used to read as
+  absent and take the default, so a footprint came out with the wrong pad size
+  and nobody was told. The error names the value by its path.
 - **A description the Altium 365 library importer would refuse is reported
   before the import fails.** That importer turns away a component whose
   description exceeds 256 characters, naming neither the library nor the

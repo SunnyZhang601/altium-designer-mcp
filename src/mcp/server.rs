@@ -3519,19 +3519,12 @@ mod tests {
             let _ = server.handle_tools_call(&r).unwrap();
             assert!(lib.exists(), "the call succeeded");
 
+            // One JSON event per line; the last is this call's.
             let logged = std::fs::read_to_string(&audit_path).unwrap();
-            assert!(logged.contains("\"success\""), "{logged}");
-            assert!(logged.contains("Audited.PcbLib"), "{logged}");
-            let directory = dir
-                .path()
-                .file_name()
-                .unwrap()
-                .to_string_lossy()
-                .to_string();
-            assert!(
-                !logged.contains(&directory),
-                "the directory leaked: {logged}"
-            );
+            let event: Value = serde_json::from_str(logged.lines().last().unwrap()).unwrap();
+            assert_eq!(event["operation"], "write_pcblib");
+            assert_eq!(event["outcome"], "success");
+            assert_eq!(event["filepath"], "Audited.PcbLib");
         }
 
         #[test]

@@ -4697,6 +4697,161 @@ mod tests {
             assert!(err.contains("bottom_left, bottom_center"), "{err}");
         }
 
+        /// Every enum-valued pad field refuses an unrecognised name, naming
+        /// the pad and the field; a non-string value is refused too.
+        #[test]
+        fn parse_pad_refuses_an_unrecognised_enum_name() {
+            let with = |key: &str, value: serde_json::Value| {
+                let mut json = pad_json();
+                json[key] = value;
+                McpServer::parse_pad(&json).unwrap_err()
+            };
+            for (key, accepted) in [
+                ("paste_mask_expansion_mode", "none, manual, from_rule"),
+                ("solder_mask_expansion_mode", "none, manual, from_rule"),
+                ("power_plane_connect_style", "relief, direct, no_connect"),
+                ("stack_mode", "simple, top_middle_bottom, full_stack"),
+            ] {
+                let err = with(key, json!("whatever"));
+                assert!(err.contains(&format!("Pad '1' {key} 'whatever'")), "{err}");
+                assert!(err.contains(accepted), "{err}");
+            }
+            let err = with("hole_shape", json!(5));
+            assert!(err.contains("hole_shape must be a string, got 5"), "{err}");
+            assert!(err.contains("round, square, slot"), "{err}");
+        }
+
+        /// A `PcbLib` text's kind, stroke font and justification refuse an
+        /// unrecognised name each.
+        #[test]
+        fn parse_text_refuses_an_unrecognised_enum_name() {
+            let with = |key: &str, value: &str| {
+                let mut json = json!({ "x": 0.0, "y": 0.0, "text": "T", "height": 1.0 });
+                json[key] = json!(value);
+                McpServer::parse_text(&json).unwrap_err()
+            };
+            let err = with("kind", "hologram");
+            assert!(
+                err.contains("Text kind 'hologram'") && err.contains("stroke, true_type, bar_code"),
+                "{err}"
+            );
+            let err = with("stroke_font", "comic");
+            assert!(
+                err.contains("Text stroke_font 'comic'")
+                    && err.contains("default, sans_serif, serif"),
+                "{err}"
+            );
+            let err = with("justification", "sideways");
+            assert!(
+                err.contains("Text justification 'sideways'") && err.contains("bottom_left"),
+                "{err}"
+            );
+        }
+
+        /// A pin's orientation, electrical type and decorations refuse an
+        /// unrecognised name each, naming the pin.
+        #[test]
+        fn parse_schlib_pin_refuses_an_unrecognised_enum_name() {
+            let with = |key: &str, value: &str| {
+                let mut json = json!({ "designator": "7", "x": 0, "y": 0 });
+                json[key] = json!(value);
+                McpServer::parse_schlib_pin(&json).unwrap_err()
+            };
+            let err = with("orientation", "sideways");
+            assert!(
+                err.contains("Pin '7' orientation 'sideways'")
+                    && err.contains("left, right, up, down"),
+                "{err}"
+            );
+            let err = with("electrical_type", "magic");
+            assert!(
+                err.contains("Pin '7' electrical_type 'magic'") && err.contains("open_collector"),
+                "{err}"
+            );
+            let err = with("symbol_inner_edge", "sparkle");
+            assert!(
+                err.contains("Pin '7' symbol_inner_edge 'sparkle'") && err.contains("clock"),
+                "{err}"
+            );
+        }
+
+        /// A region's holes are refused by name when malformed, its layer
+        /// when unknown, and its kind takes the serde object form a read
+        /// echoes for a non-standard KIND.
+        #[test]
+        fn parse_region_refuses_malformed_holes_and_layers_and_reads_the_other_kind() {
+            use crate::altium::pcblib::RegionKind;
+            let base = || {
+                json!({
+                    "layer": "Top Layer",
+                    "vertices": [
+                        { "x": 0.0, "y": 0.0 }, { "x": 1.0, "y": 0.0 }, { "x": 0.0, "y": 1.0 },
+                    ],
+                })
+            };
+            let with = |key: &str, value: serde_json::Value| {
+                let mut json = base();
+                json[key] = value;
+                McpServer::parse_region(&json)
+            };
+
+            let err = with("holes", json!("nope")).unwrap_err();
+            assert!(err.contains("holes must be an array"), "{err}");
+            let err = with("holes", json!(["nope"])).unwrap_err();
+            assert!(err.contains("hole 0 must be an array of vertices"), "{err}");
+            let err = with(
+                "holes",
+                json!([[{ "x": 0.0, "y": 0.0 }, { "x": 1.0, "y": 0.0 }]]),
+            )
+            .unwrap_err();
+            assert!(
+                err.contains("hole 0 needs at least 3 vertices, got 2"),
+                "{err}"
+            );
+            let err = with(
+                "holes",
+                json!([[{ "x": 0.0, "y": 0.0 }, { "x": 1.0 }, { "x": 0.0, "y": 1.0 }]]),
+            )
+            .unwrap_err();
+            assert!(
+                err.contains("hole 0 vertex 1 is missing a numeric 'y'"),
+                "{err}"
+            );
+
+            let err = with("layer", json!("Nowhere")).unwrap_err();
+            assert!(err.contains("Region has invalid layer 'Nowhere'"), "{err}");
+
+            assert_eq!(
+                with("kind", json!({ "other": 7 })).unwrap().kind,
+                RegionKind::Other(7)
+            );
+            let err = with("kind", json!({ "bogus": 1 })).unwrap_err();
+            assert!(
+                err.contains("Region kind") && err.contains("not recognised"),
+                "{err}"
+            );
+            let err = with("kind", json!(4.5)).unwrap_err();
+            assert!(err.contains("is not a KIND integer"), "{err}");
+        }
+
+        /// A track or arc without a layer lands on the overlay, the layer a
+        /// silkscreen outline is drawn on.
+        #[test]
+        fn a_track_or_arc_without_a_layer_defaults_to_the_top_overlay() {
+            use crate::altium::pcblib::Layer;
+            let track = McpServer::parse_track(&json!({
+                "x1": 0.0, "y1": 0.0, "x2": 1.0, "y2": 0.0, "width": 0.2,
+            }))
+            .expect("track should parse");
+            assert_eq!(track.layer, Layer::TopOverlay);
+            let arc = McpServer::parse_arc(&json!({
+                "x": 0.0, "y": 0.0, "radius": 1.0, "start_angle": 0.0, "end_angle": 90.0,
+                "width": 0.2,
+            }))
+            .expect("arc should parse");
+            assert_eq!(arc.layer, Layer::TopOverlay);
+        }
+
         /// Every value the schemas advertise parses, and every synonym lands
         /// on a name that does: a list entry that no longer matches its enum
         /// would advertise a value the parser then refuses.

@@ -504,6 +504,41 @@ fn schlib_preserves_unique_id_and_pin_accessibility() {
 }
 
 #[test]
+fn a_region_with_a_partial_key_order_still_writes_every_canonical_key() {
+    // A replayed `param_key_order` naming only some keys places those first;
+    // the canonical keys it leaves out are appended, never dropped.
+    use altium_designer_mcp::altium::pcblib::Region;
+
+    let temp_dir = test_temp_dir();
+    let path = temp_dir.path().join("PartialOrder.PcbLib");
+    let mut lib = PcbLib::new();
+    let mut fp = Footprint::new("ORDER");
+    fp.add_pad(Pad::smd("1", 0.0, 0.0, 1.0, 1.0));
+    let mut region = Region::rectangle(0.0, 0.0, 2.0, 1.0, Layer::TopLayer);
+    region.name = "R".to_string();
+    region.param_key_order = vec!["NAME".to_string()];
+    fp.add_region(region);
+    lib.add(fp);
+    lib.save(&path).expect("save");
+
+    let back = PcbLib::open(&path).expect("open");
+    let region = &back.get("ORDER").expect("footprint").regions[0];
+    assert_eq!(region.name, "R");
+    assert_eq!(region.layer, Layer::TopLayer);
+    assert!(
+        region.param_key_order.iter().any(|k| k == "KIND"),
+        "the canonical keys were written: {:?}",
+        region.param_key_order
+    );
+    assert_eq!(
+        region.param_key_order[..3],
+        ["NAME", "V7_LAYER", "KIND"],
+        "the named key first, the rest in canonical order: {:?}",
+        region.param_key_order
+    );
+}
+
+#[test]
 fn a_pipe_in_record_text_is_refused_by_both_writers() {
     // Altium's records are pipe-delimited with no escape, so a '|' in any
     // text the writer places between separators would come back cut. Both

@@ -51,26 +51,9 @@ impl McpServer {
 
         // Find the footprint
         let Some(footprint) = library.get(component_name) else {
-            let available: Vec<_> = library.iter().take(5).map(|f| &f.name).collect();
-            let hint = if available.is_empty() {
-                "Library is empty".to_string()
-            } else {
-                format!(
-                    "Available footprints include: {}{}",
-                    available
-                        .iter()
-                        .map(|s| s.as_str())
-                        .collect::<Vec<_>>()
-                        .join(", "),
-                    if library.len() > 5 {
-                        format!(" (and {} more)", library.len() - 5)
-                    } else {
-                        String::new()
-                    }
-                )
-            };
-            return ToolCallResult::error(format!(
-                "Footprint '{component_name}' not found in library. {hint}"
+            return ToolCallResult::error(super::component_not_found(
+                component_name,
+                &library.names(),
             ));
         };
 
@@ -182,22 +165,9 @@ impl McpServer {
 
         // Find the symbol
         let Some(symbol) = library.get(component_name) else {
-            let available: Vec<_> = library.iter().take(5).map(|s| s.name.as_str()).collect();
-            let hint = if available.is_empty() {
-                "Library is empty".to_string()
-            } else {
-                format!(
-                    "Available symbols include: {}{}",
-                    available.join(", "),
-                    if library.len() > 5 {
-                        format!(" (and {} more)", library.len() - 5)
-                    } else {
-                        String::new()
-                    }
-                )
-            };
-            return ToolCallResult::error(format!(
-                "Symbol '{component_name}' not found in library. {hint}"
+            return ToolCallResult::error(super::component_not_found(
+                component_name,
+                &library.names(),
             ));
         };
 
@@ -1163,7 +1133,7 @@ mod tests {
             // Not-found with >5 candidates -> "and N more" hint.
             let many = dir.path().join("Many.PcbLib");
             let mut lib = PcbLib::new();
-            for i in 0..6 {
+            for i in 0..12 {
                 lib.add(Footprint::new(format!("FP{i}")));
             }
             lib.save(&many).unwrap();
@@ -1171,7 +1141,11 @@ mod tests {
                 "filepath": many.to_string_lossy(), "component_name": "GHOST",
             }));
             assert!(r.is_error);
-            assert!(get_result_text(&r).contains("more"));
+            let text = get_result_text(&r);
+            assert!(
+                text.contains("Available: FP0, FP1") && text.contains("... and 2 more"),
+                "{text}"
+            );
         }
 
         #[test]
@@ -1258,7 +1232,7 @@ mod tests {
             // Not-found with >5 candidates.
             let many = dir.path().join("ManySym.SchLib");
             let mut lib = SchLib::new();
-            for i in 0..6 {
+            for i in 0..12 {
                 lib.add(Symbol::new(format!("S{i}")));
             }
             lib.save(&many).unwrap();
@@ -1266,7 +1240,11 @@ mod tests {
                 "filepath": many.to_string_lossy(), "component_name": "GHOST",
             }));
             assert!(r.is_error);
-            assert!(get_result_text(&r).contains("more"));
+            let text = get_result_text(&r);
+            assert!(
+                text.contains("Available: S0, S1") && text.contains("... and 2 more"),
+                "{text}"
+            );
         }
     }
 
@@ -1307,8 +1285,8 @@ mod tests {
 
     #[test]
     fn rendering_from_an_empty_library_says_so_rather_than_listing_nothing() {
-        // "Available symbols include: " with an empty list reads as a bug in
-        // the tool; naming the real cause points at the file instead.
+        // An empty "Available:" list would read as a bug in the tool; naming
+        // the real cause points at the file instead.
         use crate::altium::schlib::SchLib;
 
         let dir = test_temp_dir();
@@ -1322,7 +1300,7 @@ mod tests {
         }));
         assert!(r.is_error);
         assert!(
-            get_result_text(&r).contains("Library is empty"),
+            get_result_text(&r).contains("Available: none (the library is empty)"),
             "{}",
             get_result_text(&r)
         );

@@ -17,3 +17,7 @@ __pycache__/
 # Altium writes per-document undo history beside the scripts it opens; these
 # are local editor state, not sources.
 scripts/altium/generate/History/
+
+# Coverage and gate artefacts
+lcov.info
+*.log

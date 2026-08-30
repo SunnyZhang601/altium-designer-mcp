@@ -208,13 +208,20 @@ so `update_component` accepts exactly what `write_pcblib` / `write_schlib` do.
 A record the parser cannot build — a required field missing or of the wrong type — is
 likewise refused, never silently left out: the error names the kind and index
 (`Failed to parse region at index 2`, `Failed to parse footprint link at index 0`) in the
-structured context above, and nothing is written.
+structured context above, and nothing is written. An enum-valued field spelt in a way no
+accepted name matches is refused the same way —
+`Pin '7' orientation 'sideways' is not recognised. Accepted values: left, right, up, down`
+— with names matched in any case, with or without separators, plus the documented
+synonyms (`tristate` for `hi_z`).
 
 ### Component Names Are Case-Insensitive
 
 A component name is resolved regardless of case — `get_component` for `lm358` finds
-`LM358` — because that is how the file's own OLE directory compares the storage names a
-component becomes, and how Altium resolves one. Every tool that creates a name
+`LM358`, as does the `component_name` filter of `read_pcblib` / `read_schlib` — because
+that is how the file's own OLE directory compares the storage names a component becomes,
+and how Altium resolves one. A name the library does not hold is an error that names what
+it does — `Component 'LM385' not found in library. Available: LM358, LM324 ... and 12 more`
+— from every tool that looks one up, never an empty success. Every tool that creates a name
 (`copy_component`, `rename_component`, `bulk_rename`, `write_*` append, `import_library`,
 `merge_libraries`, `update_component` with a new name) therefore treats a name differing
 from an existing one only in case as taken, and says so with the spelling on file:

@@ -73,11 +73,9 @@ impl McpServer {
         // The component as the library spells it: the caller may name it in
         // another case, and that spelling must not leak into the file.
         let Some(stored_name) = library.get(component_name).map(|f| f.name.clone()) else {
-            let available: Vec<_> = library.names().into_iter().take(10).collect();
-            return ToolCallResult::error(format!(
-                "Component '{component_name}' not found in library. Available: {}{}",
-                available.join(", "),
-                if library.len() > 10 { "..." } else { "" }
+            return ToolCallResult::error(super::component_not_found(
+                component_name,
+                &library.names(),
             ));
         };
         let component_name = stored_name.as_str();
@@ -237,11 +235,9 @@ impl McpServer {
         // The component as the library spells it: the caller may name it in
         // another case, and that spelling must not leak into the file.
         let Some(stored_name) = library.get(component_name).map(|s| s.name.clone()) else {
-            let available: Vec<_> = library.names().into_iter().take(10).collect();
-            return ToolCallResult::error(format!(
-                "Component '{component_name}' not found in library. Available: {}{}",
-                available.join(", "),
-                if library.len() > 10 { "..." } else { "" }
+            return ToolCallResult::error(super::component_not_found(
+                component_name,
+                &library.names(),
             ));
         };
         let component_name = stored_name.as_str();
@@ -601,19 +597,9 @@ impl McpServer {
         };
 
         let Some(footprint) = library.get(component_name) else {
-            let available: Vec<&str> = library.iter().map(|fp| fp.name.as_str()).collect();
-            return ToolCallResult::error(format!(
-                "Component '{}' not found in library. Available components: {}",
+            return ToolCallResult::error(super::component_not_found(
                 component_name,
-                if available.len() <= 10 {
-                    available.join(", ")
-                } else {
-                    format!(
-                        "{} ... and {} more",
-                        available[..10].join(", "),
-                        available.len() - 10
-                    )
-                }
+                &library.names(),
             ));
         };
 
@@ -640,19 +626,9 @@ impl McpServer {
         };
 
         let Some(symbol) = library.get(component_name) else {
-            let available: Vec<&str> = library.iter().map(|s| s.name.as_str()).collect();
-            return ToolCallResult::error(format!(
-                "Component '{}' not found in library. Available components: {}",
+            return ToolCallResult::error(super::component_not_found(
                 component_name,
-                if available.len() <= 10 {
-                    available.join(", ")
-                } else {
-                    format!(
-                        "{} ... and {} more",
-                        available[..10].join(", "),
-                        available.len() - 10
-                    )
-                }
+                &library.names(),
             ));
         };
 

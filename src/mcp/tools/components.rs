@@ -90,8 +90,9 @@ impl McpServer {
 
         // Find the source component
         let Some(source) = library.get(source_name) else {
-            return ToolCallResult::error(format!(
-                "Source component '{source_name}' not found in library"
+            return ToolCallResult::error(super::component_not_found(
+                source_name,
+                &library.names(),
             ));
         };
 
@@ -172,8 +173,9 @@ impl McpServer {
 
         // Find the source component
         let Some(source) = library.get(source_name) else {
-            return ToolCallResult::error(format!(
-                "Source component '{source_name}' not found in library"
+            return ToolCallResult::error(super::component_not_found(
+                source_name,
+                &library.names(),
             ));
         };
 
@@ -308,7 +310,7 @@ impl McpServer {
 
         // Renamed in place: the component keeps its position in the library.
         if !library.rename(old_name, new_name) {
-            return ToolCallResult::error(format!("Component '{old_name}' not found in library"));
+            return ToolCallResult::error(super::component_not_found(old_name, &library.names()));
         }
 
         // If dry_run, return what would happen without writing
@@ -377,7 +379,7 @@ impl McpServer {
 
         // Renamed in place: the symbol keeps its position in the library.
         if !library.rename(old_name, new_name) {
-            return ToolCallResult::error(format!("Component '{old_name}' not found in library"));
+            return ToolCallResult::error(super::component_not_found(old_name, &library.names()));
         }
 
         // If dry_run, return what would happen without writing
@@ -542,8 +544,10 @@ impl McpServer {
 
         // Find the source component
         let Some(source) = source_library.get(component_name) else {
-            return ToolCallResult::error(format!(
-                "Component '{component_name}' not found in source library"
+            return ToolCallResult::error(super::component_not_found_in(
+                component_name,
+                "source library",
+                &source_library.names(),
             ));
         };
 
@@ -716,8 +720,10 @@ impl McpServer {
 
         // Find the source component
         let Some(source) = source_library.get(component_name) else {
-            return ToolCallResult::error(format!(
-                "Component '{component_name}' not found in source library"
+            return ToolCallResult::error(super::component_not_found_in(
+                component_name,
+                "source library",
+                &source_library.names(),
             ));
         };
 
@@ -1575,7 +1581,7 @@ mod tests {
             "target_name": "NOPE_COPY",
         }));
         assert!(result.is_error);
-        assert!(get_result_text(&result).contains("Source component 'NOPE' not found"));
+        assert!(get_result_text(&result).contains("Component 'NOPE' not found in library"));
     }
 
     #[test]

@@ -59,7 +59,7 @@ impl McpServer {
                         },
                         "component_name": {
                             "type": "string",
-                            "description": "Optional: fetch only this specific footprint by name"
+                            "description": "Optional: fetch only this footprint, by name in any case; a name the library does not hold is an error naming the available footprints"
                         },
                         "limit": {
                             "type": "integer",
@@ -106,7 +106,7 @@ impl McpServer {
                         },
                         "component_name": {
                             "type": "string",
-                            "description": "Optional: fetch only this specific symbol by name"
+                            "description": "Optional: fetch only this symbol, by name in any case; a name the library does not hold is an error naming the available symbols"
                         },
                         "limit": {
                             "type": "integer",

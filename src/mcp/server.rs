@@ -372,12 +372,13 @@ const fn json_type_name(value: &Value) -> &'static str {
     }
 }
 
-/// Checks `value` against `schema`'s `type`, and recurses into the object
+/// Checks `value` against `schema`'s `type` and, for a number, the
+/// `minimum` / `maximum` the schema states, and recurses into the object
 /// `properties` and array `items` the schema describes. Keys the schema does
 /// not mention are left alone (the tools' own allow-lists refuse unknown keys
-/// where that matters); `enum`, `required` and ranges are the parsers' to
-/// judge, since several fields accept spellings the schema lists only by
-/// example. `path` names the value in the error (`footprints[0].pads[1].width`).
+/// where that matters); `enum` and `required` are the parsers' to judge,
+/// since several fields accept spellings the schema lists only by example.
+/// `path` names the value in the error (`footprints[0].pads[1].width`).
 fn check_value_against_schema(value: &Value, schema: &Value, path: &str) -> Result<(), String> {
     let allowed: Vec<&str> = match &schema["type"] {
         Value::String(t) => vec![t.as_str()],
@@ -397,6 +398,27 @@ fn check_value_against_schema(value: &Value, schema: &Value, path: &str) -> Resu
             article(&expected),
             json_type_name(value)
         ));
+    }
+    if let Some(number) = value.as_f64() {
+        let bound = |key: &str| schema.get(key).and_then(Value::as_f64);
+        match (bound("minimum"), bound("maximum")) {
+            (Some(min), Some(max)) if number < min || number > max => {
+                return Err(format!(
+                    "Argument '{path}' must be between {min} and {max}, got {value}"
+                ));
+            }
+            (Some(min), _) if number < min => {
+                return Err(format!(
+                    "Argument '{path}' must be at least {min}, got {value}"
+                ));
+            }
+            (_, Some(max)) if number > max => {
+                return Err(format!(
+                    "Argument '{path}' must be at most {max}, got {value}"
+                ));
+            }
+            _ => {}
+        }
     }
     if let (Some(properties), Some(object)) = (schema["properties"].as_object(), value.as_object())
     {
@@ -3340,6 +3362,64 @@ mod tests {
             assert_eq!(page["has_more"], true, "{page}");
         }
 
+        /// A number outside the `minimum` / `maximum` the schema states is
+        /// refused by path — a floor alone, a ceiling alone, or both.
+        #[test]
+        fn tools_call_refuses_a_value_outside_the_range_the_schema_states() {
+            let cases: [(&str, Value, &str); 5] = [
+                (
+                    "list_components",
+                    json!({ "filepath": "x.PcbLib", "limit": 0 }),
+                    "Argument 'limit' must be at least 1, got 0",
+                ),
+                (
+                    "write_schlib",
+                    json!({
+                        "filepath": "x.SchLib",
+                        "symbols": [{ "name": "S", "pins": [{ "designator": "1", "name": "P",
+                            "x": 0, "y": 0, "length": 10, "orientation": "left",
+                            "owner_part_id": -2 }] }],
+                    }),
+                    "Argument 'symbols[0].pins[0].owner_part_id' must be at least -1, got -2",
+                ),
+                (
+                    "write_schlib",
+                    json!({
+                        "filepath": "x.SchLib",
+                        "symbols": [{ "name": "S", "labels": [{ "x": 0, "y": 0, "text": "T",
+                            "font_id": 0 }] }],
+                    }),
+                    "Argument 'symbols[0].labels[0].font_id' must be between 1 and 255, got 0",
+                ),
+                (
+                    "write_pcblib",
+                    json!({
+                        "filepath": "x.PcbLib",
+                        "footprints": [{ "name": "F", "pads": [{ "designator": "1", "x": 0, "y": 0,
+                            "width": 1, "height": 1, "net_index": 70000 }] }],
+                    }),
+                    "Argument 'footprints[0].pads[0].net_index' must be between 0 and 65535, got 70000",
+                ),
+                (
+                    "write_pcblib",
+                    json!({
+                        "filepath": "x.PcbLib",
+                        "footprints": [{ "name": "F", "pads": [{ "designator": "1", "x": 0, "y": 0,
+                            "width": 1, "height": 1, "flags": -1 }] }],
+                    }),
+                    "Argument 'footprints[0].pads[0].flags' must be at least 0, got -1",
+                ),
+            ];
+            for (tool, arguments, expected) in cases {
+                let err = McpServer::check_tool_arguments(tool, &arguments)
+                    .expect_err(&format!("{tool}: {arguments} must be refused"));
+                assert!(
+                    err.contains(expected),
+                    "{tool}: expected {expected:?}, got {err:?}"
+                );
+            }
+        }
+
         #[test]
         fn tools_call_accepts_every_type_the_schema_allows() {
             let accepted: [(&str, Value); 5] = [
@@ -3922,5 +4002,42 @@ mod tests {
         );
 
         assert!(check(json!([1, "two"]), json!({ "type": "array", "items": true })).is_ok());
+    }
+
+    /// Every integer-typed argument, however deep, states its floor — the
+    /// dispatch check can only refuse an out-of-range value where the schema
+    /// gives the range, and a negative under an unsigned field used to read
+    /// as absent. A pin's position and a model checksum are signed and
+    /// unbounded by design.
+    #[test]
+    fn every_integer_argument_states_its_floor() {
+        fn walk(schema: &Value, path: &str, missing: &mut Vec<String>) {
+            let integer_typed = match &schema["type"] {
+                Value::String(t) => t == "integer",
+                Value::Array(ts) => ts.iter().any(|t| t == "integer"),
+                _ => false,
+            };
+            let key = path.rsplit(['.', '[']).next().unwrap_or(path);
+            let unbounded = matches!(key, "x" | "y" | "model_checksum");
+            if integer_typed && !unbounded && schema.get("minimum").is_none() {
+                missing.push(path.to_string());
+            }
+            if let Some(properties) = schema["properties"].as_object() {
+                for (name, child) in properties {
+                    walk(child, &format!("{path}.{name}"), missing);
+                }
+            }
+            if schema["items"].is_object() {
+                walk(&schema["items"], &format!("{path}[]"), missing);
+            }
+        }
+        let mut missing = Vec::new();
+        for tool in McpServer::get_tool_definitions() {
+            walk(&tool.input_schema, &tool.name, &mut missing);
+        }
+        assert!(
+            missing.is_empty(),
+            "integer arguments without a minimum: {missing:#?}"
+        );
     }
 }

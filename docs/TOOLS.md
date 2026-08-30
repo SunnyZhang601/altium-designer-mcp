@@ -40,8 +40,8 @@ footprints, or use limit/offset for pagination.
 | `compact` | boolean | no | If true (default), omit per-layer pad data when stack_mode is Simple. Set to false for full output. |
 | `component_name` | string | no | Optional: fetch only this footprint, by name in any case; a name the library does not hold is an error naming the available footprints |
 | `filepath` | string | yes | Path to the .PcbLib file |
-| `limit` | integer | no | Optional: maximum number of footprints to return, 1 or more (default: all) |
-| `offset` | integer | no | Optional: skip the first N footprints, 0 or more (default: 0) |
+| `limit` | integer | no | Optional: maximum number of footprints to return, 1 or more (default: all) (min: 1) |
+| `offset` | integer | no | Optional: skip the first N footprints, 0 or more (default: 0) (min: 0) |
 
 ## `read_schlib`
 
@@ -69,8 +69,8 @@ component_name to fetch specific symbols, or use limit/offset for pagination.
 | --- | --- | --- | --- |
 | `component_name` | string | no | Optional: fetch only this symbol, by name in any case; a name the library does not hold is an error naming the available symbols |
 | `filepath` | string | yes | Path to the .SchLib file |
-| `limit` | integer | no | Optional: maximum number of symbols to return, 1 or more (default: all) |
-| `offset` | integer | no | Optional: skip the first N symbols, 0 or more (default: 0) |
+| `limit` | integer | no | Optional: maximum number of symbols to return, 1 or more (default: all) (min: 1) |
+| `offset` | integer | no | Optional: skip the first N symbols, 0 or more (default: 0) (min: 0) |
 
 ## `list_components`
 
@@ -97,8 +97,8 @@ additional details like part_count and pin_count.
 | --- | --- | --- | --- |
 | `filepath` | string | yes | Path to the library file |
 | `include_metadata` | boolean | no | If true, return objects with metadata instead of just names: a footprint's description, one count per primitive kind and has_3d_model; a symbol's description, designator, part_count, pin_count and footprint_count. Default: false |
-| `limit` | integer | no | Maximum number of components to return, 1 or more (optional, default: all) |
-| `offset` | integer | no | Number of components to skip, 0 or more (optional, default: 0) |
+| `limit` | integer | no | Maximum number of components to return, 1 or more (optional, default: all) (min: 1) |
+| `offset` | integer | no | Number of components to skip, 0 or more (optional, default: 0) (min: 0) |
 
 ## `extract_style`
 
@@ -458,10 +458,10 @@ Supports multiple modes: 'auto' (default), 'list', 'extract_all', or 'extract_by
 | --- | --- | --- | --- |
 | `filepath` | string | yes | Path to the .PcbLib file containing embedded 3D models |
 | `footprint_name` | string | no | Footprint name to extract models for (required for 'extract_by_footprint' mode) |
-| `limit` | integer | no | Maximum number of models to list, 1 or more (for 'list' mode) |
+| `limit` | integer | no | Maximum number of models to list, 1 or more (for 'list' mode) (min: 1) |
 | `mode` | enum | no | Extraction mode: 'auto' (default) extracts single model or lists if multiple; 'list' always lists models; 'extract_all' extracts all models to output_dir; 'extract_by_footprint' extracts models used by specified footprint (one of: auto, list, extract_all, extract_by_footprint) |
 | `model` | string | no | Model name (e.g., 'RESC1005X04L.step') or GUID to extract (for 'auto' mode) |
-| `offset` | integer | no | Number of models to skip when listing, 0 or more (for 'list' mode) |
+| `offset` | integer | no | Number of models to skip when listing, 0 or more (for 'list' mode) (min: 0) |
 | `output_path` | string | no | Meaning depends only on the mode, never on how many models match: for 'auto' it is the FILE path for the extracted .step; for 'extract_all' and 'extract_by_footprint' it is a DIRECTORY that receives one file per model (created if absent). Omit to get the model inline as base64 ('auto' single model, or 'extract_by_footprint' with a single match). |
 
 ## `diff_libraries`
@@ -828,8 +828,8 @@ Render an ASCII art visualisation of a footprint from a PcbLib file: every primi
 | --- | --- | --- | --- |
 | `component_name` | string | yes | Name of the footprint to render |
 | `filepath` | string | yes | Path to the Altium PcbLib file |
-| `max_height` | integer | no | Maximum height in characters (default: 40) |
-| `max_width` | integer | no | Maximum width in characters (default: 80) |
+| `max_height` | integer | no | Maximum height in characters (default: 40) (min: 1) |
+| `max_width` | integer | no | Maximum width in characters (default: 80) (min: 1) |
 | `scale` | number | no | Characters per mm (default: 2.0). Higher = more detail |
 
 ## `render_symbol`
@@ -860,9 +860,9 @@ per-kind count line and a legend. Coordinates are in schematic units (10 units =
 | --- | --- | --- | --- |
 | `component_name` | string | yes | Name of the symbol to render |
 | `filepath` | string | yes | Path to the Altium SchLib file |
-| `max_height` | integer | no | Maximum height in characters (default: 40) |
-| `max_width` | integer | no | Maximum width in characters (default: 80) |
-| `part_id` | integer | no | Part ID for multi-part symbols (default: 1, shows all parts if 0) |
+| `max_height` | integer | no | Maximum height in characters (default: 40) (min: 1) |
+| `max_width` | integer | no | Maximum width in characters (default: 80) (min: 1) |
+| `part_id` | integer | no | Part ID for multi-part symbols (default: 1, shows all parts if 0) (min: 0) |
 | `scale` | number | no | Characters per 10 schematic units (default: 1.0). Higher = more detail |
 
 ## `manage_schlib_parameters`
@@ -892,9 +892,9 @@ Manage component parameters in Altium SchLib files. Supports listing, getting, s
 | `filepath` | string | yes | Path to the Altium SchLib file |
 | `hidden` | boolean | no | Whether the parameter is hidden (optional for set, add) |
 | `operation` | enum | yes | Operation to perform: list (all parameters), get (single parameter), set (update value), add (new parameter), delete (remove parameter) (one of: list, get, set, add, delete) |
-| `param_type` | integer | no | Parameter type (0=String, 1=Boolean, 2=Integer, 3=Float) (optional for set, add). Default: 0 |
+| `param_type` | integer | no | Parameter type (0=String, 1=Boolean, 2=Integer, 3=Float) (optional for set, add). Default: 0 (range: 0-3) |
 | `parameter_name` | string | no | Name of the parameter (required for get, set, add, delete); matched without regard to case, as Altium treats parameter names |
-| `read_only_state` | integer | no | Read-only state (0=editable, 1=read-only) (optional for set, add). Default: 0 |
+| `read_only_state` | integer | no | Read-only state (0=editable, 1=read-only) (optional for set, add). Default: 0 (range: 0-1) |
 | `unique_id` | string | no | 8-char Altium unique ID (optional for set, add). Default: auto-generated |
 | `value` | string | no | Parameter value (required for set, add) |
 | `x` | integer | no | X position in schematic units (optional for set, add) |
@@ -1126,6 +1126,6 @@ per_layer_diameters: layers that shared the old diameter follow it, layers with 
 | `component_name` | string | yes | Name of the footprint containing the primitive |
 | `dry_run` | boolean | no | If true, show what would change without saving (default: false) |
 | `filepath` | string | yes | Path to the .PcbLib file |
-| `index` | integer | yes | Zero-based index of the primitive within its type array |
+| `index` | integer | yes | Zero-based index of the primitive within its type array (min: 0) |
 | `primitive_type` | enum | yes | Type of primitive to update. Addressed by `index` into that primitive list. Pads are not here — they have a designator, so use update_pad. (one of: track, arc, region, text, fill, via) |
 | `updates` | object | yes | Properties to update (only specified properties are changed). Valid properties depend on primitive_type — track: x1, y1, x2, y2, width, layer; arc: x/x1, y/y1, radius, start_angle, end_angle, width, layer; text: x, y, height, rotation, text, layer; fill: x/x1, y/y1, x2, y2, rotation, layer; region: layer; via: x, y, diameter, hole_size, from_layer, to_layer. Any other key is refused. |

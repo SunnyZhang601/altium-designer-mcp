@@ -187,8 +187,12 @@ integer is expected (`2` and `2.0` alike, up to 2^53) and handed to the tool as 
 integer it is, so `"limit": 2.0` pages by two; a field the schema types as several kinds
 (`flags`, a region's `kind`) accepts any of them. A page is asked for with a `limit` of
 1 or more and an `offset` of 0 or more — `limit must be a whole number of 1 or more, got 0`
-— since a zero page would never advance and a negative one used to read as absent. The parsers judge the *values*
-themselves — spellings, ranges, layer names — and say so in their own errors. A pad or
+— since a zero page would never advance and a negative one used to read as absent. A
+range the schema states (`minimum` / `maximum`, shown in `docs/TOOLS.md`) is checked at
+the same point — `Argument 'symbols[0].labels[0].font_id' must be between 1 and 255, got 0`
+— since a negative under an unsigned field, or a byte over 255, used to read as absent.
+The parsers judge the rest of the *values* — spellings, geometry, layer names — and say
+so in their own errors. A pad or
 via stack is held to what the record stores — the entry count its stack mode takes
 (3 for `top_middle_bottom`, 32 for `full_stack`; 32 diameters for a stacked via), a shape
 per entry, a whole-number 0-100 corner radius —

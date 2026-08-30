@@ -77,6 +77,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   advances), a negative `limit` or `offset` (read as absent) are refused by
   name on `read_pcblib`, `read_schlib`, `list_components` and
   `list_step_models`.
+- **An integer outside the range its field can hold is refused, not read as
+  absent.** A negative `net_index`, a `font_id` of 0, a `line_width` of 300,
+  an `owner_part_id` below -1: each was read by a handler expecting an
+  unsigned byte or word, got nothing, and took the default. Every integer
+  argument now states its range in the schema (`tools/list` and
+  `docs/TOOLS.md` show it) and the dispatch check refuses a value outside
+  it by path — `Argument 'symbols[0].labels[0].font_id' must be between 1
+  and 255, got 0`. A test holds every integer field to stating its floor.
 - **An empty `filepath` is refused as empty.** It was reported as "cannot
   create a file at the filesystem root" — the message for a path with no
   parent directory, which an empty path also happens to lack.

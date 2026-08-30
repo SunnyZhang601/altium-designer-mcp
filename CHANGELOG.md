@@ -11,17 +11,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **A description longer than Altium will import is now refused instead of
-  written.** Altium silently accepts a component description of any length
-  through the file format but then fails to import the whole library if one
-  exceeds 256 characters, naming neither the library nor the component. So
-  `write_pcblib` and `write_schlib` now reject an over-length `description` at
-  the API boundary, before anything is written, and say which component it is
-  and by how many characters to shorten it. This applies to footprint, symbol
-  and footprint-link descriptions. `validate_library` reports the same thing as
-  an `error` on libraries this server did not author — an older build, or a
-  description copied in from elsewhere — and so does the post-write validation
-  that `copy_component` and `import_library` pass through.
+- **A description the Altium 365 library importer would refuse is reported
+  before the import fails.** That importer turns away a component whose
+  description exceeds 256 characters, naming neither the library nor the
+  component; Altium Designer itself opens and reads such a library whole. So
+  a longer footprint, symbol or footprint-link description is written as
+  asked, and every write, `validate_library` and the post-write validation of
+  every mutating tool report a warning that names the component and says by
+  how many characters to shorten it.
 
 - **A solid symbol body no longer paints over the pin names inside it.**
   `write_schlib` recorded the order it happened to parse its input in — pins

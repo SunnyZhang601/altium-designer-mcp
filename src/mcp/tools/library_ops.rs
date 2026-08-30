@@ -48,18 +48,37 @@ const SCH_CSV_KINDS: [crate::altium::schlib::SchPrimitiveKind;
 };
 
 /// Records the "description too long" finding shared by all four validators,
-/// so the rule and its wording live in one place. An over-length description
-/// stops the whole library importing, hence `error` rather than `warning`.
+/// so the rule and its wording live in one place. A warning, not an error:
+/// Altium Designer opens and reads such a library whole; only the Altium 365
+/// library importer turns it away, naming neither library nor component —
+/// this finding names both and says by how much to shorten.
 fn push_over_length_description(issues: &mut Vec<Value>, name: &str, description: &str) {
     let desc_len = description.chars().count();
     if desc_len > DESCRIPTION_MAX_LEN {
         issues.push(json!({
-            "severity": "error",
+            "severity": "warning",
             "component": name,
             "issue": format!(
-                "Description is {desc_len} characters; Altium will not import a library whose description exceeds {DESCRIPTION_MAX_LEN}"
+                "Description is {desc_len} characters; the Altium 365 library importer refuses a component whose description exceeds {DESCRIPTION_MAX_LEN}, so shorten it by {} characters before importing this library into a workspace",
+                desc_len - DESCRIPTION_MAX_LEN
             )
         }));
+    }
+}
+
+/// The same finding for every footprint link a symbol carries, named
+/// `symbol -> link` so the right description is the one shortened.
+fn push_over_length_link_descriptions(
+    issues: &mut Vec<Value>,
+    name: &str,
+    links: &[crate::altium::schlib::FootprintModel],
+) {
+    for link in links {
+        push_over_length_description(
+            issues,
+            &format!("{name} -> {}", link.name),
+            &link.description,
+        );
     }
 }
 
@@ -431,7 +450,7 @@ impl McpServer {
                 }));
             }
 
-            // Altium refuses to import a library whose description is too long.
+            // The Altium 365 importer refuses an over-length description.
             push_over_length_description(&mut issues, name, &fp.description);
 
             // Check for no pads
@@ -659,8 +678,9 @@ impl McpServer {
                 }));
             }
 
-            // Altium refuses to import a library whose description is too long.
+            // The Altium 365 importer refuses an over-length description.
             push_over_length_description(&mut issues, name, &symbol.description);
+            push_over_length_link_descriptions(&mut issues, name, &symbol.footprints);
 
             // Check for no pins
             if symbol.pins.is_empty() {
@@ -764,7 +784,7 @@ impl McpServer {
                 }));
             }
 
-            // Altium refuses to import a library whose description is too long.
+            // The Altium 365 importer refuses an over-length description.
             push_over_length_description(&mut issues, name, &fp.description);
 
             // Check for duplicate pad designators
@@ -885,8 +905,9 @@ impl McpServer {
                 }));
             }
 
-            // Altium refuses to import a library whose description is too long.
+            // The Altium 365 importer refuses an over-length description.
             push_over_length_description(&mut issues, name, &symbol.description);
+            push_over_length_link_descriptions(&mut issues, name, &symbol.footprints);
 
             // Check for duplicate pin designators
             let mut seen_designators: HashSet<&str> = HashSet::new();

@@ -923,7 +923,7 @@ Manage footprint links in Altium SchLib symbols. Supports listing, adding, and r
 | Name | Type | Required | Description |
 | --- | --- | --- | --- |
 | `component_name` | string | yes | Name of the symbol to manage footprints for |
-| `description` | string | no | Footprint description (optional for add). Max 256 characters — Altium will not import a library with a longer description, so an over-length value is refused. |
+| `description` | string | no | Footprint description (optional for add). Keep to 256 characters if the library will be imported into an Altium 365 workspace — that importer refuses longer ones; a longer description is written and reported as a validation warning. |
 | `filepath` | string | yes | Path to the Altium SchLib file |
 | `footprint_name` | string | no | Footprint name (required for add, remove) |
 | `library_path` | string | no | Optional (add): absolute path to the .PcbLib containing the footprint, written as ModelDatafile0 so Altium can resolve and preview the model. Omit to link by name only (requires the library to be installed/in the project, else 'footprint not found'). |

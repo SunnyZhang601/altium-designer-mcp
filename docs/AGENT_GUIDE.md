@@ -54,12 +54,14 @@ read off an existing file; it overrides the default.
 
 ## Description length
 
-Altium will not import a library if any component description exceeds **256
-characters** — and it reports neither which library nor which component is at
-fault. `write_pcblib` and `write_schlib` therefore refuse an over-length
-`description` before writing anything, naming the component and the overshoot.
-Keep footprint, symbol and footprint-link descriptions inside the limit; put
-the long-form reasoning in your own notes, not the description field.
+The Altium 365 library importer refuses a component whose description exceeds
+**256 characters**, and it names neither the library nor the component at
+fault. Altium Designer itself opens and reads such a library whole, so a longer
+`description` is written as asked — and every write and `validate_library`
+reports it as a warning naming the component and the overshoot. If a library
+is bound for a workspace, keep footprint, symbol and footprint-link
+descriptions inside the limit; put the long-form reasoning in your own notes,
+not the description field.
 
 ## Filesystem sandbox
 

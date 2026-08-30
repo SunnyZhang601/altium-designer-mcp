@@ -2447,9 +2447,9 @@ mod tests {
             create_rich_pcblib(&path);
             let filepath = path.to_string_lossy().to_string();
 
-            // Space-less names bypass Layer::parse and exercise the alias arms.
-            // The last member of each numbered family pins the full range now
-            // that the aliases delegate to Layer::parse canonical names.
+            // The camel-case alias form (`MidLayer5`, the serde spelling) resolves
+            // through the same `Layer::parse` as the spaced Altium name; the last
+            // member of each numbered family pins the full range.
             for (input, expected) in [
                 ("MidLayer5", Layer::MidLayer5),
                 ("InternalPlane2", Layer::InternalPlane2),

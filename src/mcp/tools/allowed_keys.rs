@@ -587,4 +587,159 @@ mod tests {
             "model_3d",
         );
     }
+
+    /// Every key a write or update tool accepts is described — with its
+    /// type — by the tool's own schema, and every key the schema describes
+    /// is one the tool accepts. The dispatch type check can only refuse a
+    /// wrong-typed value under a key the schema knows, so an accepted key
+    /// the schema leaves out is a value nobody checks; a described key the
+    /// parser refuses is a lie in `tools/list`.
+    #[test]
+    #[allow(clippy::too_many_lines)] // one table row per schema object
+    fn every_accepted_key_is_described_by_the_tool_schema() {
+        use crate::mcp::server::McpServer;
+        use crate::mcp::tools::{batch, maintenance};
+        use serde_json::Value;
+        use std::fmt::Write as _;
+
+        let schemas: std::collections::HashMap<String, Value> = McpServer::get_tool_definitions()
+            .into_iter()
+            .map(|t| (t.name, t.input_schema))
+            .collect();
+        let pcb = PcbLibKeys::new();
+        let sch = SchLibKeys::new();
+
+        let footprint_pointers: Vec<(&str, Vec<&str>)> = vec![
+            ("", pcb.footprint.clone()),
+            ("/properties/pads/items", pcb.pad.clone()),
+            ("/properties/vias/items", pcb.via.clone()),
+            ("/properties/tracks/items", pcb.track.clone()),
+            ("/properties/arcs/items", pcb.arc.clone()),
+            ("/properties/fills/items", pcb.fill.clone()),
+            ("/properties/regions/items", pcb.region.clone()),
+            ("/properties/text/items", pcb.text.clone()),
+            (
+                "/properties/component_bodies/items",
+                pcb.component_body.clone(),
+            ),
+            ("/properties/step_model", pcb.model.clone()),
+        ];
+        let symbol_pointers: Vec<(&str, Vec<&str>)> = vec![
+            ("", sch.symbol.clone()),
+            ("/properties/pins/items", sch.pin.clone()),
+            ("/properties/footprints/items", sch.footprint.clone()),
+            ("/properties/parameters/items", PARAMETER.to_vec()),
+            ("/properties/rectangles/items", RECTANGLE.to_vec()),
+            ("/properties/round_rects/items", ROUND_RECT.to_vec()),
+            ("/properties/lines/items", LINE.to_vec()),
+            ("/properties/polylines/items", POLYLINE.to_vec()),
+            ("/properties/polygons/items", POLYGON.to_vec()),
+            ("/properties/arcs/items", ARC.to_vec()),
+            ("/properties/pies/items", PIE.to_vec()),
+            ("/properties/images/items", IMAGE.to_vec()),
+            ("/properties/text_frames/items", TEXT_FRAME.to_vec()),
+            ("/properties/beziers/items", BEZIER.to_vec()),
+            ("/properties/ellipses/items", ELLIPSE.to_vec()),
+            ("/properties/labels/items", LABEL.to_vec()),
+            ("/properties/elliptical_arcs/items", ELLIPTICAL_ARC.to_vec()),
+            ("/properties/ieee_symbols/items", IEEE_SYMBOL.to_vec()),
+        ];
+
+        let mut checks: Vec<(String, Vec<&str>)> = Vec::new();
+        for (pointer, keys) in &footprint_pointers {
+            checks.push((
+                format!("write_pcblib:/properties/footprints/items{pointer}"),
+                keys.clone(),
+            ));
+            checks.push((
+                format!("update_component:/properties/footprint{pointer}"),
+                keys.clone(),
+            ));
+        }
+        for (pointer, keys) in &symbol_pointers {
+            checks.push((
+                format!("write_schlib:/properties/symbols/items{pointer}"),
+                keys.clone(),
+            ));
+            checks.push((
+                format!("update_component:/properties/symbol{pointer}"),
+                keys.clone(),
+            ));
+        }
+        checks.push((
+            "update_pad:/properties/updates".to_string(),
+            maintenance::UPDATE_PAD_KEYS.to_vec(),
+        ));
+        let mut primitive_keys: Vec<&str> = ["track", "arc", "text", "fill", "region", "via"]
+            .iter()
+            .flat_map(|kind| maintenance::update_primitive_keys(kind).unwrap())
+            .copied()
+            .collect();
+        primitive_keys.sort_unstable();
+        primitive_keys.dedup();
+        checks.push((
+            "update_primitive:/properties/updates".to_string(),
+            primitive_keys,
+        ));
+        let mut batch_keys: Vec<&str> = ["update_track_width", "rename_layer", "update_parameters"]
+            .iter()
+            .flat_map(|op| batch::batch_parameter_keys(op).unwrap())
+            .copied()
+            .collect();
+        batch_keys.sort_unstable();
+        batch_keys.dedup();
+        checks.push((
+            "batch_update:/properties/parameters".to_string(),
+            batch_keys,
+        ));
+
+        let mut report = String::new();
+        for (target, accepted) in &checks {
+            let (tool, pointer) = target.split_once(':').unwrap();
+            let Some(schema) = schemas[tool].pointer(pointer) else {
+                let _ = writeln!(report, "{target}: no such schema path");
+                continue;
+            };
+            let described: BTreeSet<&str> = schema["properties"]
+                .as_object()
+                .map(|p| p.keys().map(String::as_str).collect())
+                .unwrap_or_default();
+            let accepted: BTreeSet<&str> = accepted.iter().copied().collect();
+            let undocumented: Vec<&&str> = accepted.difference(&described).collect();
+            let unaccepted: Vec<&&str> = described.difference(&accepted).collect();
+            if !undocumented.is_empty() {
+                let _ = writeln!(
+                    report,
+                    "{target}: accepted but not in the schema: {undocumented:?}"
+                );
+            }
+            if !unaccepted.is_empty() {
+                let _ = writeln!(
+                    report,
+                    "{target}: in the schema but not accepted: {unaccepted:?}"
+                );
+            }
+            for key in accepted.intersection(&described) {
+                if schema["properties"][key].get("type").is_none() {
+                    let _ = writeln!(report, "{target}: '{key}' has no type in the schema");
+                }
+            }
+        }
+        assert!(
+            report.is_empty(),
+            "schema and parser disagree:{}{report}",
+            '\n'
+        );
+
+        // `update_component` takes the very object the write tools take.
+        for (component, tool, list) in [
+            ("footprint", "write_pcblib", "footprints"),
+            ("symbol", "write_schlib", "symbols"),
+        ] {
+            let update = &schemas["update_component"]["properties"][component];
+            let write = &schemas[tool]["properties"][list]["items"];
+            assert_eq!(update["properties"], write["properties"], "{component}");
+            assert_eq!(update["required"], write["required"], "{component}");
+        }
+    }
 }

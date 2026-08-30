@@ -16,6 +16,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   deeply the value sits: `"filled": "true"` or `"width": "1.5"` used to read as
   absent and take the default, so a footprint came out with the wrong pad size
   and nobody was told. The error names the value by its path.
+- **`update_component` is type-checked as thoroughly as `write_pcblib` /
+  `write_schlib`, and every key the tools accept is in `tools/list`.** The
+  tool's `footprint` and `symbol` were untyped objects, so the check above
+  never reached inside them; and some forty keys the parsers accept were
+  missing from the write schemas — the read-modify-write carriers (`guid`,
+  `raw_params`, `primitive_order`, `header_params`, `extra_streams`,
+  `raw_layer_id`, …), the barcode text fields, a via's diameter stack and
+  bottom-face mask expansion, the universal display flags on beziers and
+  elliptical arcs, the `vertices` and `hidden` aliases. One footprint schema
+  and one symbol schema now serve both tools, a test pins them to the parsers'
+  allow-lists key for key, and `pads` / `pins` are no longer claimed as
+  required: neither tool ever required them, and a logo footprint or a power
+  symbol legitimately has none.
 - **A description the Altium 365 library importer would refuse is reported
   before the import fails.** That importer turns away a component whose
   description exceeds 256 characters, naming neither the library nor the

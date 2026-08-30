@@ -4,6 +4,22 @@ use serde_json::{json, Value};
 
 use crate::mcp::server::{McpServer, ToolCallResult};
 
+/// The `parameters` keys each `batch_update` operation reads, or `None` for
+/// an operation it does not know.
+pub fn batch_parameter_keys(operation: &str) -> Option<&'static [&'static str]> {
+    Some(match operation {
+        "update_track_width" => &["from_width", "to_width", "tolerance"],
+        "rename_layer" => &["from_layer", "to_layer"],
+        "update_parameters" => &[
+            "param_name",
+            "param_value",
+            "symbol_filter",
+            "add_if_missing",
+        ],
+        _ => return None,
+    })
+}
+
 impl McpServer {
     /// Performs batch updates across all components in a library file.
     pub(crate) fn call_batch_update(&self, arguments: &Value) -> ToolCallResult {
@@ -20,21 +36,11 @@ impl McpServer {
         };
         // The parameters each operation reads; a key outside them is a typo
         // (`tolerence`) that would otherwise silently fall back to a default.
-        let keys: &[&str] = match operation {
-            "update_track_width" => &["from_width", "to_width", "tolerance"],
-            "rename_layer" => &["from_layer", "to_layer"],
-            "update_parameters" => &[
-                "param_name",
-                "param_value",
-                "symbol_filter",
-                "add_if_missing",
-            ],
-            _ => {
-                return ToolCallResult::error(format!(
-                    "Unknown operation '{operation}'. Valid: update_track_width, rename_layer, \
-                     update_parameters"
-                ))
-            }
+        let Some(keys) = batch_parameter_keys(operation) else {
+            return ToolCallResult::error(format!(
+                "Unknown operation '{operation}'. Valid: update_track_width, rename_layer, \
+                 update_parameters"
+            ));
         };
         if let Err(e) = Self::check_unknown_fields(parameters, keys) {
             return ToolCallResult::error(e);

@@ -2672,6 +2672,63 @@ mod tests {
             }
         }
 
+        /// Neither write tool requires the primitives its schema once
+        /// claimed: a footprint with no pads (a logo, an outline-only
+        /// mechanical part) and a symbol with no pins (a power port, a logo)
+        /// are written and read back whole, so `tools/list` must not mark
+        /// `pads` or `pins` required.
+        #[test]
+        fn a_footprint_without_pads_and_a_symbol_without_pins_are_written() {
+            let schemas: std::collections::HashMap<String, serde_json::Value> =
+                crate::mcp::server::McpServer::get_tool_definitions()
+                    .into_iter()
+                    .map(|t| (t.name, t.input_schema))
+                    .collect();
+            assert_eq!(
+                schemas["write_pcblib"]["properties"]["footprints"]["items"]["required"],
+                json!(["name"])
+            );
+            assert_eq!(
+                schemas["write_schlib"]["properties"]["symbols"]["items"]["required"],
+                json!(["name"])
+            );
+
+            let dir = test_temp_dir();
+            let server = create_test_server(dir.path());
+
+            let pcb = dir.path().join("Logo.PcbLib");
+            let result = server.call_write_pcblib(&json!({
+                "filepath": pcb.to_string_lossy(),
+                "footprints": [{
+                    "name": "LOGO",
+                    "tracks": [{ "x1": 0.0, "y1": 0.0, "x2": 1.0, "y2": 0.0, "width": 0.1, "layer": "Top Overlay" }],
+                }],
+            }));
+            assert!(!result.is_error, "{}", get_result_text(&result));
+            let read = server.call_read_pcblib(&json!({ "filepath": pcb.to_string_lossy() }));
+            assert!(!read.is_error, "{}", get_result_text(&read));
+            let footprint = &parse_result_json(&read)["footprints"][0];
+            assert_eq!(footprint["name"], "LOGO");
+            assert_eq!(footprint["pads"].as_array().map_or(0, Vec::len), 0);
+            assert_eq!(footprint["tracks"].as_array().unwrap().len(), 1);
+
+            let sch = dir.path().join("Logo.SchLib");
+            let result = server.call_write_schlib(&json!({
+                "filepath": sch.to_string_lossy(),
+                "symbols": [{
+                    "name": "LOGO",
+                    "rectangles": [{ "x1": 0, "y1": 0, "x2": 10, "y2": 10 }],
+                }],
+            }));
+            assert!(!result.is_error, "{}", get_result_text(&result));
+            let read = server.call_read_schlib(&json!({ "filepath": sch.to_string_lossy() }));
+            assert!(!read.is_error, "{}", get_result_text(&read));
+            let symbol = &parse_result_json(&read)["symbols"][0];
+            assert_eq!(symbol["name"], "LOGO");
+            assert_eq!(symbol["pins"].as_array().map_or(0, Vec::len), 0);
+            assert_eq!(symbol["rectangles"].as_array().unwrap().len(), 1);
+        }
+
         /// `read_schlib` → `write_schlib` replays a symbol's interleaved
         /// `primitive_order`, so a read-modify-write keeps the source's
         /// record order instead of regrouping records by kind.

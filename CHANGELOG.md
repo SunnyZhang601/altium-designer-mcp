@@ -66,6 +66,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   asked, and every write, `validate_library` and the post-write validation of
   every mutating tool report a warning that names the component and says by
   how many characters to shorten it.
+- **A whole float reaches the tool as the integer it is; a page is asked
+  for with a usable `limit` and `offset`.** The argument check accepts
+  `2.0` wherever an integer is expected, as JSON Schema requires, but every
+  handler then read the field as an integer, got nothing, and took the
+  default — `"limit": 2.0` returned everything, `"corner_radius_percent":
+  25.0` wrote no radius. Whole floats are now rewritten to integers at
+  dispatch, under every integer-typed field the schemas describe (a float
+  beyond 2^53 is refused as no integer). And `limit: 0` (a page that never
+  advances), a negative `limit` or `offset` (read as absent) are refused by
+  name on `read_pcblib`, `read_schlib`, `list_components` and
+  `list_step_models`.
 - **An empty `filepath` is refused as empty.** It was reported as "cannot
   create a file at the filesystem root" — the message for a path with no
   parent directory, which an empty path also happens to lack.

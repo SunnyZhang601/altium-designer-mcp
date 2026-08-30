@@ -9,7 +9,7 @@ impl McpServer {
     // ==================== STEP Model Extraction ====================
 
     /// Extracts embedded STEP 3D models from a `PcbLib` file.
-    #[allow(clippy::too_many_lines, clippy::cast_possible_truncation)]
+    #[allow(clippy::too_many_lines)]
     pub(crate) fn call_extract_step_model(&self, arguments: &Value) -> ToolCallResult {
         use crate::altium::PcbLib;
 
@@ -40,14 +40,10 @@ impl McpServer {
         let footprint_name = arguments.get("footprint_name").and_then(Value::as_str);
 
         // Parse optional pagination parameters (for listing models)
-        let limit = arguments
-            .get("limit")
-            .and_then(Value::as_u64)
-            .map(|v| usize::try_from(v).unwrap_or(usize::MAX));
-        let offset = arguments
-            .get("offset")
-            .and_then(Value::as_u64)
-            .map_or(0, |v| usize::try_from(v).unwrap_or(usize::MAX));
+        let (limit, offset) = match super::page_arguments(arguments) {
+            Ok(page) => page,
+            Err(e) => return ToolCallResult::error(e),
+        };
 
         // Read the library
         let library = match PcbLib::open(filepath) {

@@ -56,10 +56,7 @@ impl McpServer {
                 description,
                 dry_run,
             ),
-            Some(ext) => ToolCallResult::error(format!(
-                "Unsupported file type: .{ext}. Use .PcbLib or .SchLib"
-            )),
-            None => ToolCallResult::error("File has no extension. Use .PcbLib or .SchLib"),
+            _ => ToolCallResult::error(super::unsupported_file_type(filepath)),
         }
     }
 
@@ -273,10 +270,7 @@ impl McpServer {
         match ext.as_deref() {
             Some("pcblib") => Self::rename_pcblib_component(filepath, old_name, new_name, dry_run),
             Some("schlib") => Self::rename_schlib_component(filepath, old_name, new_name, dry_run),
-            Some(ext) => ToolCallResult::error(format!(
-                "Unsupported file type: .{ext}. Use .PcbLib or .SchLib"
-            )),
-            None => ToolCallResult::error("File has no extension. Use .PcbLib or .SchLib"),
+            _ => ToolCallResult::error(super::unsupported_file_type(filepath)),
         }
     }
 
@@ -516,10 +510,7 @@ impl McpServer {
                 new_name,
                 description,
             ),
-            Some(ext) => ToolCallResult::error(format!(
-                "Unsupported file type: .{ext}. Use .PcbLib or .SchLib"
-            )),
-            None => ToolCallResult::error("Files have no extension. Use .PcbLib or .SchLib"),
+            _ => ToolCallResult::error(super::unsupported_file_type(source_filepath)),
         }
     }
 
@@ -889,10 +880,7 @@ impl McpServer {
             Some("schlib") => {
                 Self::merge_schlib_libraries(&source_paths, target_filepath, on_duplicate, dry_run)
             }
-            Some(ext) => ToolCallResult::error(format!(
-                "Unsupported file type: .{ext}. Use .PcbLib or .SchLib"
-            )),
-            None => ToolCallResult::error("Files have no extension. Use .PcbLib or .SchLib"),
+            _ => ToolCallResult::error(super::unsupported_file_type(source_paths[0])),
         }
     }
 
@@ -1290,7 +1278,7 @@ impl McpServer {
                 let result = json!({
                     "status": "error",
                     "filepath": filepath,
-                    "error": "Unknown file type. Expected .PcbLib or .SchLib extension.",
+                    "error": super::unsupported_file_type(filepath),
                 });
                 ToolCallResult::error(serde_json::to_string_pretty(&result).unwrap())
             }
@@ -2578,7 +2566,7 @@ mod tests {
                 "component_order": ["A"],
             }));
             assert!(r.is_error);
-            assert!(get_result_text(&r).contains("Unknown file type"));
+            assert!(get_result_text(&r).contains("Unsupported file type"));
 
             let ghost = dir.path().join("Ghost.PcbLib");
             let r = server.call_reorder_components(&json!({
@@ -2706,7 +2694,7 @@ mod tests {
             let no_ext = server.call_copy_component(&json!({
                 "filepath": fx.path("Lib"), "source_name": "A", "target_name": "B",
             }));
-            assert_error_mentions(&no_ext, "no extension");
+            assert_error_mentions(&no_ext, "no file extension");
 
             let wrong_ext = server.call_copy_component(&json!({
                 "filepath": fx.path("Lib.txt"), "source_name": "A", "target_name": "B",
@@ -2831,7 +2819,7 @@ mod tests {
             let no_ext = server.call_rename_component(&json!({
                 "filepath": fx.path("Lib"), "old_name": "A", "new_name": "B",
             }));
-            assert_error_mentions(&no_ext, "no extension");
+            assert_error_mentions(&no_ext, "no file extension");
 
             let wrong_ext = server.call_rename_component(&json!({
                 "filepath": fx.path("Lib.txt"), "old_name": "A", "new_name": "B",
@@ -2936,7 +2924,7 @@ mod tests {
                 "source_filepath": fx.path("S"), "target_filepath": fx.path("T"),
                 "component_name": "A",
             }));
-            assert_error_mentions(&no_ext, "no extension");
+            assert_error_mentions(&no_ext, "no file extension");
 
             let wrong_ext = server.call_copy_component_cross_library(&json!({
                 "source_filepath": fx.path("S.txt"), "target_filepath": fx.path("T.txt"),
@@ -3100,7 +3088,7 @@ mod tests {
             let no_ext = server.call_merge_libraries(&json!({
                 "source_filepaths": [fx.path("S")], "target_filepath": fx.path("M"),
             }));
-            assert_error_mentions(&no_ext, "no extension");
+            assert_error_mentions(&no_ext, "no file extension");
 
             let wrong_ext = server.call_merge_libraries(&json!({
                 "source_filepaths": [fx.path("S.txt")], "target_filepath": fx.path("M.txt"),
@@ -3219,7 +3207,7 @@ mod tests {
             let wrong_ext = server.call_reorder_components(&json!({
                 "filepath": fx.path("Lib.txt"), "component_order": ["A"],
             }));
-            assert_error_mentions(&wrong_ext, "Unknown file type");
+            assert_error_mentions(&wrong_ext, "Unsupported file type");
         }
 
         #[test]

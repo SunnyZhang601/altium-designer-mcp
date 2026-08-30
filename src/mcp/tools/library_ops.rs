@@ -129,7 +129,7 @@ impl McpServer {
                 let result = json!({
                     "status": "error",
                     "filepath": filepath,
-                    "error": "Unknown file type. Expected .PcbLib or .SchLib extension.",
+                    "error": super::unsupported_file_type(filepath),
                 });
                 ToolCallResult::error(serde_json::to_string_pretty(&result).unwrap())
             }
@@ -384,7 +384,7 @@ impl McpServer {
                 let result = json!({
                     "status": "error",
                     "filepath": filepath,
-                    "error": "Unknown file type. Expected .PcbLib or .SchLib extension.",
+                    "error": super::unsupported_file_type(filepath),
                 });
                 ToolCallResult::error(serde_json::to_string_pretty(&result).unwrap())
             }
@@ -958,7 +958,7 @@ impl McpServer {
                 let result = json!({
                     "status": "error",
                     "filepath": filepath,
-                    "error": "Unknown file type. Expected .PcbLib or .SchLib extension.",
+                    "error": super::unsupported_file_type(filepath),
                 });
                 ToolCallResult::error(serde_json::to_string_pretty(&result).unwrap())
             }
@@ -1728,7 +1728,7 @@ mod tests {
             "component_names": ["A"],
         }));
         assert!(result.is_error);
-        assert!(get_result_text(&result).contains("Unknown file type"));
+        assert!(get_result_text(&result).contains("Unsupported file type"));
     }
 
     // ==================== validate_library ====================
@@ -3250,7 +3250,7 @@ mod tests {
             assert_eq!(parsed["status"], "error");
             assert_eq!(
                 parsed["error"],
-                "Unknown file type. Expected .PcbLib or .SchLib extension."
+                "Unsupported file type '.txt' for 'Notes.txt': expected .PcbLib or .SchLib"
             );
         }
 
@@ -3564,7 +3564,7 @@ mod tests {
             let parsed = parse_result_json(&result);
             assert_eq!(
                 parsed["error"],
-                "Unknown file type. Expected .PcbLib or .SchLib extension."
+                "Unsupported file type '.csv' for 'Parts.csv': expected .PcbLib or .SchLib"
             );
         }
 

@@ -208,7 +208,7 @@ impl McpServer {
                 component_b,
                 include_geometry,
             ),
-            _ => ToolCallResult::error("Unknown file type. Expected .PcbLib or .SchLib extension."),
+            _ => ToolCallResult::error(super::unsupported_file_type(filepath_a)),
         }
     }
 
@@ -2632,7 +2632,7 @@ mod tests {
                 "filepath_b": path.to_string_lossy(), "component_b": "B",
             }));
             assert!(r.is_error);
-            assert!(get_result_text(&r).contains("Unknown file type"));
+            assert!(get_result_text(&r).contains("Unsupported file type"));
         }
 
         // ---- footprint comparison --------------------------------------------

@@ -170,7 +170,7 @@ impl McpServer {
         } else if filepath_lower.ends_with(".schlib") {
             Self::bulk_rename_schlib(filepath, &regex, replacement, dry_run)
         } else {
-            ToolCallResult::error("Unsupported file type. Expected .PcbLib or .SchLib")
+            ToolCallResult::error(super::unsupported_file_type(filepath))
         }
     }
 

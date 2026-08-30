@@ -55,7 +55,7 @@ impl McpServer {
             _ => {
                 let result = json!({
                     "status": "error",
-                    "error": "Unknown file type. Expected .PcbLib or .SchLib extension.",
+                    "error": super::unsupported_file_type(filepath_a),
                 });
                 ToolCallResult::error(serde_json::to_string_pretty(&result).unwrap())
             }
@@ -356,7 +356,7 @@ mod tests {
             "filepath_b": b.to_string_lossy(),
         }));
         assert!(result.is_error);
-        assert!(get_result_text(&result).contains("Unknown file type"));
+        assert!(get_result_text(&result).contains("Unsupported file type"));
     }
 
     #[test]

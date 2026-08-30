@@ -49,7 +49,7 @@ impl McpServer {
                 };
                 self.update_schlib_component(filepath, component_name, sym_json, dry_run)
             }
-            _ => ToolCallResult::error("Unknown file type. Expected .PcbLib or .SchLib extension."),
+            _ => ToolCallResult::error(super::unsupported_file_type(filepath)),
         }
     }
 
@@ -478,8 +478,7 @@ impl McpServer {
                     }
                     Err(e) => errors.push(format!("{path}: {e}")),
                 },
-                Some(ext) => errors.push(format!("{path}: Unsupported file type '.{ext}'")),
-                None => errors.push(format!("{path}: No file extension")),
+                _ => errors.push(super::unsupported_file_type(path)),
             }
         }
 
@@ -580,10 +579,7 @@ impl McpServer {
         match ext.as_deref() {
             Some("pcblib") => Self::get_pcblib_component(filepath, component_name),
             Some("schlib") => Self::get_schlib_component(filepath, component_name),
-            Some(ext) => ToolCallResult::error(format!(
-                "Unsupported file type: .{ext}. Use .PcbLib or .SchLib"
-            )),
-            None => ToolCallResult::error("File has no extension. Use .PcbLib or .SchLib"),
+            _ => ToolCallResult::error(super::unsupported_file_type(filepath)),
         }
     }
 
@@ -707,12 +703,7 @@ impl McpServer {
                     })
                     .collect()
             }
-            Some(ext) => {
-                return ToolCallResult::error(format!(
-                    "Unsupported file type: .{ext}. Use .PcbLib or .SchLib"
-                ))
-            }
-            None => return ToolCallResult::error("File has no extension. Use .PcbLib or .SchLib"),
+            _ => return ToolCallResult::error(super::unsupported_file_type(filepath)),
         };
 
         let all_exist = results
@@ -1968,7 +1959,7 @@ mod tests {
             let wrong_ext = server.call_update_component(&json!({
                 "filepath": fx.path("Lib.txt"), "component_name": "A", "footprint": {},
             }));
-            assert_error_mentions(&wrong_ext, "Unknown file type");
+            assert_error_mentions(&wrong_ext, "Unsupported file type");
         }
 
         #[test]
@@ -2161,7 +2152,7 @@ mod tests {
                 .collect::<Vec<_>>()
                 .join("\n");
             assert!(joined.contains("Unsupported file type"), "{joined}");
-            assert!(joined.contains("No file extension"), "{joined}");
+            assert!(joined.contains("no file extension"), "{joined}");
         }
 
         // ---- get_component ------------------------------------------------------
@@ -2184,7 +2175,7 @@ mod tests {
             let no_ext = server.call_get_component(&json!({
                 "filepath": fx.path("Lib"), "component_name": "A",
             }));
-            assert_error_mentions(&no_ext, "no extension");
+            assert_error_mentions(&no_ext, "no file extension");
 
             let wrong_ext = server.call_get_component(&json!({
                 "filepath": fx.path("Lib.txt"), "component_name": "A",
@@ -2245,7 +2236,7 @@ mod tests {
             let no_ext = server.call_component_exists(&json!({
                 "filepath": fx.path("Lib"), "component_names": ["A"],
             }));
-            assert_error_mentions(&no_ext, "no extension");
+            assert_error_mentions(&no_ext, "no file extension");
 
             let wrong_ext = server.call_component_exists(&json!({
                 "filepath": fx.path("Lib.txt"), "component_names": ["A"],

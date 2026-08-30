@@ -183,8 +183,11 @@ of the wrong JSON type anywhere in the arguments, named by its path —
 `Argument 'footprints[0].pads[1].width' must be a number, got string "1.5"` — since a
 handler reading `"true"` where it expects `true`, or `"1.5"` where it expects `1.5`,
 would likewise take the default without a word. A whole number is accepted wherever an
-integer is expected (`2` and `2.0` alike); a field the schema types as several kinds
-(`flags`, a region's `kind`) accepts any of them. The parsers judge the *values*
+integer is expected (`2` and `2.0` alike, up to 2^53) and handed to the tool as the
+integer it is, so `"limit": 2.0` pages by two; a field the schema types as several kinds
+(`flags`, a region's `kind`) accepts any of them. A page is asked for with a `limit` of
+1 or more and an `offset` of 0 or more — `limit must be a whole number of 1 or more, got 0`
+— since a zero page would never advance and a negative one used to read as absent. The parsers judge the *values*
 themselves — spellings, ranges, layer names — and say so in their own errors. A pad or
 via stack is held to what the record stores — the entry count its stack mode takes
 (3 for `top_middle_bottom`, 32 for `full_stack`; 32 diameters for a stacked via), a shape

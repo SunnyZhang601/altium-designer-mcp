@@ -40,8 +40,8 @@ footprints, or use limit/offset for pagination.
 | `compact` | boolean | no | If true (default), omit per-layer pad data when stack_mode is Simple. Set to false for full output. |
 | `component_name` | string | no | Optional: fetch only this footprint, by name in any case; a name the library does not hold is an error naming the available footprints |
 | `filepath` | string | yes | Path to the .PcbLib file |
-| `limit` | integer | no | Optional: maximum number of footprints to return (default: all) |
-| `offset` | integer | no | Optional: skip first N footprints (default: 0) |
+| `limit` | integer | no | Optional: maximum number of footprints to return, 1 or more (default: all) |
+| `offset` | integer | no | Optional: skip the first N footprints, 0 or more (default: 0) |
 
 ## `read_schlib`
 
@@ -69,8 +69,8 @@ component_name to fetch specific symbols, or use limit/offset for pagination.
 | --- | --- | --- | --- |
 | `component_name` | string | no | Optional: fetch only this symbol, by name in any case; a name the library does not hold is an error naming the available symbols |
 | `filepath` | string | yes | Path to the .SchLib file |
-| `limit` | integer | no | Optional: maximum number of symbols to return (default: all) |
-| `offset` | integer | no | Optional: skip first N symbols (default: 0) |
+| `limit` | integer | no | Optional: maximum number of symbols to return, 1 or more (default: all) |
+| `offset` | integer | no | Optional: skip the first N symbols, 0 or more (default: 0) |
 
 ## `list_components`
 
@@ -97,8 +97,8 @@ additional details like part_count and pin_count.
 | --- | --- | --- | --- |
 | `filepath` | string | yes | Path to the library file |
 | `include_metadata` | boolean | no | If true, return objects with metadata instead of just names: a footprint's description, one count per primitive kind and has_3d_model; a symbol's description, designator, part_count, pin_count and footprint_count. Default: false |
-| `limit` | integer | no | Maximum number of components to return (optional, default: all) |
-| `offset` | integer | no | Number of components to skip (optional, default: 0) |
+| `limit` | integer | no | Maximum number of components to return, 1 or more (optional, default: all) |
+| `offset` | integer | no | Number of components to skip, 0 or more (optional, default: 0) |
 
 ## `extract_style`
 
@@ -458,10 +458,10 @@ Supports multiple modes: 'auto' (default), 'list', 'extract_all', or 'extract_by
 | --- | --- | --- | --- |
 | `filepath` | string | yes | Path to the .PcbLib file containing embedded 3D models |
 | `footprint_name` | string | no | Footprint name to extract models for (required for 'extract_by_footprint' mode) |
-| `limit` | integer | no | Maximum number of models to list (for 'list' mode) |
+| `limit` | integer | no | Maximum number of models to list, 1 or more (for 'list' mode) |
 | `mode` | enum | no | Extraction mode: 'auto' (default) extracts single model or lists if multiple; 'list' always lists models; 'extract_all' extracts all models to output_dir; 'extract_by_footprint' extracts models used by specified footprint (one of: auto, list, extract_all, extract_by_footprint) |
 | `model` | string | no | Model name (e.g., 'RESC1005X04L.step') or GUID to extract (for 'auto' mode) |
-| `offset` | integer | no | Number of models to skip when listing (for 'list' mode) |
+| `offset` | integer | no | Number of models to skip when listing, 0 or more (for 'list' mode) |
 | `output_path` | string | no | Meaning depends only on the mode, never on how many models match: for 'auto' it is the FILE path for the extracted .step; for 'extract_all' and 'extract_by_footprint' it is a DIRECTORY that receives one file per model (created if absent). Omit to get the model inline as base64 ('auto' single model, or 'extract_by_footprint' with a single match). |
 
 ## `diff_libraries`

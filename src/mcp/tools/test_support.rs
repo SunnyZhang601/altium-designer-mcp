@@ -1,8 +1,8 @@
-//! Shared fixtures for the colocated MCP tool handler tests.
+//! Shared fixtures for the MCP server and tool handler tests.
 //!
-//! Compiled only under `cfg(test)`. Mirrors the helpers in the `server.rs`
-//! test module so each `tools/*.rs` file can host its own focused test module
-//! without duplicating fixture code.
+//! Compiled only under `cfg(test)`. The `server.rs` test module and each
+//! `tools/*.rs` test module draw on these rather than carrying copies of
+//! their own, so a fixture is defined once.
 
 use serde_json::Value;
 use tempfile::TempDir;

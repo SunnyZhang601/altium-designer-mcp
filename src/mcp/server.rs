@@ -1029,71 +1029,9 @@ mod tests {
     use super::*;
     use crate::altium::pcblib::{Footprint, Pad, PcbLib};
     use crate::altium::schlib::{Pin, PinOrientation, Rectangle, SchLib, Symbol};
-    use tempfile::TempDir;
-
-    /// Creates a temporary directory inside `.tmp/` for test isolation.
-    /// The directory is automatically cleaned up when the returned `TempDir` is dropped.
-    ///
-    /// Uses an absolute path to avoid issues with parallel test execution.
-    fn test_temp_dir() -> TempDir {
-        let cwd = std::env::current_dir().expect("Failed to get current directory");
-        let tmp_root = cwd.join(".tmp");
-        std::fs::create_dir_all(&tmp_root).expect("Failed to create .tmp directory");
-        tempfile::tempdir_in(&tmp_root).expect("Failed to create temp dir")
-    }
-
-    /// Helper to create a server with a temp directory as allowed path.
-    fn create_test_server(temp_path: &std::path::Path) -> McpServer {
-        McpServer::new(vec![temp_path.to_path_buf()])
-    }
-
-    /// Helper to create a test `PcbLib` with sample footprints.
-    fn create_test_pcblib(path: &std::path::Path) {
-        let mut lib = PcbLib::new();
-
-        let mut fp1 = Footprint::new("CHIP_0402");
-        fp1.description = "0402 chip resistor".to_string();
-        fp1.add_pad(Pad::smd("1", -0.5, 0.0, 0.6, 0.5));
-        fp1.add_pad(Pad::smd("2", 0.5, 0.0, 0.6, 0.5));
-        lib.add(fp1);
-
-        let mut fp2 = Footprint::new("CHIP_0603");
-        fp2.description = "0603 chip resistor".to_string();
-        fp2.add_pad(Pad::smd("1", -0.8, 0.0, 0.8, 0.8));
-        fp2.add_pad(Pad::smd("2", 0.8, 0.0, 0.8, 0.8));
-        lib.add(fp2);
-
-        lib.save(path).expect("Failed to create test PcbLib");
-    }
-
-    /// Helper to create a test `SchLib` with sample symbols.
-    fn create_test_schlib(path: &std::path::Path) {
-        let mut lib = SchLib::new();
-
-        let mut sym1 = Symbol::new("RESISTOR");
-        sym1.description = "Generic resistor".to_string();
-        sym1.designator = "R?".to_string();
-        sym1.add_pin(Pin::new("1", "1", -20, 0, 10, PinOrientation::Left));
-        sym1.add_pin(Pin::new("2", "2", 20, 0, 10, PinOrientation::Right));
-        sym1.add_rectangle(Rectangle::new(-10, -5, 10, 5));
-        lib.add(sym1);
-
-        let mut sym2 = Symbol::new("CAPACITOR");
-        sym2.description = "Generic capacitor".to_string();
-        sym2.designator = "C?".to_string();
-        sym2.add_pin(Pin::new("1", "1", -20, 0, 10, PinOrientation::Left));
-        sym2.add_pin(Pin::new("2", "2", 20, 0, 10, PinOrientation::Right));
-        lib.add(sym2);
-
-        lib.save(path).expect("Failed to create test SchLib");
-    }
-
-    /// Helper to extract text from a tool result.
-    fn get_result_text(result: &ToolCallResult) -> &str {
-        match &result.content[0] {
-            ToolContent::Text { text } => text,
-        }
-    }
+    use crate::mcp::tools::test_support::{
+        create_test_pcblib, create_test_schlib, create_test_server, get_result_text, test_temp_dir,
+    };
 
     #[test]
     fn server_initial_state() {

@@ -7,7 +7,7 @@
 use serde_json::json;
 
 use crate::mcp::server::{McpServer, ToolDefinition};
-use crate::mcp::tools::accepted;
+use crate::mcp::tools::{accepted, UPDATE_PRIMITIVE_KINDS};
 
 impl McpServer {
     /// Returns the list of available tools.
@@ -2238,7 +2238,7 @@ impl McpServer {
                         },
                         "primitive_type": {
                             "type": "string",
-                            "enum": ["track", "arc", "region", "text", "fill", "via"],
+                            "enum": UPDATE_PRIMITIVE_KINDS,
                             "description": "Type of primitive to update. Addressed by `index` into that primitive list. Pads are not here — they have a designator, so use update_pad."
                         },
                         "index": {

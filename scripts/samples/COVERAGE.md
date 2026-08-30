@@ -105,6 +105,11 @@ distinction stays visible: this is not an authoring gap waiting on an Altium run
 > (`FIXTURE_INCONSISTENT` in `tests/golden_fidelity.rs`); never open-and-save that golden in
 > AD (see `scripts/samples/README.md`).
 
+`manual/pipe.SchLib` + `manual/pipe.PcbLib` (AD24, scripted 2026-08-30 through the API) pin
+what Altium does with a `|` in text: the schematic editor stores it as `¦` (U+00A6); the PCB
+editor writes it raw and reads the description back cut at it (`Verify-Libraries.ps1`
+reports a length of 1 for `A|B=C`). The writers refuse a `|` on that evidence.
+
 ### Cross-cutting (both formats)
 
 - **Universal display/lock flags** — `GraphicallyLocked` is golden-covered on Rectangle

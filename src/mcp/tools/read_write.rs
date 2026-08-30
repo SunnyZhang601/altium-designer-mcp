@@ -1923,6 +1923,49 @@ mod tests {
         /// A footprint's own GUID is held to the GUID form, and a component
         /// body that cannot be built is refused by kind and index like a pad.
         #[test]
+        fn write_tools_refuse_a_pipe_in_record_text_by_field() {
+            let dir = test_temp_dir();
+            let server = create_test_server(dir.path());
+
+            let sch = dir.path().join("Pipes.SchLib");
+            let result = server.call_write_schlib(&json!({
+                "filepath": sch.to_string_lossy(),
+                "symbols": [{
+                    "name": "S",
+                    "pins": [{ "designator": "1", "name": "p|q", "x": 0, "y": 0, "length": 10,
+                               "orientation": "left" }],
+                    "parameters": [{ "name": "Value", "value": "1|2" }],
+                }],
+            }));
+            assert!(result.is_error);
+            let text = get_result_text(&result);
+            assert!(
+                text.contains("Symbol 'S' parameters[].value contains '|'"),
+                "{text}"
+            );
+            assert!(text.contains("U+00A6"), "{text}");
+            assert!(!sch.exists(), "nothing written");
+
+            let pcb = dir.path().join("Pipes.PcbLib");
+            let result = server.call_write_pcblib(&json!({
+                "filepath": pcb.to_string_lossy(),
+                "footprints": [{
+                    "name": "F",
+                    "pads": [{ "designator": "1|2", "x": 0.0, "y": 0.0, "width": 1.0, "height": 1.0 }],
+                    "regions": [{ "layer": "Top Layer", "name": "R|1",
+                                  "vertices": [{ "x": 0.0, "y": 0.0 }, { "x": 1.0, "y": 0.0 }, { "x": 0.0, "y": 1.0 }] }],
+                }],
+            }));
+            assert!(result.is_error);
+            let text = get_result_text(&result);
+            assert!(
+                text.contains("Footprint 'F' regions[].name contains '|'"),
+                "{text}"
+            );
+            assert!(!pcb.exists(), "nothing written");
+        }
+
+        #[test]
         fn write_pcblib_refuses_a_bad_footprint_guid_and_names_a_bad_body_by_index() {
             let dir = test_temp_dir();
             let server = create_test_server(dir.path());

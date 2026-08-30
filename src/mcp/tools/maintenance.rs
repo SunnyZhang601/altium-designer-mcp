@@ -89,7 +89,7 @@ impl McpServer {
 
         // Save if not dry run and changes were made
         if needs_save && !dry_run {
-            if let Err(resp) = Self::backup_then_save(filepath, || library.save(filepath)) {
+            if let Err(resp) = Self::backup_then_save(filepath, &mut library) {
                 return resp;
             }
         }
@@ -811,7 +811,7 @@ impl McpServer {
 
         // Save if not dry run
         if !dry_run {
-            if let Err(resp) = Self::backup_then_save(filepath, || library.save(filepath)) {
+            if let Err(resp) = Self::backup_then_save(filepath, &mut library) {
                 return resp;
             }
         }
@@ -1229,7 +1229,7 @@ impl McpServer {
 
         // Save if not dry run
         if !dry_run {
-            if let Err(resp) = Self::backup_then_save(filepath, || library.save(filepath)) {
+            if let Err(resp) = Self::backup_then_save(filepath, &mut library) {
                 return resp;
             }
         }

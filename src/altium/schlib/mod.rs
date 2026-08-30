@@ -759,6 +759,34 @@ impl Symbol {
         self.primitive_order.push(SchPrimitiveKind::IeeeSymbol);
     }
 
+    /// The strings the writer never places in a pipe-delimited record: a
+    /// pin is a binary record with length-prefixed strings, and an extra
+    /// stream's name is an OLE storage name.
+    pub const RECORD_TEXT_EXEMPT: &'static [&'static str] = &["pins[]", "extra_streams"];
+
+    /// Refuses text the record format cannot hold: a `|` in any string the
+    /// writer would place between the separators of a text record (see
+    /// [`Self::RECORD_TEXT_EXEMPT`] for the strings it never does). Altium's
+    /// own schematic editor stores such a `|` as `¦` (U+00A6), so the text is
+    /// refused with that on offer rather than written to be cut.
+    ///
+    /// # Errors
+    ///
+    /// A message naming this symbol and the offending field's path.
+    pub fn check_record_text(&self) -> Result<(), String> {
+        crate::altium::record_separator_path(self, Self::RECORD_TEXT_EXEMPT).map_or(
+            Ok(()),
+            |path| {
+                Err(format!(
+                    "Symbol '{}' {path} contains '|', the separator of Altium's record format, \
+                 which cannot hold it (Altium's own schematic editor stores it as '¦', U+00A6 \
+                 — send that character if it is what you mean)",
+                    self.name
+                ))
+            },
+        )
+    }
+
     /// The symbol's content records in the order they are written, as
     /// `(kind, index into that kind's list)` pairs.
     ///

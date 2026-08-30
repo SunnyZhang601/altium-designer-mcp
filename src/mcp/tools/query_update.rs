@@ -151,7 +151,7 @@ impl McpServer {
         // Perform the actual update
         library.update(component_name, footprint);
 
-        if let Err(resp) = Self::backup_then_save(filepath, || library.save(filepath)) {
+        if let Err(resp) = Self::backup_then_save(filepath, &mut library) {
             return resp;
         }
 
@@ -313,7 +313,7 @@ impl McpServer {
         // Perform the actual update
         library.update(component_name, symbol);
 
-        if let Err(resp) = Self::backup_then_save(filepath, || library.save(filepath)) {
+        if let Err(resp) = Self::backup_then_save(filepath, &mut library) {
             return resp;
         }
 

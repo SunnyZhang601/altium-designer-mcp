@@ -25,6 +25,14 @@ impl SchLib {
         // is ASCII to match `text_field`: the golden stores `Résistance` this
         // way despite `é` having a single-byte form, so the storage name and
         // the record's `LibReference` stay the same bytes.
+        for symbol in &symbols {
+            symbol
+                .check_record_text()
+                .map_err(|message| AltiumError::InvalidParameter {
+                    name: "text".to_string(),
+                    message,
+                })?;
+        }
         if let Some(i) = symbols.iter().position(|s| s.name.is_empty()) {
             return Err(AltiumError::InvalidParameter {
                 name: "name".to_string(),

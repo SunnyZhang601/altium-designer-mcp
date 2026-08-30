@@ -221,6 +221,16 @@ accepted name matches is refused the same way —
 — with names matched in any case, with or without separators, plus the documented
 synonyms (`tristate` for `hi_z`).
 
+No text field may contain `|`: it is the separator of Altium's pipe-delimited records,
+and the format has no way to escape it, so the text would come back cut at that point.
+Altium's own editors confirm the rule — the schematic editor stores such a `|` as `¦`
+(U+00A6), the PCB editor writes it raw and then reads the text back cut (measured in
+AD24; `scripts/samples/manual/pipe.*`) — so both writers and the write tools refuse it by
+field: `Symbol 'X' parameters[].value contains '|', the separator of Altium's record
+format, which cannot hold it (Altium's own schematic editor stores it as '¦', U+00A6 —
+send that character if it is what you mean)`. Strings kept in binary fields — a pad
+designator, a PCB text's string, a pin's name and designator — may carry one.
+
 ### Component Names Are Case-Insensitive
 
 A component name is resolved regardless of case — `get_component` for `lm358` finds

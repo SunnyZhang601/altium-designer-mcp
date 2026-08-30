@@ -98,6 +98,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   on a layer the model does not know is likewise refused instead of being
   placed on Top 3D Body, and a body that cannot be built is named by index
   like every other primitive.
+- **A `|` in a text field is refused, not written to come back cut.** Altium's
+  records are pipe-delimited with no escape, so a description, parameter,
+  label, region name or any other record text containing `|` was written
+  and then read back — by this reader and by Altium alike — cut at that
+  point. Altium's own editors set the rule (the schematic editor stores a
+  `|` as `¦`, U+00A6; the PCB editor writes it raw and reads it back cut),
+  so both writers and every mutating tool refuse it by field — before any
+  backup is made — naming the substitute for schematic text. Strings kept in binary fields — a pad
+  designator, a PCB text's string, a pin's name and designator — may carry
+  one.
 
 - **A solid symbol body no longer paints over the pin names inside it.**
   `write_schlib` recorded the order it happened to parse its input in — pins

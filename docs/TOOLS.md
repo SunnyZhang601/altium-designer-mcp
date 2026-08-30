@@ -132,7 +132,8 @@ Top Overlay automatically, just above its topmost pad, so every placed part show
 'auto_designator': false to omit it; a footprint echoed back from a read (carrying primitive_order) is never touched. The response 'bodies' array echoes each footprint's
 3D body height and source; a footprint with no STEP model and no component body reports source 'none'. Set 'auto_3d_body': true to have an extruded placeholder body
 (default height 1.0 mm, flagged 'assumed_height': true) added to such footprints, then confirm or override it by supplying 'component_bodies' explicitly. The response
-also includes a 'warnings' array flagging silkscreen (overlay) tracks that overlap a pad (silk-on-pad) so you can move them clear.
+also includes a 'warnings' array flagging silkscreen (overlay) tracks that overlap a pad (silk-on-pad) so you can move them clear. No text field may contain '|', the
+separator of Altium's record format, which cannot hold it.
 
 **Example**
 
@@ -225,7 +226,8 @@ Write schematic symbols to an Altium .SchLib file (set 'append': true to add to 
 pins, rectangles, round_rects, lines, polylines, polygons, arcs, pies, images, text_frames, beziers, ellipses, elliptical_arcs, labels, and text — plus its designator,
 parameters (Value, Manufacturer, ...) and footprint links ('footprints', name + optional library_path). Multi-part symbols set 'part_count' and tag each pin with
 'owner_part_id'. Coordinates must be in schematic units (10 units = 1 grid square, not mm); a pin's (x, y) is its body-attach end and 'orientation' is the direction it
-points outward — the response echoes each pin's computed body_end and tip.
+points outward — the response echoes each pin's computed body_end and tip. No text field may contain '|', the separator of Altium's record format; Altium's own editor
+stores it as '¦' (U+00A6).
 
 **Example**
 

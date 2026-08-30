@@ -218,7 +218,7 @@ impl McpServer {
 
         // Write back if any updates were made (and not dry-run)
         if symbols_updated > 0 && !dry_run {
-            if let Err(resp) = Self::backup_then_save(filepath, || library.save(filepath)) {
+            if let Err(resp) = Self::backup_then_save(filepath, &mut *library) {
                 return resp;
             }
         }
@@ -307,7 +307,7 @@ impl McpServer {
 
         // Write the updated library if any changes were made (and not dry-run)
         if total_updated > 0 && !dry_run {
-            if let Err(resp) = Self::backup_then_save(filepath, || library.save(filepath)) {
+            if let Err(resp) = Self::backup_then_save(filepath, &mut *library) {
                 return resp;
             }
         }
@@ -397,7 +397,7 @@ impl McpServer {
 
         // Write the updated library if any changes were made (and not dry-run)
         if total_updated > 0 && !dry_run {
-            if let Err(resp) = Self::backup_then_save(filepath, || library.save(filepath)) {
+            if let Err(resp) = Self::backup_then_save(filepath, &mut *library) {
                 return resp;
             }
         }
@@ -1419,5 +1419,30 @@ mod tests {
                 assert!(r.is_error, "{operation}: {}", get_result_text(&r));
             }
         }
+    }
+
+    /// A batch parameter value the record cannot hold is refused by field,
+    /// with the file untouched and no backup made.
+    #[test]
+    fn update_parameters_refuses_a_pipe_in_the_value_before_any_backup() {
+        let dir = test_temp_dir();
+        let server = create_test_server(dir.path());
+        let path = dir.path().join("Pipe.SchLib");
+        create_test_schlib(&path);
+
+        let result = server.call_batch_update(&json!({
+            "filepath": path.to_string_lossy(),
+            "operation": "update_parameters",
+            "parameters": { "param_name": "Value", "param_value": "1|2", "add_if_missing": true },
+        }));
+        assert!(result.is_error);
+        let text = get_result_text(&result);
+        assert!(text.contains("parameters[].value contains '|'"), "{text}");
+        let backups = std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|e| e.path().extension().is_some_and(|x| x == "bak"))
+            .count();
+        assert_eq!(backups, 0, "no backup for a save that never happens");
     }
 }

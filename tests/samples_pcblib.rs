@@ -2268,3 +2268,17 @@ fn samples_pcblib_text_wide_only_reads_the_wide_form() {
     // U+0094 is `?` in the Data stream and 148 in ENCODEDTEXT1; the wide form wins.
     assert_eq!(by_y(2.54).text, "\u{94}Q\u{bb}");
 }
+
+/// `manual/pipe.PcbLib` (AD24, scripted 2026-08-30): a footprint whose
+/// description and region name were given a `|` through Altium's own API.
+/// Altium writes them raw (`DESCRIPTION=A|B=C`) and, opening the file again,
+/// reads the description back as `A` (its `description_lengths` reports 1
+/// through `scripts/Verify-Libraries.ps1`) — so does this reader, and the
+/// writer refuses a `|` rather than write text that comes back cut.
+#[test]
+fn manual_pipe_fixture_shows_altium_cuts_pcb_text_at_the_pipe() {
+    let lib = PcbLib::open(sample("manual/pipe.PcbLib")).expect("open manual/pipe.PcbLib");
+    let fp = lib.get("PIPEFP").expect("footprint PIPEFP not found");
+    assert_eq!(fp.description, "A");
+    assert_eq!(fp.regions[0].name, "R");
+}

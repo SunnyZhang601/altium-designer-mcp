@@ -545,6 +545,42 @@ impl Footprint {
         }
     }
 
+    /// The strings the writer never places in a pipe-delimited record: a
+    /// pad's designator and a text's string, font names and barcode font
+    /// live in length-prefixed binary fields, a body's identifier is stored
+    /// as code points, and the flag names carry a `|` of their own.
+    pub const RECORD_TEXT_EXEMPT: &'static [&'static str] = &[
+        "flags",
+        "pads[].designator",
+        "text[].text",
+        "text[].font_name",
+        "text[].barcode_font_name",
+        "component_bodies[].identifier",
+    ];
+
+    /// Refuses text the record format cannot hold: a `|` in any string the
+    /// writer would place between the separators of a pipe-delimited record
+    /// (see [`Self::RECORD_TEXT_EXEMPT`] for the strings it never does).
+    /// Altium's own PCB editor writes such a `|` raw and then reads the text
+    /// back cut at it, so the text is refused rather than written to be lost.
+    ///
+    /// # Errors
+    ///
+    /// A message naming this footprint and the offending field's path.
+    pub fn check_record_text(&self) -> Result<(), String> {
+        crate::altium::record_separator_path(self, Self::RECORD_TEXT_EXEMPT).map_or(
+            Ok(()),
+            |path| {
+                Err(format!(
+                    "Footprint '{}' {path} contains '|', the separator of Altium's record format, \
+                 which cannot hold it (Altium's own PCB editor writes it raw and then reads the \
+                 text back cut at the '|')",
+                    self.name
+                ))
+            },
+        )
+    }
+
     /// The footprint's primitives in the order they are written, as
     /// `(kind, index into that kind's list)` pairs.
     ///

@@ -1025,6 +1025,11 @@ impl McpServer {
 
         // Out-of-range or non-finite geometry is refused here so both tools
         // report it the same way.
+        // Text the record format cannot hold is refused here, by field,
+        // rather than by the writer after a backup has already been made.
+        if let Err(e) = symbol.check_record_text() {
+            return Err(ToolCallResult::error(e));
+        }
         if let Err(e) = Self::validate_symbol_coordinates(&symbol) {
             return Err(ToolCallResult::error(e));
         }
@@ -1391,6 +1396,11 @@ impl McpServer {
 
         // Out-of-range or non-finite geometry would saturate in from_mm() on
         // save; refused here so both tools report it the same way.
+        // Text the record format cannot hold is refused here, by field,
+        // rather than by the writer after a backup has already been made.
+        if let Err(e) = footprint.check_record_text() {
+            return Err(ToolCallResult::error(e));
+        }
         if let Err(e) = Self::validate_footprint_coordinates(&footprint) {
             return Err(ToolCallResult::error(e));
         }

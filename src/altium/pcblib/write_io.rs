@@ -28,6 +28,14 @@ impl PcbLib {
                 message: format!("footprint {i} has an empty name"),
             });
         }
+        for footprint in &self.footprints {
+            footprint
+                .check_record_text()
+                .map_err(|message| AltiumError::InvalidParameter {
+                    name: "text".to_string(),
+                    message,
+                })?;
+        }
 
         // Convert model_3d references to ComponentBody + EmbeddedModel before writing
         self.prepare_3d_models_for_writing()?;

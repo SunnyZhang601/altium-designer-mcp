@@ -1379,7 +1379,7 @@ impl McpServer {
         };
         let warnings = Self::dangling_body_warnings(&library);
 
-        if let Err(resp) = Self::backup_then_save(output_path, || library.save(output_path)) {
+        if let Err(resp) = Self::backup_then_save(output_path, &mut library) {
             return resp;
         }
 
@@ -1588,7 +1588,7 @@ impl McpServer {
             }
         }
 
-        if let Err(resp) = Self::backup_then_save(output_path, || library.save(output_path)) {
+        if let Err(resp) = Self::backup_then_save(output_path, &mut library) {
             return resp;
         }
 

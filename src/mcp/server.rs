@@ -452,6 +452,59 @@ fn article(noun: &str) -> &'static str {
     }
 }
 
+/// A library an in-place tool persists: checked for text its records cannot
+/// hold, then written to its path (see [`McpServer::backup_then_save`]).
+pub(crate) trait Persist {
+    /// The first text field a record of this library cannot hold, as the
+    /// message the tool reports, or `Ok(())`.
+    ///
+    /// # Errors
+    ///
+    /// The message naming the component and the offending field.
+    fn check_record_text(&self) -> Result<(), String>;
+
+    /// Writes the library to `path`.
+    ///
+    /// # Errors
+    ///
+    /// Whatever the writer refuses or the file system reports.
+    fn persist(&mut self, path: &str) -> crate::altium::AltiumResult<()>;
+}
+
+/// A handler that already holds its library by mutable reference passes
+/// that reference on.
+impl<L: Persist> Persist for &mut L {
+    fn check_record_text(&self) -> Result<(), String> {
+        (**self).check_record_text()
+    }
+
+    fn persist(&mut self, path: &str) -> crate::altium::AltiumResult<()> {
+        (**self).persist(path)
+    }
+}
+
+impl Persist for crate::altium::PcbLib {
+    fn check_record_text(&self) -> Result<(), String> {
+        self.iter()
+            .try_for_each(crate::altium::pcblib::Footprint::check_record_text)
+    }
+
+    fn persist(&mut self, path: &str) -> crate::altium::AltiumResult<()> {
+        self.save(path)
+    }
+}
+
+impl Persist for crate::altium::SchLib {
+    fn check_record_text(&self) -> Result<(), String> {
+        self.iter()
+            .try_for_each(crate::altium::schlib::Symbol::check_record_text)
+    }
+
+    fn persist(&mut self, path: &str) -> crate::altium::AltiumResult<()> {
+        self.save(path)
+    }
+}
+
 impl McpServer {
     /// Creates a new MCP server with the given allowed paths.
     ///
@@ -637,19 +690,26 @@ impl McpServer {
     /// Maximum number of timestamped backups to retain per file.
     const MAX_BACKUPS: usize = 5;
 
-    /// Backs up `filepath`, then persists the library via `save`.
+    /// Refuses text the library's records cannot hold, backs up `filepath`,
+    /// then persists the library.
     ///
-    /// Centralises the backup → save sequence shared by every mutating tool
-    /// handler so create and update paths cannot drift (see #104). On failure it
-    /// returns the tool-error response; the caller builds its own success result.
+    /// Centralises the check → backup → save sequence shared by every
+    /// mutating tool handler so create and update paths cannot drift. The
+    /// check comes first: the writer would refuse the same text, but only
+    /// after a backup had been made for a save that never happens. On
+    /// failure it returns the tool-error response; the caller builds its own
+    /// success result.
     pub(crate) fn backup_then_save(
         filepath: &str,
-        save: impl FnOnce() -> crate::altium::AltiumResult<()>,
+        library: &mut impl Persist,
     ) -> Result<(), ToolCallResult> {
+        library.check_record_text().map_err(ToolCallResult::error)?;
         if let Err(e) = Self::create_backup(filepath) {
             return Err(ToolCallResult::error(e));
         }
-        save().map_err(|e| ToolCallResult::error(format!("Failed to write library: {e}")))?;
+        library
+            .persist(filepath)
+            .map_err(|e| ToolCallResult::error(format!("Failed to write library: {e}")))?;
         Ok(())
     }
 
@@ -3814,8 +3874,10 @@ mod tests {
     // ==================== path gate and backup retention =====================
 
     mod path_and_backups {
+        use crate::altium::pcblib::PcbLib;
+        use crate::altium::schlib::SchLib;
         use crate::mcp::server::McpServer;
-        use crate::mcp::tools::test_support::test_temp_dir;
+        use crate::mcp::tools::test_support::{create_test_schlib, get_result_text, test_temp_dir};
 
         #[test]
         fn a_configured_allowed_path_that_does_not_exist_is_skipped_not_trusted() {
@@ -3881,13 +3943,47 @@ mod tests {
             let as_dir = dir.path().join("Blocked.PcbLib");
             std::fs::create_dir(&as_dir).unwrap();
 
-            let mut saved = false;
-            let result = McpServer::backup_then_save(&as_dir.to_string_lossy(), || {
-                saved = true;
-                Ok(())
-            });
+            let mut library = PcbLib::new();
+            let result = McpServer::backup_then_save(&as_dir.to_string_lossy(), &mut library);
             assert!(result.is_err(), "a failed backup must abort the save");
-            assert!(!saved, "the save ran despite the backup failing");
+            assert!(
+                std::fs::read_dir(&as_dir).unwrap().next().is_none(),
+                "the save ran despite the backup failing"
+            );
+        }
+
+        /// Text the records cannot hold is refused before any backup is made:
+        /// the file the tool was about to touch keeps its one copy.
+        #[test]
+        fn backup_then_save_refuses_record_text_before_backing_up() {
+            let dir = test_temp_dir();
+            let lib = dir.path().join("Lib.SchLib");
+            create_test_schlib(&lib);
+            let mut library = SchLib::open(&lib).unwrap();
+            library.get_mut("RESISTOR").unwrap().description = "A|B".to_string();
+
+            let err = McpServer::backup_then_save(&lib.to_string_lossy(), &mut library)
+                .expect_err("record text the format cannot hold must be refused");
+            let text = get_result_text(&err);
+            assert!(
+                text.contains("Symbol 'RESISTOR' description contains '|'"),
+                "{text}"
+            );
+            let backups = std::fs::read_dir(dir.path())
+                .unwrap()
+                .filter_map(Result::ok)
+                .filter(|e| e.path().extension().is_some_and(|x| x == "bak"))
+                .count();
+            assert_eq!(backups, 0, "no backup for a save that never happens");
+            assert_eq!(
+                SchLib::open(&lib)
+                    .unwrap()
+                    .get("RESISTOR")
+                    .unwrap()
+                    .description,
+                "Generic resistor",
+                "the file is untouched"
+            );
         }
 
         #[test]

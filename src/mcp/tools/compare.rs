@@ -236,13 +236,17 @@ impl McpServer {
 
         // Get components
         let Some(fp_a) = lib_a.get(name_a) else {
-            return ToolCallResult::error(format!(
-                "Component '{name_a}' not found in '{filepath_a}'"
+            return ToolCallResult::error(super::component_not_found_in(
+                name_a,
+                &format!("'{filepath_a}'"),
+                &lib_a.names(),
             ));
         };
         let Some(fp_b) = lib_b.get(name_b) else {
-            return ToolCallResult::error(format!(
-                "Component '{name_b}' not found in '{filepath_b}'"
+            return ToolCallResult::error(super::component_not_found_in(
+                name_b,
+                &format!("'{filepath_b}'"),
+                &lib_b.names(),
             ));
         };
 
@@ -1381,13 +1385,17 @@ impl McpServer {
 
         // Get components
         let Some(sym_a) = lib_a.get(name_a) else {
-            return ToolCallResult::error(format!(
-                "Component '{name_a}' not found in '{filepath_a}'"
+            return ToolCallResult::error(super::component_not_found_in(
+                name_a,
+                &format!("'{filepath_a}'"),
+                &lib_a.names(),
             ));
         };
         let Some(sym_b) = lib_b.get(name_b) else {
-            return ToolCallResult::error(format!(
-                "Component '{name_b}' not found in '{filepath_b}'"
+            return ToolCallResult::error(super::component_not_found_in(
+                name_b,
+                &format!("'{filepath_b}'"),
+                &lib_b.names(),
             ));
         };
 

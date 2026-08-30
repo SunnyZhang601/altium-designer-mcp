@@ -24,6 +24,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   answer with the spelling on file, and a name the library does not hold is
   an error naming the available components — the same words `get_component`
   and `update_component` use.
+- **Every tool that looks up a component reports a miss the same way.**
+  Seventeen lookups used six wordings — `Symbol 'X' not found in library`,
+  `Footprint 'X' not found. Available: ["A", "B"]`, `Source component 'X'
+  not found`, a five-name "include" hint — and most named nothing of what
+  the library holds. All of them now say
+  `Component 'X' not found in library. Available: A, B, C ... and N more`
+  (`compare_components` names the file it searched, the cross-library
+  tools the source library).
 - **`update_component` is type-checked as thoroughly as `write_pcblib` /
   `write_schlib`, and every key the tools accept is in `tools/list`.** The
   tool's `footprint` and `symbol` were untyped objects, so the check above

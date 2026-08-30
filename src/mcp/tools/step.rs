@@ -339,11 +339,11 @@ impl McpServer {
     ) -> ToolCallResult {
         // Find the footprint
         let Some(footprint) = library.get(footprint_name) else {
-            let available: Vec<&str> = library.iter().map(|fp| fp.name.as_str()).collect();
+            let available = library.names();
             let result = json!({
                 "status": "error",
                 "filepath": filepath,
-                "error": format!("Footprint '{}' not found", footprint_name),
+                "error": super::component_not_found(footprint_name, &available),
                 "available_footprints": available,
             });
             return ToolCallResult::error(serde_json::to_string_pretty(&result).unwrap());

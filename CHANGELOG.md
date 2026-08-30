@@ -104,8 +104,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and then read back — by this reader and by Altium alike — cut at that
   point. Altium's own editors set the rule (the schematic editor stores a
   `|` as `¦`, U+00A6; the PCB editor writes it raw and reads it back cut),
-  so both writers and the write tools refuse it by field, naming the
-  substitute for schematic text. Strings kept in binary fields — a pad
+  so both writers and every mutating tool refuse it by field — before any
+  backup is made — naming the substitute for schematic text. Strings kept in binary fields — a pad
   designator, a PCB text's string, a pin's name and designator — may carry
   one.
 

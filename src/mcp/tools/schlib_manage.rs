@@ -310,7 +310,7 @@ impl McpServer {
                     _ => unreachable!(),
                 };
 
-                if let Err(resp) = Self::backup_then_save(filepath, || library.save(filepath)) {
+                if let Err(resp) = Self::backup_then_save(filepath, &mut library) {
                     return resp;
                 }
 
@@ -476,7 +476,7 @@ impl McpServer {
                     })
                 };
 
-                if let Err(resp) = Self::backup_then_save(filepath, || library.save(filepath)) {
+                if let Err(resp) = Self::backup_then_save(filepath, &mut library) {
                     return resp;
                 }
 
@@ -1450,5 +1450,35 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// A parameter value the record cannot hold is refused by field, with
+    /// the file untouched and no backup made.
+    #[test]
+    fn set_refuses_a_pipe_in_the_value_before_any_backup() {
+        let dir = test_temp_dir();
+        let server = create_test_server(dir.path());
+        let path = dir.path().join("Pipe.SchLib");
+        create_test_schlib(&path);
+
+        let result = server.call_manage_schlib_parameters(&json!({
+            "filepath": path.to_string_lossy(),
+            "component_name": "RESISTOR",
+            "operation": "add",
+            "parameter_name": "Tolerance",
+            "value": "1|2",
+        }));
+        assert!(result.is_error);
+        let text = get_result_text(&result);
+        assert!(
+            text.contains("Symbol 'RESISTOR' parameters[].value contains '|'"),
+            "{text}"
+        );
+        let backups = std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|e| e.path().extension().is_some_and(|x| x == "bak"))
+            .count();
+        assert_eq!(backups, 0, "no backup for a save that never happens");
     }
 }

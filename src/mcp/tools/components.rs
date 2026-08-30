@@ -124,7 +124,7 @@ impl McpServer {
             return ToolCallResult::text(serde_json::to_string_pretty(&result).unwrap());
         }
 
-        if let Err(resp) = Self::backup_then_save(filepath, || library.save(filepath)) {
+        if let Err(resp) = Self::backup_then_save(filepath, &mut library) {
             return resp;
         }
 
@@ -206,7 +206,7 @@ impl McpServer {
             return ToolCallResult::text(serde_json::to_string_pretty(&result).unwrap());
         }
 
-        if let Err(resp) = Self::backup_then_save(filepath, || library.save(filepath)) {
+        if let Err(resp) = Self::backup_then_save(filepath, &mut library) {
             return resp;
         }
 
@@ -327,7 +327,7 @@ impl McpServer {
             return ToolCallResult::text(serde_json::to_string_pretty(&result).unwrap());
         }
 
-        if let Err(resp) = Self::backup_then_save(filepath, || library.save(filepath)) {
+        if let Err(resp) = Self::backup_then_save(filepath, &mut library) {
             return resp;
         }
 
@@ -396,7 +396,7 @@ impl McpServer {
             return ToolCallResult::text(serde_json::to_string_pretty(&result).unwrap());
         }
 
-        if let Err(resp) = Self::backup_then_save(filepath, || library.save(filepath)) {
+        if let Err(resp) = Self::backup_then_save(filepath, &mut library) {
             return resp;
         }
 
@@ -639,9 +639,7 @@ impl McpServer {
         // Add the footprint to target library
         target_library.add(new_footprint);
 
-        if let Err(resp) =
-            Self::backup_then_save(target_filepath, || target_library.save(target_filepath))
-        {
+        if let Err(resp) = Self::backup_then_save(target_filepath, &mut target_library) {
             return resp;
         }
 
@@ -760,9 +758,7 @@ impl McpServer {
         // Add the symbol to target library
         target_library.add(new_symbol);
 
-        if let Err(resp) =
-            Self::backup_then_save(target_filepath, || target_library.save(target_filepath))
-        {
+        if let Err(resp) = Self::backup_then_save(target_filepath, &mut target_library) {
             return resp;
         }
 
@@ -1049,9 +1045,7 @@ impl McpServer {
 
         // Only write if not dry-run
         if !dry_run {
-            if let Err(resp) =
-                Self::backup_then_save(target_filepath, || target_library.save(target_filepath))
-            {
+            if let Err(resp) = Self::backup_then_save(target_filepath, &mut target_library) {
                 return resp;
             }
         }
@@ -1213,9 +1207,7 @@ impl McpServer {
 
         // Only write if not dry-run
         if !dry_run {
-            if let Err(resp) =
-                Self::backup_then_save(target_filepath, || target_library.save(target_filepath))
-            {
+            if let Err(resp) = Self::backup_then_save(target_filepath, &mut target_library) {
                 return resp;
             }
         }
@@ -3511,6 +3503,39 @@ mod tests {
             std::fs::read(&sch_target).unwrap(),
             before,
             "nothing written"
+        );
+    }
+
+    /// A copy given a description the record cannot hold is refused by
+    /// field, with the library untouched and no backup made.
+    #[test]
+    fn copy_component_refuses_a_pipe_in_the_description_before_any_backup() {
+        let dir = test_temp_dir();
+        let server = create_test_server(dir.path());
+        let path = dir.path().join("Pipe.PcbLib");
+        create_test_pcblib(&path);
+
+        let result = server.call_copy_component(&json!({
+            "filepath": path.to_string_lossy(),
+            "source_name": "CHIP_0402",
+            "target_name": "CHIP_COPY",
+            "description": "A|B",
+        }));
+        assert!(result.is_error);
+        let text = get_result_text(&result);
+        assert!(
+            text.contains("Footprint 'CHIP_COPY' description contains '|'"),
+            "{text}"
+        );
+        let backups = std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|e| e.path().extension().is_some_and(|x| x == "bak"))
+            .count();
+        assert_eq!(backups, 0, "no backup for a save that never happens");
+        assert!(
+            PcbLib::open(&path).unwrap().get("CHIP_COPY").is_none(),
+            "nothing copied"
         );
     }
 }

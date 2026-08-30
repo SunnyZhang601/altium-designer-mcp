@@ -180,10 +180,26 @@ fn json_raw_params(json: &Value) -> Vec<(String, String)> {
         .unwrap_or_default()
 }
 
-/// Reads a primitive's Altium identity GUID from its JSON, so a
-/// read-modify-write that passes through the tool layer keeps it.
-fn json_guid(json: &Value) -> Option<String> {
-    json.get("guid").and_then(Value::as_str).map(str::to_string)
+/// Reads an Altium identity GUID (`key`) from a record's JSON: absent is
+/// `Ok(None)`; the braced form `read_pcblib` emits, or any spelling of the
+/// same 32 hex digits, is kept verbatim; anything else is refused by name,
+/// since the writer could only drop the record's identity or invent a
+/// fresh one in its place. `field` names the record and key in the error.
+fn guid_field(json: &Value, key: &str, field: &str) -> Result<Option<String>, String> {
+    match json.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(text)) => {
+            let bare = text.trim_start_matches('{').trim_end_matches('}');
+            if uuid::Uuid::parse_str(bare).is_ok() {
+                Ok(Some(text.clone()))
+            } else {
+                Err(format!(
+                    "{field} '{text}' is not a GUID ({{XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX}})"
+                ))
+            }
+        }
+        Some(other) => Err(format!("{field} must be a string, got {other}")),
+    }
 }
 
 /// The streams a symbol carries verbatim (`extra_streams`), in the
@@ -1337,9 +1353,21 @@ impl McpServer {
         // layer. model_id/model_name stay empty so the writer marks them as
         // shape-based extruded bodies.
         if let Some(bodies) = fp_json.get("component_bodies").and_then(Value::as_array) {
-            for body_json in bodies {
+            for (i, body_json) in bodies.iter().enumerate() {
                 Self::refuse_unknown(body_json, &keys.component_body)?;
-                footprint.add_component_body(Self::parse_component_body_json(body_json));
+                match Self::parse_component_body_json(body_json) {
+                    Ok(body) => footprint.add_component_body(body),
+                    Err(e) => {
+                        return Err(ToolCallResult::error_with_context(
+                            ErrorContext::new(operation, e)
+                                .with_filepath(filepath)
+                                .with_component(name)
+                                .with_details(format!(
+                                    "Failed to parse component body at index {i}"
+                                )),
+                        ))
+                    }
+                }
             }
         }
 
@@ -1348,9 +1376,10 @@ impl McpServer {
         // replaces the grouped order the add_* calls accumulated, so a
         // read-modify-write keeps the source's stream order
         // (`write_sequence` is advisory-safe against a stale list).
-        if let Some(g) = fp_json.get("guid").and_then(Value::as_str) {
-            footprint.guid = Some(g.to_string());
-        }
+        footprint.guid = match guid_field(fp_json, "guid", &format!("Footprint '{name}' guid")) {
+            Ok(guid) => guid,
+            Err(e) => return Err(ToolCallResult::error(e)),
+        };
         if let Some(order) = fp_json.get("primitive_order") {
             match serde_json::from_value(order.clone()) {
                 Ok(kinds) => footprint.primitive_order = kinds,
@@ -1558,14 +1587,8 @@ impl McpServer {
         // Identity GUIDs (extended tail @126/@142). Absent -> None, so the
         // writer generates fresh per-pad GUIDs; a read-modify-write passes the
         // read value back and preserves the on-disk bytes verbatim.
-        let identity_guid = json
-            .get("identity_guid")
-            .and_then(Value::as_str)
-            .map(str::to_string);
-        let identity_guid_b = json
-            .get("identity_guid_b")
-            .and_then(Value::as_str)
-            .map(str::to_string);
+        let identity_guid = guid_field(json, "identity_guid", &pad_field("identity_guid"))?;
+        let identity_guid_b = guid_field(json, "identity_guid_b", &pad_field("identity_guid_b"))?;
 
         let solder_mask_expansion_from_hole_edge = json
             .get("solder_mask_expansion_from_hole_edge")
@@ -1681,7 +1704,7 @@ impl McpServer {
             component_index: json_component_index(json),
             flags: json_flags(json),
             unique_id: json_unique_id(json),
-            guid: json_guid(json),
+            guid: guid_field(json, "guid", &pad_field("guid"))?,
             raw_tail: json_base64(json, "raw_tail"),
             identity_guid,
             identity_guid_b,
@@ -1730,7 +1753,7 @@ impl McpServer {
         track.solder_mask_expansion = json_f64(json, "solder_mask_expansion");
         track.keepout_restrictions = json_keepout(json);
         track.unique_id = json_unique_id(json);
-        track.guid = json_guid(json);
+        track.guid = guid_field(json, "guid", "Track guid")?;
         track.raw_layer_id = json_raw_layer_id(json);
         Ok(track)
     }
@@ -1785,7 +1808,7 @@ impl McpServer {
             polygon_index: json_polygon_index(json),
             component_index: json_component_index(json),
             unique_id: json_unique_id(json),
-            guid: json_guid(json),
+            guid: guid_field(json, "guid", "Arc guid")?,
             // Optional EE tail (mirrors the modelled optionals; absent keys keep
             // the default `None` so a from-scratch arc is byte-identical).
             solder_mask_expansion: json_f64(json, "solder_mask_expansion"),
@@ -1893,7 +1916,7 @@ impl McpServer {
             union_index,
             is_shape_based,
             unique_id: text_field("unique_id"),
-            guid: text_field("guid"),
+            guid: guid_field(json, "guid", "Region guid")?,
             additional_parameters,
             param_key_order: Self::parse_key_order(json),
         })
@@ -2055,7 +2078,7 @@ impl McpServer {
             polygon_index: json_polygon_index(json),
             component_index: json_component_index(json),
             unique_id: json_unique_id(json),
-            guid: json_guid(json),
+            guid: guid_field(json, "guid", "Text guid")?,
             raw_geometry: json_base64(json, "raw_geometry"),
             barcode_full_width: json_f64(json, "barcode_full_width"),
             barcode_full_height: json_f64(json, "barcode_full_height"),
@@ -2094,14 +2117,15 @@ impl McpServer {
     #[allow(clippy::too_many_lines)] // ComponentBody has many optional fields
     pub(crate) fn parse_component_body_json(
         body_json: &Value,
-    ) -> crate::altium::pcblib::ComponentBody {
+    ) -> Result<crate::altium::pcblib::ComponentBody, String> {
         use crate::altium::pcblib::{ComponentBody, Layer};
 
-        let layer = body_json
-            .get("layer")
-            .and_then(Value::as_str)
-            .and_then(Layer::parse)
-            .unwrap_or(Layer::Top3DBody);
+        let layer = match body_json.get("layer").and_then(Value::as_str) {
+            None => Layer::Top3DBody,
+            Some(s) => Layer::parse(s).ok_or_else(|| {
+                format!("Component body has invalid layer '{s}'. {LAYER_NAME_HELP}")
+            })?,
+        };
         // Vertices in any spelling the tools accept (`{x, y}` or `[x, y]`).
         let outline = body_json
             .get("outline")
@@ -2121,7 +2145,7 @@ impl McpServer {
                 .unwrap_or(d)
                 .to_string()
         };
-        ComponentBody {
+        Ok(ComponentBody {
             identifier: str_or("identifier", ""),
             texture_center_x: json_guidless_opt(body_json, "texture_center_x"),
             texture_center_y: json_guidless_opt(body_json, "texture_center_y"),
@@ -2149,7 +2173,7 @@ impl McpServer {
                 .get("unique_id")
                 .and_then(Value::as_str)
                 .map(str::to_string),
-            guid: json_guid(body_json),
+            guid: guid_field(body_json, "guid", "Component body guid")?,
             model_checksum: body_json
                 .get("model_checksum")
                 .and_then(Value::as_i64)
@@ -2217,7 +2241,7 @@ impl McpServer {
                 .unwrap_or(-1),
             additional_parameters: Self::parse_additional_parameters(body_json),
             param_key_order: Self::parse_key_order(body_json),
-        }
+        })
     }
 
     /// `to_layer` fields and reuses [`crate::altium::pcblib::MaskExpansionMode`]
@@ -2414,7 +2438,7 @@ impl McpServer {
 
         via.flags = json_flags(json);
         via.unique_id = json_unique_id(json);
-        via.guid = json_guid(json);
+        via.guid = guid_field(json, "guid", "Via guid")?;
         via.raw_block = json_base64(json, "raw_block");
 
         Ok(via)
@@ -2465,7 +2489,7 @@ impl McpServer {
         fill.solder_mask_expansion = json.get("solder_mask_expansion").and_then(Value::as_f64);
         fill.keepout_restrictions = json_keepout(json);
         fill.unique_id = json_unique_id(json);
-        fill.guid = json_guid(json);
+        fill.guid = guid_field(json, "guid", "Fill guid")?;
         fill.raw_layer_id = json_raw_layer_id(json);
 
         Ok(fill)
@@ -4108,7 +4132,8 @@ mod tests {
             "layer": "Multi-Layer",
             "raw_layer_id": 150,
             "v7_layer": "MECHANICAL22",
-        }));
+        }))
+        .expect("body should parse");
         assert_eq!(body.raw_layer_id, Some(150));
         assert_eq!(body.v7_layer.as_deref(), Some("MECHANICAL22"));
 
@@ -4116,7 +4141,8 @@ mod tests {
         let plain = McpServer::parse_component_body_json(&json!({
             "model_id": "{G-1}",
             "raw_layer_id": 300,
-        }));
+        }))
+        .expect("body should parse");
         assert_eq!(plain.raw_layer_id, None);
         assert_eq!(plain.v7_layer, None);
     }
@@ -5185,5 +5211,112 @@ mod tests {
             );
             check::<PinSymbol>(PIN_SYMBOLS, PIN_SYMBOL_SYNONYMS, "symbol");
         }
+    }
+
+    /// A GUID is kept in whatever spelling of its 32 hex digits it came in;
+    /// anything else is refused by record and key, since the writer could
+    /// only drop the identity or invent one in its place.
+    #[test]
+    fn every_guid_field_is_held_to_the_guid_form() {
+        let base = json!({ "designator": "1", "x": 0.0, "y": 0.0, "width": 1.0, "height": 1.0 });
+        for guid in [
+            "{01234567-89AB-CDEF-0123-456789ABCDEF}",
+            "01234567-89ab-cdef-0123-456789abcdef",
+            "0123456789ABCDEF0123456789ABCDEF",
+        ] {
+            let mut json = base.clone();
+            json["guid"] = json!(guid);
+            json["identity_guid"] = json!(guid);
+            json["identity_guid_b"] = json!(guid);
+            let pad = McpServer::parse_pad(&json).expect("a GUID in any spelling");
+            assert_eq!(pad.guid.as_deref(), Some(guid), "kept verbatim");
+            assert_eq!(pad.identity_guid.as_deref(), Some(guid));
+            assert_eq!(pad.identity_guid_b.as_deref(), Some(guid));
+        }
+
+        let bad = "not-a-guid";
+        let refused = |err: String, field: &str| {
+            let expected =
+                format!("{field} '{bad}' is not a GUID ({{XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX}})");
+            assert!(
+                err.contains(&expected),
+                "expected {expected:?}, got {err:?}"
+            );
+        };
+        for key in ["guid", "identity_guid", "identity_guid_b"] {
+            let mut json = base.clone();
+            json[key] = json!(bad);
+            refused(
+                McpServer::parse_pad(&json).unwrap_err(),
+                &format!("Pad '1' {key}"),
+            );
+        }
+        refused(
+            McpServer::parse_track(&json!({
+                "x1": 0.0, "y1": 0.0, "x2": 1.0, "y2": 0.0, "width": 0.2, "guid": bad,
+            }))
+            .unwrap_err(),
+            "Track guid",
+        );
+        refused(
+            McpServer::parse_arc(&json!({
+                "x": 0.0, "y": 0.0, "radius": 1.0, "start_angle": 0.0, "end_angle": 90.0,
+                "width": 0.2, "guid": bad,
+            }))
+            .unwrap_err(),
+            "Arc guid",
+        );
+        refused(
+            McpServer::parse_fill(&json!({
+                "x1": 0.0, "y1": 0.0, "x2": 1.0, "y2": 1.0, "guid": bad,
+            }))
+            .unwrap_err(),
+            "Fill guid",
+        );
+        refused(
+            McpServer::parse_via(&json!({
+                "x": 0.0, "y": 0.0, "diameter": 0.6, "hole_size": 0.3, "guid": bad,
+            }))
+            .unwrap_err(),
+            "Via guid",
+        );
+        refused(
+            McpServer::parse_text(&json!({
+                "x": 0.0, "y": 0.0, "text": "T", "height": 1.0, "guid": bad,
+            }))
+            .unwrap_err(),
+            "Text guid",
+        );
+        refused(
+            McpServer::parse_region(&json!({
+                "layer": "Top Layer",
+                "vertices": [{ "x": 0.0, "y": 0.0 }, { "x": 1.0, "y": 0.0 }, { "x": 0.0, "y": 1.0 }],
+                "guid": bad,
+            }))
+            .unwrap_err(),
+            "Region guid",
+        );
+        refused(
+            McpServer::parse_component_body_json(&json!({ "overall_height": 1.0, "guid": bad }))
+                .unwrap_err(),
+            "Component body guid",
+        );
+    }
+
+    /// A component body on a layer the model does not know is refused like
+    /// every other primitive, not quietly placed on Top 3D Body.
+    #[test]
+    fn parse_component_body_refuses_an_unknown_layer() {
+        let err = McpServer::parse_component_body_json(&json!({
+            "overall_height": 1.0, "layer": "Nowhere",
+        }))
+        .unwrap_err();
+        assert!(
+            err.contains("Component body has invalid layer 'Nowhere'"),
+            "{err}"
+        );
+        let body = McpServer::parse_component_body_json(&json!({ "overall_height": 1.0 }))
+            .expect("no layer given");
+        assert_eq!(body.layer, crate::altium::pcblib::Layer::Top3DBody);
     }
 }

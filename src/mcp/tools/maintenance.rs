@@ -758,11 +758,9 @@ impl McpServer {
         };
 
         // Find footprint
+        let names = library.names();
         let Some(footprint) = library.get_mut(component_name) else {
-            let available: Vec<String> = library.names();
-            return ToolCallResult::error(format!(
-                "Footprint '{component_name}' not found. Available: {available:?}"
-            ));
+            return ToolCallResult::error(super::component_not_found(component_name, &names));
         };
 
         // Find pad by designator
@@ -875,11 +873,9 @@ impl McpServer {
         };
 
         // Find footprint
+        let names = library.names();
         let Some(footprint) = library.get_mut(component_name) else {
-            let available: Vec<String> = library.names();
-            return ToolCallResult::error(format!(
-                "Footprint '{component_name}' not found. Available: {available:?}"
-            ));
+            return ToolCallResult::error(super::component_not_found(component_name, &names));
         };
 
         let mut changes: Vec<Value> = Vec::new();

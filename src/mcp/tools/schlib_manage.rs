@@ -48,8 +48,9 @@ impl McpServer {
 
                 // Find the symbol
                 let Some(symbol) = library.get(component_name) else {
-                    return ToolCallResult::error(format!(
-                        "Symbol '{component_name}' not found in library"
+                    return ToolCallResult::error(super::component_not_found(
+                        component_name,
+                        &library.names(),
                     ));
                 };
 
@@ -112,9 +113,11 @@ impl McpServer {
                 };
 
                 // Find the symbol (mutable)
+                let names = library.names();
                 let Some(symbol) = library.get_mut(component_name) else {
-                    return ToolCallResult::error(format!(
-                        "Symbol '{component_name}' not found in library"
+                    return ToolCallResult::error(super::component_not_found(
+                        component_name,
+                        &names,
                     ));
                 };
 
@@ -367,8 +370,9 @@ impl McpServer {
 
                 // Find the symbol
                 let Some(symbol) = library.get(component_name) else {
-                    return ToolCallResult::error(format!(
-                        "Symbol '{component_name}' not found in library"
+                    return ToolCallResult::error(super::component_not_found(
+                        component_name,
+                        &library.names(),
                     ));
                 };
 
@@ -406,9 +410,11 @@ impl McpServer {
                 };
 
                 // Find the symbol (mutable)
+                let names = library.names();
                 let Some(symbol) = library.get_mut(component_name) else {
-                    return ToolCallResult::error(format!(
-                        "Symbol '{component_name}' not found in library"
+                    return ToolCallResult::error(super::component_not_found(
+                        component_name,
+                        &names,
                     ));
                 };
 
@@ -666,7 +672,7 @@ mod tests {
             "operation": "list",
         }));
         assert!(result.is_error);
-        assert!(get_result_text(&result).contains("Symbol 'NOPE' not found"));
+        assert!(get_result_text(&result).contains("Component 'NOPE' not found in library"));
 
         // Get a parameter that does not exist.
         let result = server.call_manage_schlib_parameters(&json!({
@@ -883,7 +889,7 @@ mod tests {
             "operation": "list",
         }));
         assert!(result.is_error);
-        assert!(get_result_text(&result).contains("Symbol 'NOPE' not found"));
+        assert!(get_result_text(&result).contains("Component 'NOPE' not found in library"));
 
         // Unknown operation.
         let result = server.call_manage_schlib_footprints(&json!({
@@ -1033,7 +1039,7 @@ mod tests {
                     "value": "1k",
                 }));
                 assert!(result.is_error, "{operation} must reject an unknown symbol");
-                assert!(get_result_text(&result).contains("Symbol 'NOPE' not found"));
+                assert!(get_result_text(&result).contains("Component 'NOPE' not found in library"));
             }
         }
 
@@ -1157,7 +1163,7 @@ mod tests {
                     "footprint_name": "SOIC-8",
                 }));
                 assert!(result.is_error, "{operation} must reject an unknown symbol");
-                assert!(get_result_text(&result).contains("Symbol 'NOPE' not found"));
+                assert!(get_result_text(&result).contains("Component 'NOPE' not found in library"));
             }
         }
 

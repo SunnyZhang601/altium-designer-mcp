@@ -1254,9 +1254,11 @@ impl McpServer {
 mod tests {
 
     use crate::altium::pcblib::{
-        ComponentBody, EmbeddedModel, Footprint, Layer, Pad, PcbLib, Track,
+        ComponentBody, EmbeddedModel, Footprint, Layer, Pad, PadShape, PadStackMode, PcbLib, Track,
+        Via, ViaStackMode,
     };
     use crate::altium::SchLib;
+    use crate::mcp::server::McpServer;
     use crate::mcp::tools::test_support::{
         create_test_pcblib, create_test_schlib, create_test_server, get_result_text,
         parse_result_json, test_temp_dir,
@@ -3462,5 +3464,48 @@ mod tests {
             block_save(std::path::Path::new(&lib), false);
             assert!(r.is_error, "{}", get_result_text(&r));
         }
+    }
+
+    /// A primary edit reaches only the per-layer entries that shared the old
+    /// value: a height change follows where the height matched, a shape
+    /// change where the shape matched, and a layer with its own value keeps
+    /// it.
+    #[test]
+    fn a_stacked_pad_follows_a_height_and_a_shape_edit_where_layers_matched() {
+        let mut pad = Pad::smd("1", 0.0, 0.0, 1.0, 2.0);
+        pad.stack_mode = PadStackMode::TopMiddleBottom;
+        pad.per_layer_sizes = Some(vec![(1.0, 2.0), (1.0, 2.0), (0.8, 1.5)]);
+        pad.per_layer_shapes = Some(vec![PadShape::Round, PadShape::Round, PadShape::Rectangle]);
+
+        // The edit: height 2.0 -> 2.6, shape Round -> Oval; width untouched.
+        pad.height = 2.6;
+        pad.shape = PadShape::Oval;
+        let followed = McpServer::propagate_pad_edit_to_stack(&mut pad, 1.0, 2.0, PadShape::Round);
+
+        assert_eq!(followed, 4, "two heights and two shapes followed");
+        assert_eq!(
+            pad.per_layer_sizes.as_ref().unwrap(),
+            &vec![(1.0, 2.6), (1.0, 2.6), (0.8, 1.5)],
+            "the layer with its own height keeps it"
+        );
+        assert_eq!(
+            pad.per_layer_shapes.as_ref().unwrap(),
+            &vec![PadShape::Oval, PadShape::Oval, PadShape::Rectangle],
+            "the layer with its own shape keeps it"
+        );
+    }
+
+    /// A via edit that leaves the diameter as it was touches no layer.
+    #[test]
+    fn a_via_edit_without_a_diameter_change_touches_no_layer() {
+        let mut via = Via::new(0.0, 0.0, 0.6, 0.3);
+        via.diameter_stack_mode = ViaStackMode::TopMiddleBottom;
+        via.per_layer_diameters = Some(vec![0.6, 0.6, 0.6]);
+        let followed = McpServer::propagate_via_edit_to_stack(&mut via, 0.6);
+        assert_eq!(followed, 0);
+        assert_eq!(
+            via.per_layer_diameters.as_ref().unwrap(),
+            &vec![0.6, 0.6, 0.6]
+        );
     }
 }

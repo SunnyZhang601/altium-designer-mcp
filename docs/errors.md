@@ -185,7 +185,12 @@ handler reading `"true"` where it expects `true`, or `"1.5"` where it expects `1
 would likewise take the default without a word. A whole number is accepted wherever an
 integer is expected (`2` and `2.0` alike); a field the schema types as several kinds
 (`flags`, a region's `kind`) accepts any of them. The parsers judge the *values*
-themselves — spellings, ranges, layer names — and say so in their own errors.
+themselves — spellings, ranges, layer names — and say so in their own errors. A pad or
+via stack is held to what the record stores — the entry count its stack mode takes
+(3 for `top_middle_bottom`, 32 for `full_stack`; 32 diameters for a stacked via), a shape
+per entry, a whole-number 0-100 corner radius —
+`Pad '1' per_layer_shapes[2] 'oblongish' is not a shape` — rather than filling a
+missing layer from the main size or ignoring an extra one.
 
 `write_pcblib`, `write_schlib`, `update_component`, `update_pad`, `update_primitive` and
 `batch_update` refuse any JSON object key they do not know —

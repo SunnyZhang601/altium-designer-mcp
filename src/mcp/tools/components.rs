@@ -3411,4 +3411,100 @@ mod tests {
         assert_eq!(parse_result_json(&result)["target_name"], "CHIP_0603");
         assert_eq!(PcbLib::open(&spare).unwrap().names(), ["CHIP_0603"]);
     }
+
+    /// A cross-library copy takes a new description when one is given, and
+    /// keeps the source's when not.
+    #[test]
+    fn a_cross_library_copy_takes_the_description_it_is_given() {
+        let dir = test_temp_dir();
+        let server = create_test_server(dir.path());
+        let source = dir.path().join("Source.PcbLib");
+        create_test_pcblib(&source);
+        let target = dir.path().join("Target.PcbLib");
+        PcbLib::new().save(&target).unwrap();
+
+        let result = server.call_copy_component_cross_library(&json!({
+            "source_filepath": source.to_string_lossy(),
+            "target_filepath": target.to_string_lossy(),
+            "component_name": "CHIP_0402",
+            "description": "described on the way over",
+        }));
+        assert!(!result.is_error, "{}", get_result_text(&result));
+        let lib = PcbLib::open(&target).unwrap();
+        assert_eq!(
+            lib.get("CHIP_0402").unwrap().description,
+            "described on the way over"
+        );
+
+        let result = server.call_copy_component_cross_library(&json!({
+            "source_filepath": source.to_string_lossy(),
+            "target_filepath": target.to_string_lossy(),
+            "component_name": "CHIP_0603",
+        }));
+        assert!(!result.is_error, "{}", get_result_text(&result));
+        let lib = PcbLib::open(&target).unwrap();
+        assert_eq!(
+            lib.get("CHIP_0603").unwrap().description,
+            PcbLib::open(&source)
+                .unwrap()
+                .get("CHIP_0603")
+                .unwrap()
+                .description,
+            "without a description the source's is kept"
+        );
+    }
+
+    /// `on_duplicate: "error"` stops a merge at the first name the target
+    /// already holds, naming it and its source, and writes nothing — in both
+    /// formats.
+    #[test]
+    fn a_merge_that_must_not_meet_a_duplicate_stops_at_the_first_one() {
+        let dir = test_temp_dir();
+        let server = create_test_server(dir.path());
+
+        let pcb_target = dir.path().join("Target.PcbLib");
+        create_test_pcblib(&pcb_target);
+        let pcb_source = dir.path().join("Source.PcbLib");
+        create_test_pcblib(&pcb_source); // the same two names again
+        let before = std::fs::read(&pcb_target).unwrap();
+        let result = server.call_merge_libraries(&json!({
+            "source_filepaths": [pcb_source.to_string_lossy()],
+            "target_filepath": pcb_target.to_string_lossy(),
+            "on_duplicate": "error",
+        }));
+        assert!(result.is_error, "{}", get_result_text(&result));
+        let text = get_result_text(&result);
+        assert!(
+            text.contains("Duplicate component name 'CHIP_0402'"),
+            "{text}"
+        );
+        assert!(text.contains("'skip' or 'rename'"), "{text}");
+        assert_eq!(
+            std::fs::read(&pcb_target).unwrap(),
+            before,
+            "nothing written"
+        );
+
+        let sch_target = dir.path().join("Target.SchLib");
+        create_test_schlib(&sch_target);
+        let sch_source = dir.path().join("Source.SchLib");
+        create_test_schlib(&sch_source);
+        let before = std::fs::read(&sch_target).unwrap();
+        let result = server.call_merge_libraries(&json!({
+            "source_filepaths": [sch_source.to_string_lossy()],
+            "target_filepath": sch_target.to_string_lossy(),
+            "on_duplicate": "error",
+        }));
+        assert!(result.is_error, "{}", get_result_text(&result));
+        let text = get_result_text(&result);
+        assert!(
+            text.contains("Duplicate component name 'RESISTOR'"),
+            "{text}"
+        );
+        assert_eq!(
+            std::fs::read(&sch_target).unwrap(),
+            before,
+            "nothing written"
+        );
+    }
 }

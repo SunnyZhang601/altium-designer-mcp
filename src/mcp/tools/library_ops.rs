@@ -491,16 +491,6 @@ impl McpServer {
                             pad.designator, pad.width, pad.height)
                     }));
                 }
-
-                // Check for invalid coordinates
-                if !pad.x.is_finite() || !pad.y.is_finite() {
-                    issues.push(json!({
-                        "severity": "error",
-                        "component": name,
-                        "issue": format!("Pad '{}' has invalid coordinates (x: {}, y: {})",
-                            pad.designator, pad.x, pad.y)
-                    }));
-                }
             }
 
             // Check tracks for invalid values
@@ -512,17 +502,6 @@ impl McpServer {
                         "issue": format!("Track {} has invalid width: {}", i, track.width)
                     }));
                 }
-                if !track.x1.is_finite()
-                    || !track.y1.is_finite()
-                    || !track.x2.is_finite()
-                    || !track.y2.is_finite()
-                {
-                    issues.push(json!({
-                        "severity": "error",
-                        "component": name,
-                        "issue": format!("Track {} has invalid coordinates", i)
-                    }));
-                }
             }
 
             // Check arcs for invalid values
@@ -532,13 +511,6 @@ impl McpServer {
                         "severity": "error",
                         "component": name,
                         "issue": format!("Arc {} has invalid radius: {}", i, arc.radius)
-                    }));
-                }
-                if !arc.x.is_finite() || !arc.y.is_finite() {
-                    issues.push(json!({
-                        "severity": "error",
-                        "component": name,
-                        "issue": format!("Arc {} has invalid centre coordinates", i)
                     }));
                 }
             }

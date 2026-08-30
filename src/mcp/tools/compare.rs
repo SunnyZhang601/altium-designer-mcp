@@ -1925,6 +1925,35 @@ mod tests {
         }
         assert_eq!(diffs[0]["changes"][0]["first_mismatch_index"], 2);
 
+        // Every other property a body carries is a reported change too, and
+        // an outline of another vertex count is reported as such rather than
+        // as a drift.
+        let mut body_c = body_a.clone();
+        body_c.outline.push((1.0, 2.0));
+        body_c.kind = 1;
+        body_c.embedded = !body_a.embedded;
+        body_c.body_color_3d = 0x00_FF00;
+        body_c.name = "renamed".to_string();
+        body_c.standoff_height = 0.3;
+        body_c.rotation_z = 90.0;
+        let diffs = McpServer::compare_bodies(&[body_a.clone()], &[body_c], 0.001);
+        assert_eq!(diffs.len(), 1, "{diffs:?}");
+        for property in [
+            "vertex_count",
+            "kind",
+            "embedded",
+            "body_color_3d",
+            "name",
+            "standoff_height",
+            "rotation_z",
+        ] {
+            assert!(has_change(&diffs, property), "{property}: {diffs:?}");
+        }
+        assert!(
+            !has_change(&diffs, "outline"),
+            "a different vertex count is not also an outline drift: {diffs:?}"
+        );
+
         // A different model is a one-sided pair, described by layer and size.
         let other = ComponentBody::new("", "other.step");
         let diffs = McpServer::compare_bodies(&[body_a], &[other], 0.001);

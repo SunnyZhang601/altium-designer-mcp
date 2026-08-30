@@ -1153,7 +1153,8 @@ impl McpServer {
                      1.0 mm, flagged 'assumed_height': true) added to such footprints, then confirm \
                      or override it by supplying 'component_bodies' explicitly. The response also includes a \
                      'warnings' array flagging silkscreen (overlay) tracks that overlap a pad \
-                     (silk-on-pad) so you can move them clear."
+                     (silk-on-pad) so you can move them clear. No text field may contain '|', the \
+                     separator of Altium's record format, which cannot hold it."
                         .to_string(),
                 ),
                 input_schema: json!({
@@ -1213,7 +1214,9 @@ impl McpServer {
                      symbols set 'part_count' and tag each pin with 'owner_part_id'. \
                      Coordinates must be in schematic units (10 units = 1 grid square, not mm); \
                      a pin's (x, y) is its body-attach end and 'orientation' is the direction it \
-                     points outward — the response echoes each pin's computed body_end and tip."
+                     points outward — the response echoes each pin's computed body_end and tip. \
+                     No text field may contain '|', the separator of Altium's record format; \
+                     Altium's own editor stores it as '¦' (U+00A6)."
                         .to_string(),
                 ),
                 input_schema: json!({

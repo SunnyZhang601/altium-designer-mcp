@@ -665,6 +665,48 @@ pub(crate) fn order_ranker<'a>(new_order: &[&'a str]) -> impl Fn(&str) -> usize 
     }
 }
 
+/// The path of the first string in `record`'s JSON shape that contains
+/// `|`, the separator of Altium's pipe-delimited records — or `None`.
+///
+/// The format has no way to escape one, so any such string would come back
+/// cut at it. Walking the serialised record covers every text field without
+/// a list; `exempt` names what never reaches such a record: a bare key
+/// matches that key at any depth, a path (`pads[].designator`, `pins[]`)
+/// matches it and everything beneath it. Array indices read as `[]`.
+#[must_use]
+pub fn record_separator_path<T: serde::Serialize>(record: &T, exempt: &[&str]) -> Option<String> {
+    fn exempted(path: &str, key: &str, exempt: &[&str]) -> bool {
+        exempt.iter().any(|e| {
+            *e == key
+                || *e == path
+                || path.starts_with(&format!("{e}."))
+                || path.starts_with(&format!("{e}["))
+        })
+    }
+    fn walk(value: &serde_json::Value, path: &str, key: &str, exempt: &[&str]) -> Option<String> {
+        if exempted(path, key, exempt) {
+            return None;
+        }
+        match value {
+            serde_json::Value::String(text) if text.contains('|') => Some(path.to_string()),
+            serde_json::Value::Object(fields) => fields.iter().find_map(|(k, v)| {
+                let child = if path.is_empty() {
+                    k.clone()
+                } else {
+                    format!("{path}.{k}")
+                };
+                walk(v, &child, k, exempt)
+            }),
+            serde_json::Value::Array(items) => items
+                .iter()
+                .find_map(|v| walk(v, &format!("{path}[]"), key, exempt)),
+            _ => None,
+        }
+    }
+    let value = serde_json::to_value(record).ok()?;
+    walk(&value, "", "", exempt)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -868,5 +910,36 @@ mod tests {
         // reading past its end.
         assert!(parse_section_keys(&[]).is_empty());
         assert!(parse_section_keys(&[1, 2, 3]).is_empty());
+    }
+
+    /// The walk names the first offending string by path, reads array
+    /// indices as `[]`, and honours an exemption by bare key or by path.
+    #[test]
+    fn record_separator_path_names_the_offender_and_honours_exemptions() {
+        use serde_json::json;
+
+        let record = json!({
+            "name": "clean",
+            "items": [{ "label": "fine", "flags": "A | B" }, { "label": "bad|one" }],
+            "pins": [{ "name": "p|q" }],
+            "nested": { "deep": [["k", "v|w"]] },
+        });
+        assert_eq!(
+            record_separator_path(&record, &["flags", "pins[]"]).as_deref(),
+            Some("items[].label")
+        );
+        assert_eq!(
+            record_separator_path(&record, &["flags", "pins[]", "items[].label"]).as_deref(),
+            Some("nested.deep[][]")
+        );
+        assert_eq!(
+            record_separator_path(&record, &["flags", "pins[]", "items[].label", "nested"]),
+            None
+        );
+        // Without the exemptions the flag names and the pin are offenders too.
+        assert_eq!(
+            record_separator_path(&record, &[]).as_deref(),
+            Some("items[].flags")
+        );
     }
 }

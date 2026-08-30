@@ -2272,3 +2272,27 @@ fn samples_schlib_ieeesym() {
         ]
     );
 }
+
+/// `manual/pipe.SchLib` (AD24, scripted 2026-08-30): a symbol whose
+/// description, parameter name and value, and label were given a `|`
+/// through Altium's own API. Altium stores every one as `¦` (U+00A6) — the
+/// record format has no escape for its separator — which is why the writer
+/// refuses a `|` and points at that character.
+#[test]
+fn manual_pipe_fixture_shows_altium_stores_a_pipe_as_a_broken_bar() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("scripts")
+        .join("samples")
+        .join("manual")
+        .join("pipe.SchLib");
+    let lib = SchLib::open(&path).expect("failed to open manual/pipe.SchLib");
+    let sym = lib.get("PIPESYM").expect("symbol PIPESYM not found");
+    assert_eq!(sym.description, "A\u{a6}B=C");
+    let param = sym
+        .parameters
+        .iter()
+        .find(|p| p.name == "Val\u{a6}ue")
+        .expect("parameter Val¦ue not found");
+    assert_eq!(param.value, "1\u{a6}2");
+    assert_eq!(sym.labels[0].text, "x\u{a6}y");
+}

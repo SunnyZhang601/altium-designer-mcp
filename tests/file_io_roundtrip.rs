@@ -504,6 +504,77 @@ fn schlib_preserves_unique_id_and_pin_accessibility() {
 }
 
 #[test]
+fn a_pipe_in_record_text_is_refused_by_both_writers() {
+    // Altium's records are pipe-delimited with no escape, so a '|' in any
+    // text the writer places between separators would come back cut. Both
+    // writers refuse it by field; strings kept in binary fields may carry one.
+    use altium_designer_mcp::altium::schlib::{Label, Parameter};
+
+    let temp_dir = test_temp_dir();
+
+    let mut lib = SchLib::new();
+    let mut sym = Symbol::new("PIPES");
+    sym.add_pin(Pin::new("a|b", "1|2", -20, 0, 10, PinOrientation::Left));
+    sym.add_label(Label::new(0.0, 0.0, "x|y"));
+    lib.add(sym);
+    let err = lib
+        .save(temp_dir.path().join("Pipes.SchLib"))
+        .expect_err("a label with a '|' must be refused");
+    let text = err.to_string();
+    assert!(
+        text.contains("Symbol 'PIPES' labels[].text contains '|'"),
+        "{text}"
+    );
+    assert!(text.contains("U+00A6"), "{text}");
+
+    let mut lib = SchLib::new();
+    let mut sym = Symbol::new("PIPEPIN");
+    sym.add_pin(Pin::new("a|b", "1|2", -20, 0, 10, PinOrientation::Left));
+    let mut param = Parameter::new("Value", "1|2");
+    param.x = 0.0;
+    sym.add_parameter(param);
+    lib.add(sym);
+    let err = lib
+        .save(temp_dir.path().join("PipeParam.SchLib"))
+        .expect_err("a parameter value with a '|' must be refused");
+    assert!(
+        err.to_string()
+            .contains("Symbol 'PIPEPIN' parameters[].value contains '|'"),
+        "{err}"
+    );
+
+    let mut lib = SchLib::new();
+    let mut sym = Symbol::new("PINONLY");
+    sym.add_pin(Pin::new("a|b", "1|2", -20, 0, 10, PinOrientation::Left));
+    lib.add(sym);
+    lib.save(temp_dir.path().join("PinOnly.SchLib"))
+        .expect("a pin's strings are binary and may carry a '|'");
+
+    let mut lib = PcbLib::new();
+    let mut fp = Footprint::new("PIPES");
+    fp.add_pad(Pad::smd("1|2", 0.0, 0.0, 1.0, 1.0));
+    fp.description = "A|B".to_string();
+    lib.add(fp);
+    let err = lib
+        .save(temp_dir.path().join("Pipes.PcbLib"))
+        .expect_err("a description with a '|' must be refused");
+    let text = err.to_string();
+    assert!(
+        text.contains("Footprint 'PIPES' description contains '|'"),
+        "{text}"
+    );
+    assert!(text.contains("cut at the '|'"), "{text}");
+
+    let mut lib = PcbLib::new();
+    let mut fp = Footprint::new("PADONLY");
+    fp.add_pad(Pad::smd("1|2", 0.0, 0.0, 1.0, 1.0));
+    fp.add_text(Text::new(0.0, 0.0, "x|y", 1.0, Layer::TopOverlay));
+    lib.add(fp);
+    lib.save(temp_dir.path().join("PadOnly.PcbLib"))
+        .expect("a pad designator and a text string are binary and may carry a '|'");
+}
+
+#[test]
 fn schlib_preserves_shape_flags_the_defaults_leave_unset() {
     // The writer emits Transparent=T only for a transparent polyline and
     // omits IsNotAccesible for an accessible arc or ellipse; each must read

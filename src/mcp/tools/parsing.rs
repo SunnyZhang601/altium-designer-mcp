@@ -475,6 +475,68 @@ pub const PAD_SHAPE_HELP: &str = "Valid shapes are: rectangle (or rectangular), 
 /// the warning does.
 pub const DESCRIPTION_MAX_LEN: usize = 256;
 
+/// A corner-radius percentage: a whole number from 0 to 100. Anything else —
+/// negative, fractional, over 100 — is refused, since the writer would
+/// otherwise store "no radius" for it without a word.
+fn percent(value: &Value, field: &str) -> Result<u8, String> {
+    value
+        .as_u64()
+        .and_then(|v| u8::try_from(v).ok())
+        .filter(|&v| v <= 100)
+        .ok_or_else(|| format!("{field} must be a whole number from 0 to 100, got {value}"))
+}
+
+/// The entries of a pad's per-layer array (`key`), held to what the record
+/// stores: none on a simple pad; three, `[top, mid, bottom]`, on a
+/// top-middle-bottom pad — which keeps sizes and shapes only; thirty-two on
+/// a full stack. The writer fills a missing layer from the pad's main value
+/// and ignores an extra one, so a count that does not match is refused here
+/// rather than mended in silence. `field` names the pad and key in errors.
+fn stack_entries<'a>(
+    json: &'a Value,
+    key: &str,
+    stack_mode: crate::altium::pcblib::PadStackMode,
+    full_stack_only: bool,
+    field: &str,
+) -> Result<Option<&'a [Value]>, String> {
+    use crate::altium::pcblib::PadStackMode;
+
+    let Some(value) = json.get(key).filter(|v| !v.is_null()) else {
+        return Ok(None);
+    };
+    let entries = value
+        .as_array()
+        .ok_or_else(|| format!("{field} must be an array, got {value}"))?;
+    let (expected, mode, layout) = match stack_mode {
+        PadStackMode::Simple => {
+            return Err(format!(
+                "{field} is given but stack_mode is simple; set stack_mode to \
+                 top_middle_bottom (3 entries: top, mid, bottom) or full_stack \
+                 (32 entries: index 0 = Top, 1 = Bottom, 2-31 = Mid layers)"
+            ))
+        }
+        PadStackMode::TopMiddleBottom if full_stack_only => {
+            return Err(format!(
+                "{field} applies to a full_stack pad only; a top_middle_bottom pad \
+                 stores per-layer sizes and shapes"
+            ))
+        }
+        PadStackMode::TopMiddleBottom => (3, "top_middle_bottom", "[top, mid, bottom]"),
+        PadStackMode::FullStack => (
+            32,
+            "full_stack",
+            "index 0 = Top, 1 = Bottom, 2-31 = Mid layers",
+        ),
+    };
+    if entries.len() != expected {
+        return Err(format!(
+            "{field} has {} entries; {mode} takes {expected} ({layout})",
+            entries.len()
+        ));
+    }
+    Ok(Some(entries.as_slice()))
+}
+
 impl McpServer {
     /// Parses a pad shape name, shared by `write_pcblib` and `update_pad` so the
     /// same spelling is accepted everywhere.
@@ -1439,12 +1501,12 @@ impl McpServer {
         )?
         .unwrap_or_default();
 
-        // Parse optional corner radius
-        let corner_radius_percent = json
-            .get("corner_radius_percent")
-            .and_then(Value::as_u64)
-            .and_then(|v| u8::try_from(v).ok())
-            .filter(|&v| v <= 100);
+        // The corner radius is a percentage; out of range is refused rather
+        // than quietly read as "none".
+        let corner_radius_percent = match json.get("corner_radius_percent") {
+            None | Some(Value::Null) => None,
+            Some(value) => Some(percent(value, &pad_field("corner_radius_percent"))?),
+        };
 
         // Thermal-relief / power-plane connection fields. Absent keys keep the
         // from-scratch defaults (= Altium's pad template), so an unspecified pad
@@ -1520,38 +1582,63 @@ impl McpServer {
             &[],
         )?
         .unwrap_or_default();
-        // Each entry in any spelling the tools accept (`{width, height}`,
-        // `{x, y}` or `[a, b]`); a malformed entry is a zero pair rather than
-        // a silently shortened stack.
-        let pairs = |field: &str| {
-            json.get(field).and_then(Value::as_array).map(|a| {
-                a.iter()
-                    .map(|v| crate::altium::serde_round::pair_from_json(v).unwrap_or((0.0, 0.0)))
-                    .collect::<Vec<_>>()
-            })
+        // Every per-layer array is held to what the record stores (see
+        // `stack_entries`), and an entry that is not what it must be is
+        // refused by index — never read as a zero pair, a round layer or no
+        // radius. Pairs take any spelling the tools accept (`{width, height}`,
+        // `{x, y}` or `[a, b]`).
+        let entries = |key: &str, full_stack_only: bool| {
+            stack_entries(json, key, stack_mode, full_stack_only, &pad_field(key))
         };
-        let per_layer_sizes = pairs("per_layer_sizes");
-        let per_layer_offsets = pairs("per_layer_offsets");
-        let per_layer_shapes = json
-            .get("per_layer_shapes")
-            .and_then(Value::as_array)
-            .map(|a| {
-                a.iter()
-                    .map(|v| {
-                        v.as_str()
-                            .and_then(Self::parse_pad_shape)
-                            .unwrap_or(crate::altium::pcblib::PadShape::Round)
+        let pairs = |key: &str, full_stack_only: bool, spelling: &str| {
+            entries(key, full_stack_only)?
+                .map(|entries| {
+                    entries
+                        .iter()
+                        .enumerate()
+                        .map(|(i, v)| {
+                            crate::altium::serde_round::pair_from_json(v).ok_or_else(|| {
+                                format!("{}[{i}] must be {spelling}, got {v}", pad_field(key))
+                            })
+                        })
+                        .collect::<Result<Vec<_>, String>>()
+                })
+                .transpose()
+        };
+        let per_layer_sizes = pairs(
+            "per_layer_sizes",
+            false,
+            "{width, height} (or [width, height])",
+        )?;
+        let per_layer_offsets = pairs("per_layer_offsets", true, "{x, y} (or [x, y])")?;
+        let per_layer_shapes = entries("per_layer_shapes", false)?
+            .map(|entries| {
+                entries
+                    .iter()
+                    .enumerate()
+                    .map(|(i, v)| {
+                        let field = format!("{}[{i}]", pad_field("per_layer_shapes"));
+                        let name = v.as_str().ok_or_else(|| {
+                            format!("{field} must be a string, got {v}. {PAD_SHAPE_HELP}")
+                        })?;
+                        Self::parse_pad_shape(name).ok_or_else(|| {
+                            format!("{field} '{name}' is not a shape. {PAD_SHAPE_HELP}")
+                        })
                     })
-                    .collect::<Vec<_>>()
-            });
-        let per_layer_corner_radii = json
-            .get("per_layer_corner_radii")
-            .and_then(Value::as_array)
-            .map(|a| {
-                a.iter()
-                    .map(|v| u8::try_from(v.as_u64().unwrap_or(0)).unwrap_or(0))
-                    .collect::<Vec<_>>()
-            });
+                    .collect::<Result<Vec<_>, String>>()
+            })
+            .transpose()?;
+        let per_layer_corner_radii = entries("per_layer_corner_radii", true)?
+            .map(|entries| {
+                entries
+                    .iter()
+                    .enumerate()
+                    .map(|(i, v)| {
+                        percent(v, &format!("{}[{i}]", pad_field("per_layer_corner_radii")))
+                    })
+                    .collect::<Result<Vec<_>, String>>()
+            })
+            .transpose()?;
 
         Ok(Pad {
             raw_layer_id: json_raw_layer_id(json),
@@ -2291,8 +2378,38 @@ impl McpServer {
             &[],
         )?
         .unwrap_or_default();
-        if let Some(diameters) = json.get("per_layer_diameters").and_then(Value::as_array) {
-            via.per_layer_diameters = Some(diameters.iter().filter_map(Value::as_f64).collect());
+        // The diameter stack, held to the record's 32 slots: the writer would
+        // fill a missing layer from `diameter` and ignore an extra one without
+        // a word, and a simple via has no stack to fill.
+        if let Some(value) = json.get("per_layer_diameters").filter(|v| !v.is_null()) {
+            let entries = value
+                .as_array()
+                .ok_or_else(|| format!("Via per_layer_diameters must be an array, got {value}"))?;
+            if via.diameter_stack_mode == crate::altium::pcblib::ViaStackMode::Simple {
+                return Err(
+                    "Via per_layer_diameters is given but diameter_stack_mode is simple; \
+                            set it to top_middle_bottom or full_stack (32 entries: index 0 = Top, \
+                            1 = Bottom, 2-31 = Mid layers)"
+                        .to_string(),
+                );
+            }
+            if entries.len() != 32 {
+                return Err(format!(
+                    "Via per_layer_diameters has {} entries; a stacked via takes 32 (index 0 = \
+                     Top, 1 = Bottom, 2-31 = Mid layers)",
+                    entries.len()
+                ));
+            }
+            let diameters = entries
+                .iter()
+                .enumerate()
+                .map(|(i, v)| {
+                    v.as_f64().ok_or_else(|| {
+                        format!("Via per_layer_diameters[{i}] must be a number, got {v}")
+                    })
+                })
+                .collect::<Result<Vec<_>, String>>()?;
+            via.per_layer_diameters = Some(diameters);
         }
 
         via.flags = json_flags(json);
@@ -4029,18 +4146,19 @@ mod tests {
     #[test]
     fn parse_via_reads_diameter_stack_and_back_mask() {
         use crate::altium::pcblib::ViaStackMode;
+        let mut diameters = vec![0.6; 32];
+        diameters[1] = 0.7;
         let via = McpServer::parse_via(&json!({
             "x": 0.0, "y": 0.0, "diameter": 0.6, "hole_size": 0.3,
             "diameter_stack_mode": "full_stack",
-            "per_layer_diameters": [0.6, 0.7, 0.8],
+            "per_layer_diameters": diameters,
             "solder_mask_expansion_back": 0.05,
         }))
         .expect("via should parse");
         assert_eq!(via.diameter_stack_mode, ViaStackMode::FullStack);
-        assert_eq!(
-            via.per_layer_diameters.as_deref(),
-            Some(&[0.6, 0.7, 0.8][..])
-        );
+        let read = via.per_layer_diameters.expect("diameters read");
+        assert_eq!(read.len(), 32);
+        assert_eq!((read[0], read[1], read[2]), (0.6, 0.7, 0.6));
         assert_eq!(via.solder_mask_expansion_back, Some(0.05));
 
         // Absent -> struct defaults, so a from-scratch via is unchanged.
@@ -4051,6 +4169,45 @@ mod tests {
         assert_eq!(plain.diameter_stack_mode, ViaStackMode::Simple);
         assert_eq!(plain.per_layer_diameters, None);
         assert_eq!(plain.solder_mask_expansion_back, None);
+    }
+
+    /// A via's diameter stack is held to the record's 32 slots: fewer or
+    /// more entries, an entry that is not a number, or a stack on a simple
+    /// via is refused rather than filled from `diameter` or ignored.
+    #[test]
+    fn parse_via_refuses_a_diameter_stack_the_record_cannot_hold() {
+        let with = |mode: &str, diameters: serde_json::Value| {
+            McpServer::parse_via(&json!({
+                "x": 0.0, "y": 0.0, "diameter": 0.6, "hole_size": 0.3,
+                "diameter_stack_mode": mode, "per_layer_diameters": diameters,
+            }))
+            .unwrap_err()
+        };
+        let err = with("full_stack", json!([0.6, 0.7, 0.8]));
+        assert!(
+            err.contains(
+                "Via per_layer_diameters has 3 entries; a stacked via takes 32 (index 0 = Top, \
+                 1 = Bottom, 2-31 = Mid layers)"
+            ),
+            "{err}"
+        );
+        let err = with("simple", json!(vec![0.6; 32]));
+        assert!(
+            err.contains("Via per_layer_diameters is given but diameter_stack_mode is simple"),
+            "{err}"
+        );
+        let mut entries = vec![json!(0.6); 32];
+        entries[5] = json!("thick");
+        let err = with("top_middle_bottom", json!(entries));
+        assert!(
+            err.contains("Via per_layer_diameters[5] must be a number, got \"thick\""),
+            "{err}"
+        );
+        let err = with("full_stack", json!("wide"));
+        assert!(
+            err.contains("Via per_layer_diameters must be an array, got \"wide\""),
+            "{err}"
+        );
     }
 
     #[test]
@@ -4345,27 +4502,143 @@ mod tests {
             assert!(err.contains("round, square, slot"), "{err}");
         }
 
+        /// A full stack takes 32 entries per array, in any accepted spelling
+        /// of a shape or a pair; a top-middle-bottom stack takes 3.
         #[test]
-        fn parse_pad_reads_the_per_layer_stack_arrays() {
+        fn parse_pad_reads_a_full_stack_and_a_top_middle_bottom_stack() {
             use crate::altium::pcblib::PadShape;
 
             let mut json = pad_json();
             json["stack_mode"] = json!("full_stack");
-            json["per_layer_shapes"] = json!(["round", "rectangle", "not-a-shape"]);
-            json["per_layer_corner_radii"] = json!([25, 50, 300]);
-            let pad = McpServer::parse_pad(&json).expect("stacked pad should parse");
-
-            let shapes = pad.per_layer_shapes.expect("shapes should be read");
-            assert_eq!(shapes[0], PadShape::Round);
+            let mut shapes = vec![json!("round"); 32];
+            shapes[1] = json!("rectangular");
+            shapes[2] = json!("Rounded-Rectangle");
+            json["per_layer_shapes"] = json!(shapes);
+            let mut radii = vec![json!(0); 32];
+            radii[2] = json!(35);
+            json["per_layer_corner_radii"] = json!(radii);
+            let mut offsets = vec![json!({ "x": 0.0, "y": 0.0 }); 32];
+            offsets[3] = json!([0.1, -0.2]);
+            json["per_layer_offsets"] = json!(offsets);
+            let pad = McpServer::parse_pad(&json).expect("full stack should parse");
+            let shapes = pad.per_layer_shapes.expect("shapes read");
+            assert_eq!(shapes.len(), 32);
             assert_eq!(shapes[1], PadShape::Rectangle);
-            // An unreadable entry falls back rather than failing the whole pad.
-            assert_eq!(shapes[2], PadShape::Round);
+            assert_eq!(
+                shapes[2],
+                PadShape::RoundedRectangle,
+                "any accepted spelling"
+            );
+            assert_eq!(pad.per_layer_corner_radii.expect("radii read")[2], 35);
+            assert_eq!(pad.per_layer_offsets.expect("offsets read")[3], (0.1, -0.2));
 
-            let radii = pad.per_layer_corner_radii.expect("radii should be read");
-            assert_eq!(radii[0], 25);
-            assert_eq!(radii[1], 50);
-            // Out of a byte's range, so it reads as 0 rather than wrapping.
-            assert_eq!(radii[2], 0);
+            let mut json = pad_json();
+            json["stack_mode"] = json!("top_middle_bottom");
+            json["per_layer_sizes"] = json!([
+                { "width": 1.6, "height": 1.2 },
+                [1.4, 1.0],
+                { "x": 1.8, "y": 1.4 },
+            ]);
+            json["per_layer_shapes"] = json!(["round", "rectangle", "octagonal"]);
+            let pad = McpServer::parse_pad(&json).expect("top-middle-bottom should parse");
+            assert_eq!(
+                pad.per_layer_sizes.expect("sizes read"),
+                vec![(1.6, 1.2), (1.4, 1.0), (1.8, 1.4)]
+            );
+            assert_eq!(
+                pad.per_layer_shapes.expect("shapes read"),
+                vec![PadShape::Round, PadShape::Rectangle, PadShape::Octagonal]
+            );
+        }
+
+        /// Every way a per-layer array can disagree with what the record
+        /// stores is refused, naming the pad, the array and the entry: the
+        /// writer would otherwise fill a missing layer from the main size,
+        /// ignore an extra one, and the parser used to read an unknown shape
+        /// as round, an out-of-range radius as none and a malformed pair as
+        /// a zero-size layer.
+        #[test]
+        fn parse_pad_refuses_a_stack_the_record_cannot_store() {
+            let stacked = |mode: &str, key: &str, value: serde_json::Value| {
+                let mut json = pad_json();
+                json["stack_mode"] = json!(mode);
+                json[key] = value;
+                McpServer::parse_pad(&json).unwrap_err()
+            };
+            let full = |entry: serde_json::Value, at: usize, fill: serde_json::Value| {
+                let mut entries = vec![fill; 32];
+                entries[at] = entry;
+                json!(entries)
+            };
+            let cases = [
+                (
+                    stacked("full_stack", "per_layer_shapes", full(json!("not-a-shape"), 2, json!("round"))),
+                    "Pad '1' per_layer_shapes[2] 'not-a-shape' is not a shape. Valid shapes are",
+                ),
+                (
+                    stacked("full_stack", "per_layer_shapes", full(json!(7), 0, json!("round"))),
+                    "Pad '1' per_layer_shapes[0] must be a string, got 7",
+                ),
+                (
+                    stacked("full_stack", "per_layer_corner_radii", full(json!(300), 2, json!(0))),
+                    "Pad '1' per_layer_corner_radii[2] must be a whole number from 0 to 100, got 300",
+                ),
+                (
+                    stacked(
+                        "full_stack",
+                        "per_layer_sizes",
+                        full(json!({ "width": 1.0 }), 1, json!({ "width": 1.0, "height": 1.0 })),
+                    ),
+                    "Pad '1' per_layer_sizes[1] must be {width, height} (or [width, height]), got {\"width\":1.0}",
+                ),
+                (
+                    stacked("full_stack", "per_layer_sizes", json!(vec![json!([1.0, 1.0]); 4])),
+                    "Pad '1' per_layer_sizes has 4 entries; full_stack takes 32 (index 0 = Top, 1 = Bottom, 2-31 = Mid layers)",
+                ),
+                (
+                    stacked("top_middle_bottom", "per_layer_shapes", json!(["round", "round"])),
+                    "Pad '1' per_layer_shapes has 2 entries; top_middle_bottom takes 3 ([top, mid, bottom])",
+                ),
+                (
+                    stacked("top_middle_bottom", "per_layer_offsets", json!([[0, 0], [0, 0], [0, 0]])),
+                    "Pad '1' per_layer_offsets applies to a full_stack pad only",
+                ),
+                (
+                    stacked("top_middle_bottom", "per_layer_corner_radii", json!([0, 0, 0])),
+                    "Pad '1' per_layer_corner_radii applies to a full_stack pad only",
+                ),
+                (
+                    stacked("simple", "per_layer_sizes", json!([[1.0, 1.0], [1.0, 1.0], [1.0, 1.0]])),
+                    "Pad '1' per_layer_sizes is given but stack_mode is simple",
+                ),
+                (
+                    stacked("full_stack", "per_layer_shapes", json!("round")),
+                    "Pad '1' per_layer_shapes must be an array, got \"round\"",
+                ),
+            ];
+            for (err, expected) in cases {
+                assert!(err.contains(expected), "expected {expected:?}, got {err:?}");
+            }
+
+            // The pad's own corner radius is held to the same range.
+            for value in [json!(150), json!(-5), json!(12.5)] {
+                let mut json = pad_json();
+                json["corner_radius_percent"] = value.clone();
+                let err = McpServer::parse_pad(&json).unwrap_err();
+                let expected = format!(
+                    "Pad '1' corner_radius_percent must be a whole number from 0 to 100, got {value}"
+                );
+                assert!(
+                    err.contains(&expected),
+                    "expected {expected:?}, got {err:?}"
+                );
+            }
+            let mut json = pad_json();
+            json["corner_radius_percent"] = json!(100);
+            assert_eq!(
+                McpServer::parse_pad(&json).unwrap().corner_radius_percent,
+                Some(100)
+            );
         }
 
         // ---- parse_track / parse_arc / parse_fill -----------------------------

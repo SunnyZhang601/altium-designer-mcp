@@ -509,6 +509,9 @@ impl McpServer {
             return Err("Access denied: no allowed directories are configured".to_string());
         }
 
+        if filepath.is_empty() {
+            return Err("Invalid path: no file path was given".to_string());
+        }
         let path = Path::new(filepath);
 
         // Only ever surface the file name to the client, never the full
@@ -3488,6 +3491,49 @@ mod tests {
             assert!(logged.contains("write_pcblib"));
         }
 
+        /// A successful mutating call is recorded with its outcome and the
+        /// file it touched — the file name only, never the directory.
+        #[test]
+        fn audit_logger_records_a_successful_call_by_file_name() {
+            let dir = test_temp_dir();
+            let audit_path = dir.path().join("audit.jsonl");
+            let lib = dir.path().join("Audited.PcbLib");
+            let mut server = McpServer::new(vec![dir.path().to_path_buf()])
+                .with_rate_limiter(RateLimiter::new(1000, 0.0))
+                .with_audit_logger(Some(AuditLogger::new(audit_path.clone())));
+            server.state = ServerState::Running;
+
+            let r = req(
+                "tools/call",
+                Some(json!({
+                    "name": "write_pcblib",
+                    "arguments": {
+                        "filepath": lib.to_string_lossy(),
+                        "footprints": [{
+                            "name": "A",
+                            "pads": [{ "designator": "1", "x": 0, "y": 0, "width": 1, "height": 1 }],
+                        }],
+                    },
+                })),
+            );
+            let _ = server.handle_tools_call(&r).unwrap();
+            assert!(lib.exists(), "the call succeeded");
+
+            let logged = std::fs::read_to_string(&audit_path).unwrap();
+            assert!(logged.contains("\"success\""), "{logged}");
+            assert!(logged.contains("Audited.PcbLib"), "{logged}");
+            let directory = dir
+                .path()
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .to_string();
+            assert!(
+                !logged.contains(&directory),
+                "the directory leaked: {logged}"
+            );
+        }
+
         #[test]
         fn error_context_builders_populate_fields() {
             let ctx = ErrorContext::new("write_pcblib", "boom")
@@ -3519,6 +3565,49 @@ mod tests {
                 .count();
             assert_eq!(remaining, 5);
         }
+
+        /// What pruning leaves alone: a file whose middle part is not a
+        /// timestamp (not a backup), a backup it cannot remove (reported,
+        /// not fatal), and a path with no parent, no file name or a
+        /// directory that cannot be read.
+        #[test]
+        fn cleanup_old_backups_skips_non_backups_and_survives_a_stubborn_one() {
+            let dir = test_temp_dir();
+            let original = dir.path().join("Lib.PcbLib");
+            std::fs::write(&original, b"x").unwrap();
+            let odd = dir.path().join("Lib.PcbLib.notatimestamp.bak");
+            std::fs::write(&odd, b"x").unwrap();
+            // The oldest "backup" is a directory, which remove_file refuses.
+            let stubborn = dir.path().join("Lib.PcbLib.20200101_000000.bak");
+            std::fs::create_dir(&stubborn).unwrap();
+            for n in 1..=6 {
+                let bak = dir.path().join(format!("Lib.PcbLib.20260101_12000{n}.bak"));
+                std::fs::write(&bak, b"x").unwrap();
+            }
+
+            McpServer::cleanup_old_backups(&original.to_string_lossy());
+
+            assert!(odd.exists(), "not a backup, so not pruned");
+            assert!(
+                stubborn.exists(),
+                "could not be removed; reported, not fatal"
+            );
+            assert!(
+                !dir.path().join("Lib.PcbLib.20260101_120001.bak").exists(),
+                "the sixth-newest backup is pruned"
+            );
+            assert!(dir.path().join("Lib.PcbLib.20260101_120002.bak").exists());
+
+            // Nothing to do, and nothing to fail on, for these.
+            McpServer::cleanup_old_backups("");
+            McpServer::cleanup_old_backups("Lib.PcbLib/..");
+            McpServer::cleanup_old_backups(
+                &dir.path()
+                    .join("missing")
+                    .join("Lib.PcbLib")
+                    .to_string_lossy(),
+            );
+        }
     }
 
     // ==================== path gate and backup retention =====================
@@ -3549,6 +3638,18 @@ mod tests {
                 .validate_path(&real.path().join("Lib.PcbLib").to_string_lossy())
                 .expect_err("an unresolvable allow-list must not permit anything");
             assert!(err.contains("Access denied"), "{err}");
+        }
+
+        /// An empty file path is refused as what it is — an empty path has
+        /// no parent to check, which is not "the filesystem root".
+        #[test]
+        fn an_empty_path_is_refused_as_empty() {
+            let dir = test_temp_dir();
+            let server = McpServer::new(vec![dir.path().to_path_buf()]);
+            let err = server
+                .validate_path("")
+                .expect_err("an empty path must be refused");
+            assert_eq!(err, "Invalid path: no file path was given");
         }
 
         #[test]
@@ -3661,5 +3762,44 @@ mod tests {
             let made = made.expect("a backup path should be reported");
             assert!(std::path::Path::new(&made).exists(), "{made}");
         }
+    }
+
+    /// The type check's own corners: a `null` type, a type it does not know
+    /// (left to the parser), a union type, every JSON type named in the
+    /// message, the message's 40-character cap on a long string, and
+    /// `items` that is not a schema object (JSON Schema allows `true`),
+    /// which checks nothing.
+    #[test]
+    fn check_value_against_schema_covers_every_schema_form() {
+        let check = |value: Value, schema: Value| check_value_against_schema(&value, &schema, "v");
+
+        assert!(check(json!(null), json!({ "type": "null" })).is_ok());
+        assert!(check(json!("2026-08-30"), json!({ "type": "date" })).is_ok());
+
+        let union = json!({ "type": ["string", "integer"] });
+        assert!(check(json!("LOCKED"), union.clone()).is_ok());
+        assert!(check(json!(4), union.clone()).is_ok());
+        assert_eq!(
+            check(json!(true), union).unwrap_err(),
+            "Argument 'v' must be a string or integer, got boolean true"
+        );
+
+        for (value, name) in [
+            (json!(null), "null"),
+            (json!(false), "boolean"),
+            (json!([1]), "array"),
+            (json!({ "a": 1 }), "object"),
+        ] {
+            let err = check(value, json!({ "type": "number" })).unwrap_err();
+            assert!(err.contains(&format!("got {name} ")), "{err}");
+        }
+
+        let err = check(json!("x".repeat(60)), json!({ "type": "number" })).unwrap_err();
+        assert!(
+            err.ends_with(&format!("got string \"{}…\"", "x".repeat(40))),
+            "{err}"
+        );
+
+        assert!(check(json!([1, "two"]), json!({ "type": "array", "items": true })).is_ok());
     }
 }

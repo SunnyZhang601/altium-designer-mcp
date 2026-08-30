@@ -37,6 +37,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   asked, and every write, `validate_library` and the post-write validation of
   every mutating tool report a warning that names the component and says by
   how many characters to shorten it.
+- **An empty `filepath` is refused as empty.** It was reported as "cannot
+  create a file at the filesystem root" — the message for a path with no
+  parent directory, which an empty path also happens to lack.
 
 - **A solid symbol body no longer paints over the pin names inside it.**
   `write_schlib` recorded the order it happened to parse its input in — pins

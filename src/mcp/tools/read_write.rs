@@ -283,13 +283,23 @@ impl McpServer {
             Ok(library) => {
                 let total_count = library.len();
 
-                // Apply filtering and pagination
-                let footprints: Vec<_> = library
-                    .iter()
-                    .filter(|fp| {
-                        // If component_name specified, only include matching
-                        component_name.map_or(true, |name| fp.name == name)
-                    })
+                // A requested component is resolved as every tool resolves
+                // one — regardless of case — and a miss is an error naming
+                // what is there, not an empty success.
+                let selected: Vec<_> = match component_name {
+                    Some(name) => match library.get(name) {
+                        Some(fp) => vec![fp],
+                        None => {
+                            return ToolCallResult::error(super::component_not_found(
+                                name,
+                                &library.names(),
+                            ))
+                        }
+                    },
+                    None => library.iter().collect(),
+                };
+                let footprints: Vec<_> = selected
+                    .into_iter()
                     .skip(offset)
                     .take(limit.unwrap_or(usize::MAX))
                     .map(|fp| {
@@ -690,13 +700,23 @@ impl McpServer {
             Ok(library) => {
                 let total_count = library.len();
 
-                // Apply filtering and pagination
-                let symbols: Vec<_> = library
-                    .iter()
-                    .filter(|symbol| {
-                        // If component_name specified, only include matching
-                        component_name.map_or(true, |filter| symbol.name == filter)
-                    })
+                // A requested component is resolved as every tool resolves
+                // one — regardless of case — and a miss is an error naming
+                // what is there, not an empty success.
+                let selected: Vec<_> = match component_name {
+                    Some(name) => match library.get(name) {
+                        Some(symbol) => vec![symbol],
+                        None => {
+                            return ToolCallResult::error(super::component_not_found(
+                                name,
+                                &library.names(),
+                            ))
+                        }
+                    },
+                    None => library.iter().collect(),
+                };
+                let symbols: Vec<_> = selected
+                    .into_iter()
                     .skip(offset)
                     .take(limit.unwrap_or(usize::MAX))
                     .map(|symbol| {
@@ -4246,6 +4266,63 @@ mod tests {
             assert_eq!(p["total_count"], 2);
             // Filtering is not pagination, so there is never a next page.
             assert_eq!(p["has_more"], false);
+        }
+
+        /// The read tools resolve a requested component as every other tool
+        /// does — regardless of case, answering with the spelling on file —
+        /// and report a miss rather than returning an empty success.
+        #[test]
+        fn read_tools_resolve_component_name_regardless_of_case_and_report_a_miss() {
+            use crate::mcp::tools::test_support::{create_test_pcblib, create_test_schlib};
+
+            let dir = test_temp_dir();
+            let server = create_test_server(dir.path());
+            let pcb = dir.path().join("Case.PcbLib");
+            create_test_pcblib(&pcb);
+            let sch = dir.path().join("Case.SchLib");
+            create_test_schlib(&sch);
+
+            let r = server.call_read_pcblib(&json!({
+                "filepath": pcb.to_string_lossy(), "component_name": "chip_0402",
+            }));
+            assert!(!r.is_error, "{}", get_result_text(&r));
+            let p = parse_result_json(&r);
+            assert_eq!(p["returned_count"], 1);
+            assert_eq!(
+                p["footprints"][0]["name"], "CHIP_0402",
+                "the spelling on file"
+            );
+
+            let r = server.call_read_schlib(&json!({
+                "filepath": sch.to_string_lossy(), "component_name": "resistor",
+            }));
+            assert!(!r.is_error, "{}", get_result_text(&r));
+            let p = parse_result_json(&r);
+            assert_eq!(p["returned_count"], 1);
+            assert_eq!(p["symbols"][0]["name"], "RESISTOR");
+
+            let r = server.call_read_pcblib(&json!({
+                "filepath": pcb.to_string_lossy(), "component_name": "CHIP_0402X",
+            }));
+            assert!(r.is_error, "{}", get_result_text(&r));
+            let text = get_result_text(&r);
+            assert!(
+                text.contains(
+                    "Component 'CHIP_0402X' not found in library. Available: CHIP_0402, CHIP_0603"
+                ),
+                "{text}"
+            );
+            let r = server.call_read_schlib(&json!({
+                "filepath": sch.to_string_lossy(), "component_name": "NOPE",
+            }));
+            assert!(r.is_error, "{}", get_result_text(&r));
+            let text = get_result_text(&r);
+            assert!(
+                text.contains(
+                    "Component 'NOPE' not found in library. Available: RESISTOR, CAPACITOR"
+                ),
+                "{text}"
+            );
         }
 
         #[test]

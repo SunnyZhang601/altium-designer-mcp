@@ -38,7 +38,7 @@ footprints, or use limit/offset for pagination.
 | Name | Type | Required | Description |
 | --- | --- | --- | --- |
 | `compact` | boolean | no | If true (default), omit per-layer pad data when stack_mode is Simple. Set to false for full output. |
-| `component_name` | string | no | Optional: fetch only this specific footprint by name |
+| `component_name` | string | no | Optional: fetch only this footprint, by name in any case; a name the library does not hold is an error naming the available footprints |
 | `filepath` | string | yes | Path to the .PcbLib file |
 | `limit` | integer | no | Optional: maximum number of footprints to return (default: all) |
 | `offset` | integer | no | Optional: skip first N footprints (default: 0) |
@@ -67,7 +67,7 @@ component_name to fetch specific symbols, or use limit/offset for pagination.
 
 | Name | Type | Required | Description |
 | --- | --- | --- | --- |
-| `component_name` | string | no | Optional: fetch only this specific symbol by name |
+| `component_name` | string | no | Optional: fetch only this symbol, by name in any case; a name the library does not hold is an error naming the available symbols |
 | `filepath` | string | yes | Path to the .SchLib file |
 | `limit` | integer | no | Optional: maximum number of symbols to return (default: all) |
 | `offset` | integer | no | Optional: skip first N symbols (default: 0) |

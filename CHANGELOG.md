@@ -11,6 +11,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A pad or via stack the record cannot store is refused, not quietly
+  mended.** A `per_layer_shapes` entry that was not a shape became round; a
+  corner radius outside 0-100 — the pad's own or a per-layer one — became
+  none; a malformed `per_layer_sizes` / `per_layer_offsets` entry became a
+  zero-size layer; an entry count that did not match the stack mode had the
+  missing layers filled from the pad's main size and the extras ignored; and
+  per-layer arrays on a `simple` pad, or `per_layer_diameters` on a `simple`
+  via, were ignored altogether. Each is now refused, naming the pad or via,
+  the array and the entry, and the rule: 3 entries `[top, mid, bottom]` for
+  `top_middle_bottom`, 32 for `full_stack` (offsets and radii on a full stack
+  only), 32 diameters for a stacked via. The via schema's claim that
+  `top_middle_bottom` takes 3 diameters was wrong: Altium stores 32 for
+  either stacked mode.
 - **A value of the wrong JSON type is refused, not silently defaulted.**
   Every tool call is now type-checked against the tool's own schema, however
   deeply the value sits: `"filled": "true"` or `"width": "1.5"` used to read as

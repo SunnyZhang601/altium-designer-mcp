@@ -15,6 +15,9 @@ mod maintenance;
 #[cfg(test)]
 mod mutation_fidelity;
 mod parsing;
+/// The primitive kinds `update_primitive` addresses, shared by its handler,
+/// its schema and the guard test.
+pub(super) use maintenance::UPDATE_PRIMITIVE_KINDS;
 /// The accepted values of every enum-valued field, shared by the parsers
 /// that read them and the tool schemas that advertise them.
 pub(super) use parsing::accepted;

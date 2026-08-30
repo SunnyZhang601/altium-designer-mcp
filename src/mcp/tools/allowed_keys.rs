@@ -670,7 +670,7 @@ mod tests {
             "update_pad:/properties/updates".to_string(),
             maintenance::UPDATE_PAD_KEYS.to_vec(),
         ));
-        let mut primitive_keys: Vec<&str> = ["track", "arc", "text", "fill", "region", "via"]
+        let mut primitive_keys: Vec<&str> = maintenance::UPDATE_PRIMITIVE_KINDS
             .iter()
             .flat_map(|kind| maintenance::update_primitive_keys(kind).unwrap())
             .copied()

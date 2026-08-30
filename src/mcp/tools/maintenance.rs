@@ -15,8 +15,13 @@ pub const UPDATE_PAD_KEYS: &[&str] = &[
     "shape",
 ];
 
-/// The properties `update_primitive` applies to a primitive kind, or `None`
-/// for a kind it does not address.
+/// The primitive kinds `update_primitive` addresses, in the order its
+/// schema and its error name them. Pads are not here — they have a
+/// designator, so `update_pad` takes them.
+pub const UPDATE_PRIMITIVE_KINDS: &[&str] = &["track", "arc", "region", "text", "fill", "via"];
+
+/// The properties `update_primitive` applies to one of
+/// [`UPDATE_PRIMITIVE_KINDS`], or `None` for a kind it does not address.
 pub fn update_primitive_keys(primitive_type: &str) -> Option<&'static [&'static str]> {
     Some(match primitive_type {
         "track" => &["x1", "y1", "x2", "y2", "width", "layer"],
@@ -849,7 +854,8 @@ impl McpServer {
         // typo or a property of another kind, refused rather than ignored.
         let Some(keys) = update_primitive_keys(primitive_type) else {
             return ToolCallResult::error(format!(
-                "Invalid primitive_type '{primitive_type}'. Valid: track, arc, region, text, fill, via"
+                "Invalid primitive_type '{primitive_type}'. Valid: {}",
+                UPDATE_PRIMITIVE_KINDS.join(", ")
             ));
         };
         if let Err(e) = Self::check_unknown_fields(updates, keys) {
@@ -1171,11 +1177,7 @@ impl McpServer {
                     }
                 }
             }
-            _ => {
-                return ToolCallResult::error(format!(
-                    "Invalid primitive_type '{primitive_type}'. Valid: track, arc, region, text, fill, via"
-                ));
-            }
+            _ => unreachable!("update_primitive_keys admits only UPDATE_PRIMITIVE_KINDS"),
         }
 
         if changes.is_empty() {
@@ -2401,6 +2403,44 @@ mod tests {
             );
         }
 
+        /// A fill edit that leaves the layer alone changes only what it
+        /// names; a region given nothing it can change is refused as such
+        /// rather than written unchanged.
+        #[test]
+        fn update_primitive_fill_without_a_layer_and_region_without_updates() {
+            let dir = test_temp_dir();
+            let server = create_test_server(dir.path());
+            let path = dir.path().join("Partial.PcbLib");
+            create_rich_pcblib(&path);
+
+            let result = server.call_update_primitive(&json!({
+                "filepath": path.to_string_lossy(),
+                "component_name": "RICH",
+                "primitive_type": "fill",
+                "index": 0,
+                "updates": { "rotation": 30.0 },
+            }));
+            assert!(!result.is_error, "{}", get_result_text(&result));
+            assert_eq!(
+                change_props(&parse_result_json(&result)),
+                vec!["rotation".to_string()]
+            );
+
+            let result = server.call_update_primitive(&json!({
+                "filepath": path.to_string_lossy(),
+                "component_name": "RICH",
+                "primitive_type": "region",
+                "index": 0,
+                "updates": {},
+            }));
+            assert!(result.is_error);
+            assert!(
+                get_result_text(&result).contains("No valid updates specified"),
+                "{}",
+                get_result_text(&result)
+            );
+        }
+
         /// A region carrying a replayed `V7_LAYER` override loses it when its
         /// layer changes, so the saved token names the new layer — `None` on
         /// re-read means the token agrees with the byte.
@@ -3313,7 +3353,10 @@ mod tests {
 
             // Each family is addressed positionally, so each keeps its own
             // range check naming the family.
-            for family in ["track", "arc", "text", "fill", "region", "via"] {
+            for family in crate::mcp::tools::maintenance::UPDATE_PRIMITIVE_KINDS
+                .iter()
+                .copied()
+            {
                 let updates = if family == "via" {
                     json!({ "diameter": 0.6 })
                 } else {
@@ -3340,7 +3383,12 @@ mod tests {
             let lib = fx.path("Rich.PcbLib");
             write_rich_library(&server, &lib);
 
-            for family in ["track", "arc", "text", "fill", "region"] {
+            // A via has from_layer / to_layer rather than a layer.
+            for family in crate::mcp::tools::maintenance::UPDATE_PRIMITIVE_KINDS
+                .iter()
+                .copied()
+                .filter(|family| *family != "via")
+            {
                 let r = server.call_update_primitive(&json!({
                     "filepath": &lib, "component_name": "RICH",
                     "primitive_type": family, "index": 0,
@@ -3503,5 +3551,27 @@ mod tests {
             via.per_layer_diameters.as_ref().unwrap(),
             &vec![0.6, 0.6, 0.6]
         );
+    }
+
+    /// A simple pad has no per-layer table for an edit to follow into.
+    #[test]
+    fn a_simple_pad_edit_has_no_layers_to_follow() {
+        let mut pad = Pad::smd("1", 0.0, 0.0, 1.0, 2.0);
+        pad.width = 1.5;
+        pad.shape = PadShape::Rectangle;
+        let followed = McpServer::propagate_pad_edit_to_stack(&mut pad, 1.0, 2.0, PadShape::Round);
+        assert_eq!(followed, 0);
+        assert!(pad.per_layer_sizes.is_none() && pad.per_layer_shapes.is_none());
+    }
+
+    /// The kinds the schema advertises are exactly the ones the handler
+    /// has keys for.
+    #[test]
+    fn every_update_primitive_kind_has_its_keys_and_no_other_does() {
+        for kind in super::UPDATE_PRIMITIVE_KINDS {
+            assert!(super::update_primitive_keys(kind).is_some(), "{kind}");
+        }
+        assert!(super::update_primitive_keys("pad").is_none());
+        assert!(super::update_primitive_keys("polygon").is_none());
     }
 }

@@ -181,6 +181,18 @@ fn describe(p: &Value) -> String {
             let _ = write!(s, " (one of: {joined})");
         }
     }
+    match (p.get("minimum"), p.get("maximum")) {
+        (Some(min), Some(max)) => {
+            let _ = write!(s, " (range: {min}-{max})");
+        }
+        (Some(min), None) => {
+            let _ = write!(s, " (min: {min})");
+        }
+        (None, Some(max)) => {
+            let _ = write!(s, " (max: {max})");
+        }
+        (None, None) => {}
+    }
     if let Some(def) = p.get("default") {
         let _ = write!(s, " (default: `{def}`)");
     }
@@ -196,7 +208,7 @@ mod tests {
     /// The rendering helpers, which only ever run against the committed tool
     /// definitions and so never meet the shapes a future schema could bring.
     mod rendering {
-        use super::super::{render_params, schema_type, wrap_prose, MAX_PROSE_WIDTH};
+        use super::super::{describe, render_params, schema_type, wrap_prose, MAX_PROSE_WIDTH};
         use serde_json::json;
 
         #[test]
@@ -226,6 +238,19 @@ mod tests {
         fn a_schema_with_no_properties_says_so_rather_than_rendering_an_empty_table() {
             assert!(render_params(&json!({})).contains("_No parameters._"));
             assert!(render_params(&json!({ "type": "object" })).contains("_No parameters._"));
+        }
+
+        /// A range the schema states is part of the description cell, in
+        /// whichever half it gives.
+        #[test]
+        fn a_range_is_rendered_beside_the_description() {
+            assert_eq!(
+                describe(&json!({ "description": "Font.", "minimum": 1, "maximum": 255 })),
+                "Font. (range: 1-255)"
+            );
+            assert_eq!(describe(&json!({ "minimum": -1 })), "(min: -1)");
+            assert_eq!(describe(&json!({ "maximum": 34 })), "(max: 34)");
+            assert_eq!(describe(&json!({ "description": "Plain." })), "Plain.");
         }
 
         #[test]

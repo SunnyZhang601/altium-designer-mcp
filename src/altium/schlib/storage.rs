@@ -140,10 +140,9 @@ pub(super) fn for_each_entry<F: FnMut(&str, &[u8])>(
     };
     let mut offset = 4 + header_len as usize;
 
-    while offset + 4 <= raw.len() {
-        let Some(size_word) = read_u32_le(raw, offset) else {
-            break;
-        };
+    // Each block is `[u32 size word][block]`; the walk ends at the first
+    // offset without a whole size word.
+    while let Some(size_word) = read_u32_le(raw, offset) {
         let block_size = (size_word & 0x00FF_FFFF) as usize;
         if block_size == 0 {
             break;
@@ -297,6 +296,25 @@ mod tests {
         bad_tag.extend_from_slice(&(0x0100_0003_u32).to_le_bytes());
         bad_tag.extend_from_slice(&[0x00, 0x01, b'x']);
         assert_eq!(walk(&storage_stream(&bad_tag)).len(), 1, "missing 0xD0 tag");
+    }
+
+    /// A payload length running past its own block is skipped as an entry
+    /// and the walk carries on at the next block, whose size word is sound.
+    #[test]
+    fn an_entry_whose_payload_overruns_its_block_is_skipped_not_fatal() {
+        let mut first = Vec::new();
+        write_entry(&mut first, "a.bmp", b"AAA").expect("entry should write");
+        // The compressed length sits after [size:4][tag:1][name_len:1][name].
+        let comp_len_at = 4 + 1 + 1 + "a.bmp".len();
+        first[comp_len_at..comp_len_at + 4].copy_from_slice(&0xFFFF_u32.to_le_bytes());
+        let mut second = Vec::new();
+        write_entry(&mut second, "b.bmp", b"BBB").expect("entry should write");
+
+        let mut entries = first;
+        entries.extend_from_slice(&second);
+        let seen = walk(&storage_stream(&entries));
+        assert_eq!(seen.len(), 1, "{seen:?}");
+        assert_eq!(seen[0].0, "b.bmp");
     }
 
     #[test]

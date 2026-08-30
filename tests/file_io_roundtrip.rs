@@ -503,6 +503,41 @@ fn schlib_preserves_unique_id_and_pin_accessibility() {
     );
 }
 
+#[test]
+fn schlib_preserves_shape_flags_the_defaults_leave_unset() {
+    // The writer emits Transparent=T only for a transparent polyline and
+    // omits IsNotAccesible for an accessible arc or ellipse; each must read
+    // back as set, not as the from-scratch default.
+    use altium_designer_mcp::altium::schlib::{Arc as SchArc, Ellipse, Polyline};
+
+    let temp_dir = test_temp_dir();
+    let file_path = temp_dir.path().join("test_shape_flags.SchLib");
+
+    let mut lib = SchLib::new();
+    let mut sym = Symbol::new("FLAGS");
+    sym.add_pin(Pin::new("1", "1", -20, 0, 10, PinOrientation::Left));
+    let mut polyline = Polyline::new(vec![(0.0, 0.0), (10.0, 10.0)]);
+    polyline.transparent = true;
+    sym.add_polyline(polyline);
+    let mut arc = SchArc::new(0, 0, 5, 0.0, 90.0);
+    arc.is_not_accessible = false;
+    sym.add_arc(arc);
+    let mut ellipse = Ellipse::new(0, 0, 4, 2);
+    ellipse.is_not_accessible = false;
+    sym.add_ellipse(ellipse);
+    lib.add(sym);
+    lib.save(&file_path).expect("Failed to write SchLib");
+
+    let read_lib = SchLib::open(&file_path).expect("Failed to read SchLib");
+    let read_sym = read_lib.get("FLAGS").expect("Symbol not found");
+    assert!(read_sym.polylines[0].transparent, "polyline Transparent");
+    assert!(!read_sym.arcs[0].is_not_accessible, "arc accessible");
+    assert!(
+        !read_sym.ellipses[0].is_not_accessible,
+        "ellipse accessible"
+    );
+}
+
 /// Returns the set of OLE stream paths (lower-cased) in a written library file,
 /// for asserting whether the optional pin auxiliary streams were emitted.
 fn ole_stream_paths(path: &std::path::Path) -> Vec<String> {

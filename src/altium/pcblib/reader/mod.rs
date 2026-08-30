@@ -166,11 +166,9 @@ pub fn parse_unique_id_stream(data: &[u8]) -> UniqueIdMap {
     let mut entries = UniqueIdMap::new();
     let mut offset = 0;
 
-    while offset + 4 <= data.len() {
-        // Read 4-byte little-endian length
-        let Some(record_len) = read_u32(data, offset) else {
-            break;
-        };
+    // Each record is `[len:4][len bytes]`; the scan ends at the first offset
+    // without a whole length prefix.
+    while let Some(record_len) = read_u32(data, offset) {
         let record_len = record_len as usize;
         offset += 4;
 
@@ -650,14 +648,9 @@ pub fn parse_data_stream(
     data: &[u8],
     wide_strings: Option<&WideStrings>,
 ) {
-    if data.len() < 5 {
-        tracing::warn!("Data stream too short");
-        return;
-    }
-
     // Read name block: [block_len:4][str_len:1][name:str_len]
     let Some(name_block_len) = read_u32(data, 0) else {
-        tracing::warn!("Failed to read name block length");
+        tracing::warn!("Data stream too short for a name block");
         return;
     };
 
@@ -921,9 +914,11 @@ mod tests {
         assert_eq!(primitive_count(&fp), 0);
 
         // Too short to hold even the name block: returns without reading.
-        let mut fp = Footprint::new("FP");
-        parse_data_stream(&mut fp, &[0_u8; 4], None);
-        assert_eq!(primitive_count(&fp), 0);
+        for runt in [&[0_u8; 4][..], &[0_u8; 3][..]] {
+            let mut fp = Footprint::new("FP");
+            parse_data_stream(&mut fp, runt, None);
+            assert_eq!(primitive_count(&fp), 0);
+        }
     }
 
     #[test]
@@ -943,6 +938,14 @@ mod tests {
         let (block, offset) = read_block(&data, 0).unwrap();
         assert_eq!(block.len(), 5);
         assert_eq!(offset, 9);
+
+        // The 100 kB sanity cap: a block claiming more is refused as corrupt.
+        let mut over = 100_001_u32.to_le_bytes().to_vec();
+        over.resize(4 + 100_001, 0);
+        assert!(read_block(&over, 0).is_none());
+        let mut at_cap = 100_000_u32.to_le_bytes().to_vec();
+        at_cap.resize(4 + 100_000, 0);
+        assert!(read_block(&at_cap, 0).is_some());
     }
 
     #[test]
@@ -1130,16 +1133,79 @@ mod tests {
         let mut mixed = record("|NOTHING=USEFUL");
         mixed.extend_from_slice(&record(good));
         assert_eq!(parse_unique_id_stream(&mixed).len(), 1);
+
+        // So is a record that is not UTF-8.
+        let mut binary = 2_u32.to_le_bytes().to_vec();
+        binary.extend_from_slice(&[0xFF, 0xFE]);
+        binary.extend_from_slice(&record(good));
+        assert_eq!(parse_unique_id_stream(&binary).len(), 1);
+    }
+
+    /// A GUID record is attached only when its kind is known, its ordinal
+    /// lies within the footprint's write sequence and the kind there agrees;
+    /// kind 85 names the footprint itself.
+    #[test]
+    fn primitive_guids_attach_only_where_kind_and_ordinal_agree() {
+        use crate::altium::pcblib::{Pad, PrimitiveGuid, PrimitiveKind};
+
+        let mut fp = Footprint::new("FP");
+        fp.add_pad(Pad::smd("1", 0.0, 0.0, 1.0, 1.0));
+        fp.add_pad(Pad::smd("2", 2.0, 0.0, 1.0, 1.0));
+        let record = |object_kind: u32, index: u32, guid: &str| PrimitiveGuid {
+            object_kind,
+            index,
+            guid: guid.to_string(),
+        };
+        let records = [
+            record(85, 0, "{FOOTPRINT}"),
+            record(99, 0, "{UNKNOWN-KIND}"),
+            record(
+                PrimitiveKind::Track.altium_object_id(),
+                0,
+                "{KIND-MISMATCH}",
+            ),
+            record(
+                PrimitiveKind::Pad.altium_object_id(),
+                7,
+                "{BEYOND-SEQUENCE}",
+            ),
+            record(PrimitiveKind::Pad.altium_object_id(), 1, "{PAD-2}"),
+        ];
+        apply_primitive_guids(&mut fp, &records);
+        assert_eq!(fp.guid.as_deref(), Some("{FOOTPRINT}"));
+        assert_eq!(
+            fp.pads[0].guid, None,
+            "the mismatched and out-of-range records"
+        );
+        assert_eq!(fp.pads[1].guid.as_deref(), Some("{PAD-2}"));
+    }
+
+    /// A unique ID names a text primitive by its ordinal like any other.
+    #[test]
+    fn unique_ids_reach_text_primitives() {
+        use crate::altium::pcblib::{Layer, Text};
+
+        let mut fp = Footprint::new("FP");
+        fp.add_text(Text::new(0.0, 0.0, "T", 1.0, Layer::TopOverlay));
+        let ids = vec![UniqueIdEntry {
+            primitive_index: 0,
+            primitive_type: "Text".to_string(),
+            unique_id: "TEXTUID1".to_string(),
+        }];
+        apply_unique_ids(&mut fp, &ids);
+        assert_eq!(fp.text[0].unique_id.as_deref(), Some("TEXTUID1"));
     }
 
     #[test]
     fn wide_strings_skips_entries_it_cannot_decode() {
         // Malformed entries have to be dropped individually: one bad index
         // must not cost the caller the rest of the table.
-        let stream = b"|ENCODEDTEXT0=84,69,83,84|ENCODEDTEXTx=65|ENCODEDTEXT2=|NOTENCODED=1|";
+        let stream =
+            b"|ENCODEDTEXT0=84,69,83,84|ENCODEDTEXTx=65|ENCODEDTEXT2=|ENCODEDTEXT5|NOTENCODED=1|";
         let parsed = parse_wide_strings(stream);
         assert_eq!(parsed.get(&0).map(String::as_str), Some("TEST"));
-        // A non-numeric index, an empty payload and an unrelated key all drop.
+        // A non-numeric index, an empty payload, an entry with no `=` and an
+        // unrelated key all drop.
         assert_eq!(parsed.len(), 1, "{parsed:?}");
     }
 

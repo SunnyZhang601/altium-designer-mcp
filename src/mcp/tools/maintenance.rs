@@ -5,7 +5,7 @@ use serde_json::{json, Value};
 use crate::mcp::server::{McpServer, ToolCallResult};
 
 /// The properties `update_pad` applies.
-const UPDATE_PAD_KEYS: &[&str] = &[
+pub const UPDATE_PAD_KEYS: &[&str] = &[
     "x",
     "y",
     "width",
@@ -17,7 +17,7 @@ const UPDATE_PAD_KEYS: &[&str] = &[
 
 /// The properties `update_primitive` applies to a primitive kind, or `None`
 /// for a kind it does not address.
-fn update_primitive_keys(primitive_type: &str) -> Option<&'static [&'static str]> {
+pub fn update_primitive_keys(primitive_type: &str) -> Option<&'static [&'static str]> {
     Some(match primitive_type {
         "track" => &["x1", "y1", "x2", "y2", "width", "layer"],
         "arc" => &[

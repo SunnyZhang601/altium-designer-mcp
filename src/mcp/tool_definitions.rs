@@ -184,6 +184,944 @@ impl McpServer {
         }]
     }
 
+    /// The footprint object `write_pcblib` takes per `footprints` entry and
+    /// `update_component` takes as `footprint`: one schema, so a value is
+    /// type-checked the same way whichever tool carries it, and every key the
+    /// footprint parser accepts is described here (pinned by
+    /// `every_accepted_key_is_described_by_the_tool_schema`).
+    #[allow(clippy::too_many_lines)]
+    fn footprint_schema() -> serde_json::Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "description": "Footprint name (e.g., 'RESC1608X55N')"
+                },
+                "description": {
+                    "type": "string",
+                    "description": "Footprint description. Keep to 256 characters if the library will be imported into an Altium 365 workspace — that importer refuses longer ones; a longer description is written and reported as a validation warning."
+                },
+                "pads": {
+                    "type": "array",
+                    "description": "Pad definitions",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "designator": { "type": "string" },
+                            "x": { "type": "number", "description": "X position in mm" },
+                            "y": { "type": "number", "description": "Y position in mm" },
+                            "width": { "type": "number", "description": "Pad width in mm" },
+                            "height": { "type": "number", "description": "Pad height in mm" },
+                            "shape": {
+                                "type": "string",
+                                "enum": ["rectangle", "rounded_rectangle", "round", "circle", "oval", "octagonal"],
+                                "description": "Pad shape. Omitting this field yields rounded_rectangle, which suits chip/QFN lands but is WRONG for BGA/CSP: circular NSMD BGA lands must set \"round\" explicitly. rectangle is conventional for pin 1; round/circle are equivalent and used for both BGA lands and through-hole pads; also oval, octagonal. Matching is case-insensitive and ignores '_'/'-'."
+                            },
+                            "layer": { "type": "string", "description": "Layer name: Top Layer, Bottom Layer, Multi-Layer (default for SMD)" },
+                            "hole_size": { "type": "number", "description": "Hole diameter for through-hole pads (mm)" },
+                            "is_plated": { "type": "boolean", "description": "Whether the hole is plated. Altium stores this for every pad (SMD included). Default: true" },
+                            "solder_mask_expansion_from_hole_edge": { "type": "boolean", "description": "Measure solder-mask expansion from the HOLE edge instead of the pad edge. Only meaningful on a pad with a hole. Default: false" },
+                            "jumper_id": { "type": "integer", "description": "Jumper group id. Pads sharing a non-zero id are linked as a jumper / 0-ohm net. Default: 0" },
+                            "stack_mode": { "type": "string", "enum": accepted::STACK_MODES, "description": "Per-layer pad stack. \"simple\" (default) uses one size and shape on every layer; \"top_middle_bottom\" takes 3 per-layer entries [top, mid, bottom]; \"full_stack\" takes 32 (index 0 = Top, 1 = Bottom, 2-31 = Mid layers)." },
+                            "per_layer_sizes": { "type": "array", "description": "Per-layer pad sizes in mm, used when stack_mode is not \"simple\". Entry count must match the stack mode (3 or 32).", "items": { "type": "object", "properties": { "width": { "type": "number" }, "height": { "type": "number" } }, "required": ["width", "height"] } },
+                            "per_layer_shapes": { "type": "array", "description": "Per-layer pad shapes, same ordering and count as per_layer_sizes. Same vocabulary as shape.", "items": { "type": "string", "enum": ["rectangle", "rounded_rectangle", "round", "circle", "oval", "octagonal"] } },
+                            "per_layer_corner_radii": { "type": "array", "description": "Per-layer corner radius as a percentage (0-100), for rounded-rectangle layers.", "items": { "type": "integer" } },
+                            "per_layer_offsets": { "type": "array", "description": "Per-layer pad offsets in mm from the pad centre.", "items": { "type": "object", "properties": { "x": { "type": "number" }, "y": { "type": "number" } }, "required": ["x", "y"] } },
+                            "hole_shape": {
+                                "type": "string",
+                                "enum": accepted::HOLE_SHAPES,
+                                "description": "Drill hole shape. Default: round. Use slot for oblong holes (set hole_slot_length)"
+                            },
+                            "hole_slot_length": { "type": "number", "description": "Slot length in mm for a slot hole (hole_shape=slot). Default: 0" },
+                            "hole_rotation": { "type": "number", "description": "Hole rotation in degrees (rotates a slot hole). Default: 0" },
+                            "hole_positive_tolerance": { "type": "number", "description": "Positive drill tolerance in mm (optional; omit to leave unset)" },
+                            "hole_negative_tolerance": { "type": "number", "description": "Negative drill tolerance in mm (optional; omit to leave unset)" },
+                            "solder_mask_expansion": { "type": "number", "description": "Solder mask expansion in mm (optional; omit to use the rule default)" },
+                            "solder_mask_expansion_mode": {
+                                "type": "string",
+                                "enum": accepted::MASK_EXPANSION_MODES,
+                                "description": "Solder mask expansion mode. 'none' (the default) leaves the cached value stale so Altium takes the expansion from the design rule; 'from_rule' tells Altium the stored value is a rule result to honour as-is; 'manual' uses the stored value as hand-specified."
+                            },
+                            "paste_mask_expansion": { "type": "number", "description": "Paste (stencil) mask expansion in mm (optional; omit to use the rule default)" },
+                            "paste_mask_expansion_mode": {
+                                "type": "string",
+                                "enum": accepted::MASK_EXPANSION_MODES,
+                                "description": "Paste mask expansion mode. 'none' (the default) leaves the cached value stale so Altium takes the expansion from the design rule; 'from_rule' tells Altium the stored value is a rule result to honour as-is; 'manual' uses the stored value as hand-specified."
+                            },
+                            "corner_radius_percent": { "type": "integer", "description": "Rounded-rectangle corner radius as a percentage of the shorter side (0-100). Default: 0" },
+                            "rotation": { "type": "number", "description": "Pad rotation in degrees. Default: 0" },
+                            "power_plane_connect_style": {
+                                "type": "string",
+                                "enum": accepted::POWER_PLANE_CONNECT_STYLES,
+                                "description": "How the pad connects to an internal power plane. Default: relief (thermal spokes)"
+                            },
+                            "relief_conductor_width": { "type": "number", "description": "Thermal-relief spoke (conductor) width in mm. Default: 0.254 (10 mil)" },
+                            "relief_entries": { "type": "integer", "description": "Number of thermal-relief spokes. Default: 4" },
+                            "relief_air_gap": { "type": "number", "description": "Thermal-relief air-gap width in mm. Default: 0.254 (10 mil)" },
+                            "power_plane_relief_expansion": { "type": "number", "description": "Power-plane relief expansion in mm. Default: 0.508 (20 mil)" },
+                            "power_plane_clearance": { "type": "number", "description": "Power-plane (anti-pad) clearance to the plane in mm. Default: 0.508 (20 mil)" },
+                            "net_index": { "type": "integer", "description": "Net index into the board net list (common header, 0-65534; 65535 = no net). Normally omitted for library footprints; preserved on a read-modify-write. Default: 65535" },
+                            "polygon_index": { "type": "integer", "description": "Polygon index (common header; 65535 = none). Normally omitted; preserved on a read-modify-write. Default: 65535" },
+                            "component_index": { "type": "integer", "description": "Component index into the board component list (common header; -1 = free primitive). Normally omitted; preserved on a read-modify-write. Default: -1" },
+                            "unique_id": { "type": "string", "description": "8-char Altium unique ID; preserved on read-modify-write, auto-generated if omitted" },
+                            "identity_guid": { "type": "string", "description": "Per-pad identity GUID (braced string, e.g. \"{A5172B29-...}\"); preserved verbatim on read-modify-write, freshly generated if omitted" },
+                            "identity_guid_b": { "type": "string", "description": "Pad-stack/footprint-scoped identity GUID (braced string); preserved verbatim on read-modify-write, freshly generated if omitted" },
+                            "flags": { "type": ["string", "integer"], "description": "Primitive flags (optional). Accepts the name string read_pcblib emits (e.g. \"LOCKED\" or \"LOCKED | KEEPOUT\") or a raw bitmask integer (1=locked, 2=polygon, 4=keepout, 8=tenting-top, 16=tenting-bottom, 32=testpoint-top, 64=testpoint-bottom; 128 and above are on-disk bits read_pcblib carries verbatim as DISK_BIT_n — pass them back unchanged). Default: none" },
+                            "guid": { "type": "string", "description": "Altium's stable identity for the primitive, from the footprint's PrimitiveGuids stream (braced string, e.g. \"{A5172B29-...}\"), as read_pcblib emits it. Pass it back unchanged so a read-modify-write keeps the identity Altium tracks for ECO; omit when authoring (a from-scratch primitive records none)." },
+                            "raw_layer_id": { "type": "integer", "description": "The record's on-disk layer byte (0-255), emitted by read_pcblib only when it maps to no named layer (the primitive then reads as Multi-Layer). Pass it back unchanged so the rewrite keeps the byte; moving the primitive to a named layer discards it. Omit when authoring." },
+                            "raw_tail": { "type": "string", "description": "Base64 of the pad record's extended tail exactly as read_pcblib emitted it; the writer overlays the typed fields on it so the rewrite matches the source bytes whichever Altium version wrote them. Pass back unchanged; omit when authoring (the template tail is used)." }
+                        },
+                        "required": ["designator", "x", "y", "width", "height"]
+                    }
+                },
+                "tracks": {
+                    "type": "array",
+                    "description": "Track/line definitions for silkscreen, assembly, etc.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "x1": { "type": "number" },
+                            "y1": { "type": "number" },
+                            "x2": { "type": "number" },
+                            "y2": { "type": "number" },
+                            "width": { "type": "number", "description": "Line width in mm" },
+                            "layer": { "type": "string", "description": "Layer name: Top Overlay, Top Assembly, Top Courtyard, Mechanical 1, etc." },
+                            "solder_mask_expansion": { "type": "number", "description": "Solder mask expansion override in mm (optional; omit to use the rule default)" },
+                            "keepout_restrictions": { "type": "integer", "description": "Keepout restriction bitmask (optional; defaults to 0)" },
+                            "net_index": { "type": "integer", "description": "Net index into the board net list (common header, 0-65534; 65535 = no net). Normally omitted for library footprints; preserved on a read-modify-write. Default: 65535" },
+                            "polygon_index": { "type": "integer", "description": "Polygon index (common header; 65535 = none). Normally omitted; preserved on a read-modify-write. Default: 65535" },
+                            "component_index": { "type": "integer", "description": "Component index into the board component list (common header; -1 = free primitive). Normally omitted; preserved on a read-modify-write. Default: -1" },
+                            "unique_id": { "type": "string", "description": "8-char Altium unique ID; preserved on read-modify-write, auto-generated if omitted" },
+                            "flags": { "type": ["string", "integer"], "description": "Primitive flags (optional). Accepts the name string read_pcblib emits (e.g. \"LOCKED\" or \"LOCKED | KEEPOUT\") or a raw bitmask integer (1=locked, 2=polygon, 4=keepout, 8=tenting-top, 16=tenting-bottom, 32=testpoint-top, 64=testpoint-bottom; 128 and above are on-disk bits read_pcblib carries verbatim as DISK_BIT_n — pass them back unchanged). Default: none" },
+                            "guid": { "type": "string", "description": "Altium's stable identity for the primitive, from the footprint's PrimitiveGuids stream (braced string, e.g. \"{A5172B29-...}\"), as read_pcblib emits it. Pass it back unchanged so a read-modify-write keeps the identity Altium tracks for ECO; omit when authoring (a from-scratch primitive records none)." },
+                            "raw_layer_id": { "type": "integer", "description": "The record's on-disk layer byte (0-255), emitted by read_pcblib only when it maps to no named layer (the primitive then reads as Multi-Layer). Pass it back unchanged so the rewrite keeps the byte; moving the primitive to a named layer discards it. Omit when authoring." }
+                        },
+                        "required": ["x1", "y1", "x2", "y2", "width", "layer"]
+                    }
+                },
+                "vias": {
+                    "type": "array",
+                    "description": "Via definitions (vertical interconnects between copper layers, with a drill hole and annular ring).",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "x": { "type": "number", "description": "X position in mm" },
+                            "y": { "type": "number", "description": "Y position in mm" },
+                            "diameter": { "type": "number", "description": "Annular ring outer diameter in mm" },
+                            "hole_size": { "type": "number", "description": "Drill hole diameter in mm (must be smaller than diameter)" },
+                            "from_layer": { "type": "string", "description": "Starting layer (default Top Layer): Top Layer, Bottom Layer, Mid-Layer 1, etc." },
+                            "to_layer": { "type": "string", "description": "Ending layer (default Bottom Layer): Top Layer, Bottom Layer, Mid-Layer 1, etc." },
+                            "solder_mask_expansion": { "type": "number", "description": "Solder mask expansion in mm (negative = tented). Default: 0" },
+                            "solder_mask_expansion_mode": {
+                                "type": "string",
+                                "enum": accepted::MASK_EXPANSION_MODES,
+                                "description": "Solder mask expansion mode. 'none' (the default) leaves the cached value stale so Altium takes the expansion from the design rule; 'from_rule' tells Altium the stored value is a rule result to honour as-is; 'manual' uses the stored value as hand-specified."
+                            },
+                            "thermal_relief_gap": { "type": "number", "description": "Thermal relief air-gap width in mm. Default: 0.254 (10 mil)" },
+                            "solder_mask_expansion_from_hole_edge": { "type": "boolean", "description": "Measure solder-mask expansion from the HOLE edge instead of the pad edge. Default: false" },
+                            "drill_layer_pair_type": { "type": "string", "enum": accepted::DRILL_LAYER_PAIR_TYPES, "description": "Drill-pair classification. \"through\" (default) spans the whole board; the others mark a via's place in a blind/buried drill-pair sequence." },
+                            "thermal_relief_conductors": { "type": "integer", "description": "Number of thermal relief conductors. Default: 4" },
+                            "thermal_relief_width": { "type": "number", "description": "Thermal relief conductor width in mm. Default: 0.254 (10 mil)" },
+                            "power_plane_connect_style": {
+                                "type": "string",
+                                "enum": accepted::POWER_PLANE_CONNECT_STYLES,
+                                "description": "How the via connects to an internal power plane. Default: relief (thermal spokes)"
+                            },
+                            "power_plane_relief_expansion": { "type": "number", "description": "Power-plane relief expansion in mm. Default: 0.508 (20 mil)" },
+                            "power_plane_clearance": { "type": "number", "description": "Power-plane (anti-pad) clearance in mm. Default: 0.508 (20 mil)" },
+                            "paste_mask_expansion": { "type": "number", "description": "Paste-mask expansion in mm. Default: 0" },
+                            "net_index": { "type": "integer", "description": "Net index into the board net list (0-65534; 65535 = no net). Default: 65535" },
+                            "polygon_index": { "type": "integer", "description": "Polygon index (common header; 65535 = none). Normally omitted; preserved on a read-modify-write. Default: 65535" },
+                            "component_index": { "type": "integer", "description": "Component index into the board component list (common header; -1 = free primitive). Normally omitted; preserved on a read-modify-write. Default: -1" },
+                            "hole_positive_tolerance": { "type": "number", "description": "Positive drill tolerance in mm (optional; omit to leave unset)" },
+                            "hole_negative_tolerance": { "type": "number", "description": "Negative drill tolerance in mm (optional; omit to leave unset)" },
+                            "unique_id": { "type": "string", "description": "8-char Altium unique ID; preserved on read-modify-write, auto-generated if omitted" },
+                            "flags": { "type": ["string", "integer"], "description": "Primitive flags (optional). Accepts the name string read_pcblib emits (e.g. \"TENTING_TOP\" or \"LOCKED | KEEPOUT\") or a raw bitmask integer (1=locked, 2=polygon, 4=keepout, 8=tenting-top, 16=tenting-bottom, 32=testpoint-top, 64=testpoint-bottom; 128 and above are on-disk bits read_pcblib carries verbatim as DISK_BIT_n — pass them back unchanged). Tenting covers the via with solder mask. Default: none" },
+                            "solder_mask_expansion_back": { "type": "number", "description": "Bottom-face solder mask expansion in mm (optional). Omit to use solder_mask_expansion on both faces, as Altium's own template does." },
+                            "diameter_stack_mode": { "type": "string", "enum": accepted::STACK_MODES, "description": "Per-layer via diameter stack. \"simple\" (default) uses one diameter on every layer; \"top_middle_bottom\" takes 3 per_layer_diameters entries [top, mid, bottom]; \"full_stack\" takes 32 (index 0 = Top, 1 = Bottom, 2-31 = Mid layers)." },
+                            "per_layer_diameters": { "type": "array", "description": "Per-layer via diameters in mm, used when diameter_stack_mode is not \"simple\". Entry count must match the stack mode (3 or 32).", "items": { "type": "number" } },
+                            "guid": { "type": "string", "description": "Altium's stable identity for the primitive, from the footprint's PrimitiveGuids stream (braced string, e.g. \"{A5172B29-...}\"), as read_pcblib emits it. Pass it back unchanged so a read-modify-write keeps the identity Altium tracks for ECO; omit when authoring (a from-scratch primitive records none)." },
+                            "raw_block": { "type": "string", "description": "Base64 of the via's whole record block exactly as read_pcblib emitted it; the writer overlays the typed fields on it so unmodelled bytes (in-record GUID slots, cached values, an older library's longer block) round-trip verbatim. Pass back unchanged; omit when authoring (the template block is used)." }
+                        },
+                        "required": ["x", "y", "diameter", "hole_size"]
+                    }
+                },
+                "fills": {
+                    "type": "array",
+                    "description": "Filled rectangle definitions (solid copper/keepout fill defined by two opposite corners).",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "x1": { "type": "number", "description": "First corner X in mm" },
+                            "y1": { "type": "number", "description": "First corner Y in mm" },
+                            "x2": { "type": "number", "description": "Second corner X in mm" },
+                            "y2": { "type": "number", "description": "Second corner Y in mm" },
+                            "layer": { "type": "string", "description": "Layer name (default Top Layer): Top Layer, Bottom Layer, Top Overlay, Mechanical 1, etc." },
+                            "rotation": { "type": "number", "description": "Rotation in degrees. Default: 0" },
+                            "solder_mask_expansion": { "type": "number", "description": "Solder mask expansion override in mm (optional; omit to use the rule default)" },
+                            "keepout_restrictions": { "type": "integer", "description": "Keepout restriction bitmask (optional; defaults to 0)" },
+                            "net_index": { "type": "integer", "description": "Net index into the board net list (common header, 0-65534; 65535 = no net). Normally omitted for library footprints; preserved on a read-modify-write. Default: 65535" },
+                            "polygon_index": { "type": "integer", "description": "Polygon index (common header; 65535 = none). Normally omitted; preserved on a read-modify-write. Default: 65535" },
+                            "component_index": { "type": "integer", "description": "Component index into the board component list (common header; -1 = free primitive). Normally omitted; preserved on a read-modify-write. Default: -1" },
+                            "unique_id": { "type": "string", "description": "8-char Altium unique ID; preserved on read-modify-write, auto-generated if omitted" },
+                            "flags": { "type": ["string", "integer"], "description": "Primitive flags (optional). Accepts the name string read_pcblib emits (e.g. \"LOCKED\" or \"LOCKED | KEEPOUT\") or a raw bitmask integer (1=locked, 2=polygon, 4=keepout, 8=tenting-top, 16=tenting-bottom, 32=testpoint-top, 64=testpoint-bottom; 128 and above are on-disk bits read_pcblib carries verbatim as DISK_BIT_n — pass them back unchanged). Default: none" },
+                            "guid": { "type": "string", "description": "Altium's stable identity for the primitive, from the footprint's PrimitiveGuids stream (braced string, e.g. \"{A5172B29-...}\"), as read_pcblib emits it. Pass it back unchanged so a read-modify-write keeps the identity Altium tracks for ECO; omit when authoring (a from-scratch primitive records none)." },
+                            "raw_layer_id": { "type": "integer", "description": "The record's on-disk layer byte (0-255), emitted by read_pcblib only when it maps to no named layer (the primitive then reads as Multi-Layer). Pass it back unchanged so the rewrite keeps the byte; moving the primitive to a named layer discards it. Omit when authoring." }
+                        },
+                        "required": ["x1", "y1", "x2", "y2"]
+                    }
+                },
+                "arcs": {
+                    "type": "array",
+                    "description": "Arc definitions",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "x": { "type": "number", "description": "Centre X" },
+                            "y": { "type": "number", "description": "Centre Y" },
+                            "radius": { "type": "number" },
+                            "start_angle": { "type": "number", "description": "Start angle in degrees" },
+                            "end_angle": { "type": "number", "description": "End angle in degrees" },
+                            "width": { "type": "number", "description": "Line width in mm" },
+                            "layer": { "type": "string", "description": "Layer name: Top Overlay, Top Assembly, Mechanical 1, etc." },
+                            "solder_mask_expansion": { "type": "number", "description": "Solder mask expansion override in mm (optional; omit to use the rule default)" },
+                            "keepout_restrictions": { "type": "integer", "description": "Keepout restriction bitmask (optional; defaults to 0)" },
+                            "net_index": { "type": "integer", "description": "Net index into the board net list (common header, 0-65534; 65535 = no net). Normally omitted for library footprints; preserved on a read-modify-write. Default: 65535" },
+                            "polygon_index": { "type": "integer", "description": "Polygon index (common header; 65535 = none). Normally omitted; preserved on a read-modify-write. Default: 65535" },
+                            "component_index": { "type": "integer", "description": "Component index into the board component list (common header; -1 = free primitive). Normally omitted; preserved on a read-modify-write. Default: -1" },
+                            "unique_id": { "type": "string", "description": "8-char Altium unique ID; preserved on read-modify-write, auto-generated if omitted" },
+                            "flags": { "type": ["string", "integer"], "description": "Primitive flags (optional). Accepts the name string read_pcblib emits (e.g. \"LOCKED\" or \"LOCKED | KEEPOUT\") or a raw bitmask integer (1=locked, 2=polygon, 4=keepout, 8=tenting-top, 16=tenting-bottom, 32=testpoint-top, 64=testpoint-bottom; 128 and above are on-disk bits read_pcblib carries verbatim as DISK_BIT_n — pass them back unchanged). Default: none" },
+                            "guid": { "type": "string", "description": "Altium's stable identity for the primitive, from the footprint's PrimitiveGuids stream (braced string, e.g. \"{A5172B29-...}\"), as read_pcblib emits it. Pass it back unchanged so a read-modify-write keeps the identity Altium tracks for ECO; omit when authoring (a from-scratch primitive records none)." },
+                            "raw_layer_id": { "type": "integer", "description": "The record's on-disk layer byte (0-255), emitted by read_pcblib only when it maps to no named layer (the primitive then reads as Multi-Layer). Pass it back unchanged so the rewrite keeps the byte; moving the primitive to a named layer discards it. Omit when authoring." }
+                        },
+                        "required": ["x", "y", "radius", "start_angle", "end_angle", "width", "layer"]
+                    }
+                },
+                "regions": {
+                    "type": "array",
+                    "description": "Filled region definitions (courtyard, copper pour, cutout, etc.)",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "vertices": {
+                                "type": "array",
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "x": { "type": "number" },
+                                        "y": { "type": "number" }
+                                    }
+                                }
+                            },
+                            "layer": { "type": "string", "description": "Layer name: Top Courtyard, Top Assembly, Mechanical 1, etc." },
+                            "kind": { "type": ["string", "integer"], "examples": accepted::REGION_KINDS, "description": "Region kind (optional). \"copper\" (default) for a copper pour/fill, \"cutout\" for a board/polygon cutout, or a raw Altium KIND integer. Default: copper" },
+                            "name": { "type": "string", "description": "Region name (the NAME parameter, optional). Default: empty" },
+                            "net_index": { "type": "integer", "description": "Net index into the board net list (optional). 65535 = no net. Default: 65535" },
+                            "polygon_index": { "type": "integer", "description": "Polygon index (common header; 65535 = none). Normally omitted; preserved on a read-modify-write. Default: 65535" },
+                            "component_index": { "type": "integer", "description": "Component index into the board component list (common header; -1 = free primitive). Normally omitted; preserved on a read-modify-write. Default: -1" },
+                            "cavity_height": { "type": "number", "description": "Cavity height in mm for embedded components (optional). Default: 0" },
+                            "arc_resolution": { "type": "number", "description": "Altium ARCRESOLUTION (arc-to-line tolerance, optional). Normally omitted; preserved on a read-modify-write. Default: 0" },
+                            "sub_poly_index": { "type": "integer", "description": "Altium SUBPOLYINDEX; -1 when not a polygon sub-shape. Preserved on a read-modify-write. Default: -1" },
+                            "union_index": { "type": "integer", "description": "Altium UNIONINDEX for grouped primitives. Preserved on a read-modify-write. Default: 0" },
+                            "is_shape_based": { "type": "boolean", "description": "Altium ISSHAPEBASED. Preserved on a read-modify-write. Default: false" },
+                            "holes": {
+                                "type": "array",
+                                "description": "Interior hole/cutout contours (optional). Each hole is an array of {x,y} vertices subtracted from the outline.",
+                                "items": {
+                                    "type": "array",
+                                    "items": {
+                                        "type": "object",
+                                        "properties": {
+                                            "x": { "type": "number" },
+                                            "y": { "type": "number" }
+                                        }
+                                    }
+                                }
+                            },
+                            "unique_id": { "type": "string", "description": "Unique ID (optional, 8-char alphanumeric). Default: none" },
+                            "additional_parameters": { "type": "array", "description": "Unmodelled region parameter keys captured verbatim on read (e.g. board-region keys like LAYER, KEEPOUT, ISBOARDCUTOUT). Each entry is a [key, value] string pair. Round-tripped so a read-modify-write does not drop keys the tool does not model. Normally omitted; supply only the pairs read_pcblib returned.", "items": { "type": "array", "items": { "type": "string" }, "minItems": 2, "maxItems": 2 } },
+                            "flags": { "type": ["string", "integer"], "description": "Primitive flags (optional). Accepts the name string read_pcblib emits (e.g. \"LOCKED\" or \"LOCKED | KEEPOUT\") or a raw bitmask integer (1=locked, 2=polygon, 4=keepout, 8=tenting-top, 16=tenting-bottom, 32=testpoint-top, 64=testpoint-bottom; 128 and above are on-disk bits read_pcblib carries verbatim as DISK_BIT_n — pass them back unchanged). Default: none" },
+                            "v7_layer": { "type": "string", "description": "The V7_LAYER token as read_pcblib emitted it when it disagrees with layer: a board cutout stores the keep-out layer byte with V7_LAYER naming the layer it was drawn on. Pass back unchanged; omit when authoring (derived from layer)." },
+                            "param_key_order": { "type": "array", "description": "The region parameter keys in stored order, as read_pcblib emitted them; the writer replays this order so the block stays byte-faithful (a cutout stores LAYER, KEEPOUT and ISBOARDCUTOUT right after NAME). Pass back unchanged; omit when authoring (canonical order).", "items": { "type": "string" } },
+                            "guid": { "type": "string", "description": "Altium's stable identity for the primitive, from the footprint's PrimitiveGuids stream (braced string, e.g. \"{A5172B29-...}\"), as read_pcblib emits it. Pass it back unchanged so a read-modify-write keeps the identity Altium tracks for ECO; omit when authoring (a from-scratch primitive records none)." }
+                        },
+                        "required": ["vertices", "layer"]
+                    }
+                },
+                "text": {
+                    "type": "array",
+                    "description": "Text/string definitions",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "x": { "type": "number" },
+                            "y": { "type": "number" },
+                            "text": { "type": "string" },
+                            "height": { "type": "number", "description": "Text height in mm" },
+                            "layer": { "type": "string", "description": "Layer name: Top Overlay, Top Assembly, Mechanical 1, etc." },
+                            "rotation": { "type": "number", "description": "Rotation in degrees" },
+                            "kind": { "type": "string", "enum": accepted::TEXT_KINDS, "description": "Text rendering kind. \"stroke\" (default) uses a vector stroke font (most common for silkscreen); \"true_type\" renders with the TrueType font named by font_name; \"bar_code\" is a barcode. Default: stroke" },
+                            "stroke_font": { "type": "string", "enum": accepted::STROKE_FONTS, "description": "Stroke font selection (only meaningful when kind is \"stroke\"). Default: default (Altium's built-in stroke font)" },
+                            "font_name": { "type": "string", "description": "TrueType font name (only meaningful when kind is \"true_type\"). Default: Arial" },
+                            "bold": { "type": "boolean", "description": "Bold font style (TrueType). Default: false" },
+                            "italic": { "type": "boolean", "description": "Italic font style (TrueType). Default: false" },
+                            "mirror": { "type": "boolean", "description": "Mirror the text (bottom-side silkscreen). Default: false" },
+                            "is_comment": { "type": "boolean", "description": "Mark this text as the component's Comment field (Altium IsComment). Preserved on read-modify-write. Default: false" },
+                            "is_designator": { "type": "boolean", "description": "Mark this text as the component's Designator field (Altium IsDesignator). Preserved on read-modify-write. Default: false" },
+                            "justification": { "type": "string", "enum": accepted::TEXT_JUSTIFICATIONS, "description": "Text anchor / justification within its frame. Default: bottom_left" },
+                            "stroke_width": { "type": "number", "description": "Stroke line width in mm (optional; defaults to Altium's ~4 mil)" },
+                            "is_inverted": { "type": "boolean", "description": "Draw the text inverted (knockout): a filled bar with the glyphs punched out. Default: false" },
+                            "inverted_border": { "type": "number", "description": "Border margin around inverted text in mm (only meaningful when is_inverted). Default: none" },
+                            "use_inverted_rectangle": { "type": "boolean", "description": "Use an explicit framed rectangle (inverted_rect_width / inverted_rect_height) for the inverted text box instead of auto-sizing to the glyphs. Default: false" },
+                            "inverted_rect_width": { "type": "number", "description": "Inverted-rectangle width in mm (only meaningful when use_inverted_rectangle). Default: none" },
+                            "inverted_rect_height": { "type": "number", "description": "Inverted-rectangle height in mm (only meaningful when use_inverted_rectangle). Default: none" },
+                            "inverted_rect_text_offset": { "type": "number", "description": "Text offset within the inverted rectangle in mm (only meaningful when use_inverted_rectangle). Default: none" },
+                            "net_index": { "type": "integer", "description": "Net index into the board net list (common header, 0-65534; 65535 = no net). Normally omitted for library footprints; preserved on a read-modify-write. Default: 65535" },
+                            "polygon_index": { "type": "integer", "description": "Polygon index (common header; 65535 = none). Normally omitted; preserved on a read-modify-write. Default: 65535" },
+                            "component_index": { "type": "integer", "description": "Component index into the board component list (common header; -1 = free primitive). Normally omitted; preserved on a read-modify-write. Default: -1" },
+                            "unique_id": { "type": "string", "description": "8-char Altium unique ID; preserved on read-modify-write, auto-generated if omitted" },
+                            "flags": { "type": ["string", "integer"], "description": "Primitive flags (optional). Accepts the name string read_pcblib emits (e.g. \"LOCKED\" or \"LOCKED | KEEPOUT\") or a raw bitmask integer (1=locked, 2=polygon, 4=keepout, 8=tenting-top, 16=tenting-bottom, 32=testpoint-top, 64=testpoint-bottom; 128 and above are on-disk bits read_pcblib carries verbatim as DISK_BIT_n — pass them back unchanged). Default: none" },
+                            "barcode_kind": { "type": "integer", "description": "Barcode symbology (kind \"bar_code\" only): 1 = Code 128, the only one Altium names; 0 on any other text. Default: 0" },
+                            "barcode_full_width": { "type": "number", "description": "Barcode overall width in mm (kind \"bar_code\" only; optional)" },
+                            "barcode_full_height": { "type": "number", "description": "Barcode overall height in mm (kind \"bar_code\" only; optional)" },
+                            "barcode_x_margin": { "type": "number", "description": "Barcode horizontal quiet-zone margin in mm (kind \"bar_code\" only; optional)" },
+                            "barcode_y_margin": { "type": "number", "description": "Barcode vertical quiet-zone margin in mm (kind \"bar_code\" only; optional)" },
+                            "barcode_font_name": { "type": "string", "description": "Font of the barcode's human-readable line (kind \"bar_code\" only). Default: empty" },
+                            "barcode_inverted": { "type": "boolean", "description": "Render the barcode inverted, light bars on dark (kind \"bar_code\" only). Default: false" },
+                            "barcode_show_text": { "type": "boolean", "description": "Draw the human-readable line under the bars (kind \"bar_code\" only; Altium turns it on for a new barcode). Default: false" },
+                            "guid": { "type": "string", "description": "Altium's stable identity for the primitive, from the footprint's PrimitiveGuids stream (braced string, e.g. \"{A5172B29-...}\"), as read_pcblib emits it. Pass it back unchanged so a read-modify-write keeps the identity Altium tracks for ECO; omit when authoring (a from-scratch primitive records none)." },
+                            "raw_layer_id": { "type": "integer", "description": "The record's on-disk layer byte (0-255), emitted by read_pcblib only when it maps to no named layer (the primitive then reads as Multi-Layer). Pass it back unchanged so the rewrite keeps the byte; moving the primitive to a named layer discards it. Omit when authoring." },
+                            "raw_geometry": { "type": "string", "description": "Base64 of the text's geometry block exactly as read_pcblib emitted it; the writer overlays the typed fields on it so Altium's cached render metrics round-trip verbatim. Pass back unchanged; omit when authoring (the template block is used)." }
+                        },
+                        "required": ["x", "y", "text", "height", "layer"]
+                    }
+                },
+                "step_model": {
+                    "type": "object",
+                    "description": "Optional STEP 3D model attachment",
+                    "properties": {
+                        "filepath": { "type": "string", "description": "Path to .step file (for embedding) or model name (for external reference)" },
+                        "embed": { "type": "boolean", "description": "If true (default), embed the STEP file. If false, create external reference only (file doesn't need to exist)" },
+                        "x_offset": { "type": "number" },
+                        "y_offset": { "type": "number" },
+                        "z_offset": { "type": "number" },
+                        "rotation": { "type": "number", "description": "Z rotation in degrees" }
+                    },
+                    "required": ["filepath"]
+                },
+                "model_3d": {
+                    "type": ["object", "null"],
+                    "description": "Alternative spelling of the same 3D-model reference, matching read_pcblib's output shape so a read result replays into write_pcblib unchanged. Ignored when 'step_model' is also given; null is accepted and ignored.",
+                    "properties": {
+                        "filepath": { "type": "string", "description": "Path to a .step file (embedded at save when it exists on disk) or a bare model name (kept as a reference)" },
+                        "x_offset": { "type": "number" },
+                        "y_offset": { "type": "number" },
+                        "z_offset": { "type": "number" },
+                        "rotation": { "type": "number", "description": "Z rotation in degrees" }
+                    }
+                },
+                "component_bodies": {
+                    "type": "array",
+                    "description": "Generic extruded 3D bodies (no STEP file). Each is an extruded shape defined by an outline + heights, useful for giving parts a 3D height when no STEP model is available.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "overall_height": { "type": "number", "description": "Total body height above the board, in mm (top of extrusion)" },
+                            "standoff_height": { "type": "number", "description": "Standoff from the board to the bottom of the body, in mm. Default: 0" },
+                            "cavity_height": { "type": "number", "description": "Cavity depth in mm for a body embedded into a board cavity. Default: 0" },
+                            "outline": {
+                                "type": "array",
+                                "description": "Optional 2D outline polygon as {x,y} vertices in mm. If omitted, a bounding box is auto-generated from the footprint pads.",
+                                "items": {
+                                    "type": "object",
+                                    "properties": { "x": { "type": "number" }, "y": { "type": "number" } },
+                                    "required": ["x", "y"]
+                                }
+                            },
+                            "layer": { "type": "string", "description": "Body layer: 'Top 3D Body' (default) or 'Bottom 3D Body'" },
+                            "z_offset": { "type": "number", "description": "Z offset in mm. Default: 0" },
+                            "rotation_x": { "type": "number" },
+                            "rotation_y": { "type": "number" },
+                            "rotation_z": { "type": "number" },
+                            "model_checksum": { "type": "integer", "description": "Altium MODEL.CHECKSUM; normally omitted (defaults to 0). Preserved verbatim on a read-modify-write round-trip." },
+                            "name": { "type": "string", "description": "Altium NAME. Default: \" \" (a single space, as template-default bodies emit)." },
+                            "kind": { "type": "integer", "description": "Altium KIND (0=extruded, etc.). Default: 0" },
+                            "sub_poly_index": { "type": "integer", "description": "Altium SUBPOLYINDEX; -1 when not a polygon sub-shape. Default: -1" },
+                            "union_index": { "type": "integer", "description": "Altium UNIONINDEX for grouped primitives. Default: 0" },
+                            "is_shape_based": { "type": "boolean", "description": "Altium ISSHAPEBASED (shape-based vs. model-based body). Default: false" },
+                            "body_projection": { "type": "integer", "description": "Altium BODYPROJECTION (board side). Default: 0" },
+                            "body_color_3d": { "type": "integer", "description": "3D body colour as decimal RGB (Altium BODYCOLOR3D). Default: 8421504 (0x808080, grey)" },
+                            "body_opacity_3d": { "type": "number", "description": "3D body opacity, 0.0-1.0 (Altium BODYOPACITY3D). Default: 1.0" },
+                            "model_2d_rotation": { "type": "number", "description": "2D placement rotation in degrees (Altium MODEL.2D.ROTATION). Default: 0" },
+                            "model_2d_x": { "type": "number", "description": "Model offset from the body origin in the 2D plane, X in mm (Altium MODEL.2D.X). Default: 0" },
+                            "model_2d_y": { "type": "number", "description": "Model offset in the 2D plane, Y in mm (Altium MODEL.2D.Y). Default: 0" },
+                            "model_id": { "type": "string", "description": "Model GUID referencing an embedded model (Altium MODELID). Default: \"\" (none)" },
+                            "model_name": { "type": "string", "description": "Model filename or external path (Altium MODEL.NAME). Default: \"\" (none)" },
+                            "embedded": { "type": "boolean", "description": "Whether the model is embedded in the library (Altium MODEL.EMBED). Default: false" },
+                            "net_index": { "type": "integer", "description": "Net index into the board net list (common header, 0-65534; 65535 = no net). Normally omitted for library footprints; preserved on a read-modify-write. Default: 65535" },
+                            "polygon_index": { "type": "integer", "description": "Polygon index (common header; 65535 = none). Normally omitted; preserved on a read-modify-write. Default: 65535" },
+                            "component_index": { "type": "integer", "description": "Component index into the board component list (common header; -1 = free primitive). Normally omitted; preserved on a read-modify-write. Default: -1" },
+                            "unique_id": { "type": "string", "description": "8-char Altium unique ID; preserved on read-modify-write, auto-generated if omitted" },
+                            "additional_parameters": { "type": "array", "description": "Unmodelled body parameter keys captured verbatim on read — anything the block carries that this tool has no typed field for (e.g. keys a newer Altium version writes). Each entry is a [key, value] string pair. Round-tripped so a read-modify-write does not drop keys the tool does not model. Normally omitted; supply only the pairs read_pcblib returned.", "items": { "type": "array", "items": { "type": "string" }, "minItems": 2, "maxItems": 2 } },
+                            "identifier": { "type": "string", "description": "The body's IDENTIFIER, a user-visible name (any Unicode; stored as code points on disk). Default: empty" },
+                            "texture_center_x": { "type": "string", "description": "TEXTURECENTERX verbatim as read_pcblib emitted it: Altium's UI and scripting routes disagree on the texture values, so they are carried as wire text rather than derived. Pass back unchanged; omit when authoring." },
+                            "texture_center_y": { "type": "string", "description": "TEXTURECENTERY verbatim as read_pcblib emitted it: Altium's UI and scripting routes disagree on the texture values, so they are carried as wire text rather than derived. Pass back unchanged; omit when authoring." },
+                            "texture_size_x": { "type": "string", "description": "TEXTURESIZEX verbatim as read_pcblib emitted it: Altium's UI and scripting routes disagree on the texture values, so they are carried as wire text rather than derived (the UI writes 0.0001mil where a script writes 0mil). Pass back unchanged; omit when authoring." },
+                            "texture_size_y": { "type": "string", "description": "TEXTURESIZEY verbatim as read_pcblib emitted it: Altium's UI and scripting routes disagree on the texture values, so they are carried as wire text rather than derived. Pass back unchanged; omit when authoring." },
+                            "texture_rotation": { "type": "string", "description": "TEXTUREROTATION verbatim as read_pcblib emitted it: Altium's UI and scripting routes disagree on the texture values, so they are carried as wire text rather than derived (a UI-authored body can carry a rotated texture). Pass back unchanged; omit when authoring." },
+                            "v7_layer": { "type": "string", "description": "The V7_LAYER token as read_pcblib emitted it when the layer byte maps to no named layer; replayed together with raw_layer_id while the body stays on the Multi-Layer catch-all. Pass back unchanged; omit when authoring (derived from layer)." },
+                            "param_key_order": { "type": "array", "description": "The body parameter keys in stored order, as read_pcblib emitted them; the writer replays this order so the block stays byte-faithful (a UI-authored body stores BODYOVERRIDECOLOR right after BODYOPACITY3D). Pass back unchanged; omit when authoring (canonical order).", "items": { "type": "string" } },
+                            "guid": { "type": "string", "description": "Altium's stable identity for the primitive, from the footprint's PrimitiveGuids stream (braced string, e.g. \"{A5172B29-...}\"), as read_pcblib emits it. Pass it back unchanged so a read-modify-write keeps the identity Altium tracks for ECO; omit when authoring (a from-scratch primitive records none)." },
+                            "raw_layer_id": { "type": "integer", "description": "The record's on-disk layer byte (0-255), emitted by read_pcblib only when it maps to no named layer (the primitive then reads as Multi-Layer). Pass it back unchanged so the rewrite keeps the byte; moving the primitive to a named layer discards it. Omit when authoring." }
+                        },
+                        "required": ["overall_height"]
+                    }
+                },
+                "guid": { "type": "string", "description": "The footprint's own identity GUID (the PrimitiveGuids entry that names no primitive; braced string) as read_pcblib emits it. Pass it back unchanged on a read-modify-write; omit when authoring." },
+                "primitive_order": { "type": "array", "description": "The footprint's primitives in Data-stream order, one kind name per primitive, as read_pcblib reports it. Passing it back keeps the source's stream order on a read-modify-write and marks the footprint as a read echo (no designator text is added). Omit when authoring: primitives are written grouped by kind.", "items": { "type": "string", "enum": crate::altium::pcblib::PrimitiveKind::WRITE_ORDER.iter().map(|k| k.name()).collect::<Vec<_>>() } }
+            },
+            "required": ["name"]
+        })
+    }
+
+    /// The symbol object `write_schlib` takes per `symbols` entry and
+    /// `update_component` takes as `symbol`; see [`Self::footprint_schema`].
+    #[allow(clippy::too_many_lines)]
+    fn symbol_schema() -> serde_json::Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "name": { "type": "string" },
+                "description": { "type": "string", "description": "Symbol description. Keep to 256 characters if the library will be imported into an Altium 365 workspace — that importer refuses longer ones; a longer description is written and reported as a validation warning." },
+                "designator_prefix": { "type": "string", "description": "Reference-designator class letter, e.g. 'R' for resistors, 'U' for ICs. Written as '<prefix>?'. If omitted, falls back to 'component_type' (IEEE 315 / ASME Y14.44 mapping), then to 'U'." },
+                "designator_x": { "type": "number", "description": "X position of the designator text. Default: -5 (Altium's from-scratch placement)" },
+                "designator_y": { "type": "number", "description": "Y position of the designator text. Default: 5 (Altium's from-scratch placement)" },
+                "designator_unique_id": { "type": "string", "description": "8-char unique ID of the designator record; preserved on read-modify-write, auto-generated if omitted" },
+                "component_type": { "type": "string", "description": "Optional component category (e.g. 'resistor', 'capacitor', 'inductor', 'diode', 'transistor', 'connector', 'crystal', 'ic') used to derive the IEEE designator letter when 'designator_prefix' is not given. Unknown values default to 'U'." },
+                "part_count": { "type": "integer", "description": "Number of parts for multi-part symbols (e.g., 2 for dual op-amp). Default: 1" },
+                "display_mode_count": { "type": "integer", "description": "Number of display modes (1 = normal only, 2+ = alternate/de-Morgan views). Default: 1" },
+                "current_part_id": { "type": "integer", "description": "Currently selected part (1-based). Default: 1" },
+                "part_id_locked": { "type": "boolean", "description": "Whether the part selection is locked. Default: false" },
+                "source_library_name": { "type": "string", "description": "Source library name recorded in the symbol header. Default: '*'" },
+                "target_file_name": { "type": "string", "description": "Target file name recorded in the symbol header. Default: '*'" },
+                "pins": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "designator": { "type": "string" },
+                            "name": { "type": "string" },
+                            "x": { "type": "integer", "description": "Pin's body-attach (INNER) end, in whole schematic units (10 units = 1 grid square). This is the end that touches the symbol body, NOT the connection tip. The pin is drawn from (x,y) extending 'length' units in the 'orientation' direction; the connection tip is at the far end. Pins are integer-positioned; for an off-grid pin supply the sub-unit remainder via 'frac' (a fractional value here is truncated)." },
+                            "y": { "type": "integer", "description": "Y of the pin's body-attach (inner) end, in whole schematic units. See 'x' (use 'frac' for off-grid)." },
+                            "length": { "type": "number", "description": "Pin length in schematic units (10 = 1 grid). Drawn from (x,y) outward in the 'orientation' direction." },
+                            "orientation": { "type": "string", "enum": accepted::PIN_ORIENTATIONS, "description": "Direction the pin POINTS, away from the body — NOT which side it sits on. A pin on the LEFT side uses 'left' (tip at x-length); a RIGHT-side pin uses 'right' (tip at x+length); 'up'/'down' for top/bottom pins. Put each pin's (x,y) on the matching body-rectangle edge so it attaches flush, e.g. left pin {x:-50,y:20,length:30,orientation:'left'} with rectangle x1=-50, and the matching right pin {x:50,y:20,length:30,orientation:'right'} with x2=50. For TOP/BOTTOM pins, (x,y) sits on the body's top/bottom edge and the pin points outward (away from the body centre): a top-side pin uses 'up' (tip at y+length, above the body), a bottom-side pin uses 'down' (tip at y-length, below) — e.g. a vertical 2-pin part with the body near y=0: top pin {x:0,y:10,length:30,orientation:'up'} (tip at y=40), bottom pin {x:0,y:-10,length:30,orientation:'down'} (tip at y=-40)." },
+                            "electrical_type": { "type": "string", "enum": accepted::PIN_ELECTRICAL_TYPES, "description": "Pin electrical type. 'tristate' is accepted as an alias for 'hi_z'. Default: passive" },
+                            "owner_part_id": { "type": "integer", "description": "Part number this pin belongs to (1-based). Default: 1" },
+                            "hidden": { "type": "boolean", "description": "Whether the pin is hidden. Default: false" },
+                            "show_name": { "type": "boolean", "description": "Whether to show the pin name. Default: true" },
+                            "show_designator": { "type": "boolean", "description": "Whether to show the pin designator. Default: true" },
+                            "description": { "type": "string", "description": "Pin description. Default: empty" },
+                            "colour": { "type": "integer", "description": "Pin colour (BGR integer). Default: 0" },
+                            "graphically_locked": { "type": "boolean", "description": "Whether the pin is graphically locked. Default: false" },
+                            "swap_id_group": { "type": "string", "description": "Pin swap-id group, for pin-swap. Default: empty" },
+                            "part_and_sequence": { "type": "string", "description": "Pin part-and-sequence swap id. Default: '|&|'" },
+                            "default_value": { "type": "string", "description": "Pin default value. Default: empty" },
+                            "symbol_inner_edge": { "type": "string", "enum": accepted::PIN_SYMBOLS, "description": "Decoration on the INNER edge (nearest the body), e.g. 'dot' (inversion bubble), 'clock'. Default: none" },
+                            "symbol_outer_edge": { "type": "string", "enum": accepted::PIN_SYMBOLS, "description": "Decoration on the OUTER edge (furthest from the body), e.g. 'dot', 'clock'. Default: none" },
+                            "symbol_inside": { "type": "string", "enum": accepted::PIN_SYMBOLS, "description": "Decoration drawn inside the pin line, e.g. 'postponed_output', 'open_collector'. Default: none" },
+                            "symbol_outside": { "type": "string", "enum": accepted::PIN_SYMBOLS, "description": "Decoration drawn outside the pin line, e.g. 'right_left_signal_flow', 'analog_signal_in'. Default: none" },
+                            "owner_part_display_mode": { "type": "integer", "description": "Pin's alternate-view (display-mode) index in the binary pin record. Default: 0" },
+                            "symbol_line_width": { "type": "integer", "description": "Pin symbol line-width index. Non-zero writes a PinSymbolLineWidth auxiliary stream; 0 (default) writes none." },
+                            "frac": { "type": "object", "description": "Fractional pin coordinates for off-grid pins, in 1/100000 schematic-unit steps. Non-zero writes a PinFrac auxiliary stream; omit for on-grid pins.", "properties": { "x": { "type": "integer" }, "y": { "type": "integer" }, "length": { "type": "integer" } } },
+                            "is_not_accessible": { "type": "boolean", "description": "Whether the pin is marked not-accessible (the pin record's 0x20 bit). Default: false" },
+                            "formal_type": { "type": "integer", "description": "Pin formal-type byte; Altium writes 1 for a normal pin. Preserved on a read-modify-write. Default: 1" }
+                        },
+                        "required": ["designator", "name", "x", "y", "length", "orientation"]
+                    }
+                },
+                "rectangles": {
+                    "type": "array",
+                    "description": "Rectangle definitions",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "x1": { "type": "number", "description": "Left X coordinate" },
+                            "y1": { "type": "number", "description": "Bottom Y coordinate" },
+                            "x2": { "type": "number", "description": "Right X coordinate" },
+                            "y2": { "type": "number", "description": "Top Y coordinate" },
+                            "line_width": { "type": "integer", "description": "Border width. Default: 1" },
+                            "line_color": { "type": "integer", "description": "Border BGR colour. Default: 0x000080" },
+                            "fill_color": { "type": "integer", "description": "Fill BGR colour. Default: 0xB0FFFF (Altium light yellow)" },
+                            "line_style": { "type": "integer", "description": "Border line style: 0=Solid, 1=Dashed, 2=Dotted. Default: 0" },
+                            "filled": { "type": "boolean", "description": "Whether filled. Default: true" },
+                            "transparent": { "type": "boolean", "description": "Whether the fill is transparent. Default: false" },
+                            "owner_part_id": { "type": "integer", "description": "Part number (1-based). Default: 1" },
+                            "graphically_locked": { "type": "boolean", "description": "Whether the shape is graphically locked. Default: false" },
+                            "disabled": { "type": "boolean", "description": "Whether the shape is disabled. Default: false" },
+                            "dimmed": { "type": "boolean", "description": "Whether the shape is dimmed. Default: false" },
+                            "owner_part_display_mode": { "type": "integer", "description": "Display mode this shape belongs to (0=Normal, 1=first alternate/de-Morgan, ...). Default: 0" },
+                            "unique_id": { "type": "string", "description": "8-char Altium unique ID; preserved on read-modify-write, auto-generated if omitted" },
+                            "raw_params": { "type": "array", "description": "The record's segments as [key, value] string pairs in stored order, exactly as read_schlib emitted them; the writer replays them verbatim unless the field behind one was edited, so the record comes back as Altium wrote it (the UI omits LineWidth=1, a script does not). Pass back unchanged; omit when authoring (the canonical form is written).", "items": { "type": "array", "items": { "type": "string" }, "minItems": 2, "maxItems": 2 } }
+                        },
+                        "required": ["x1", "y1", "x2", "y2"]
+                    }
+                },
+                "round_rects": {
+                    "type": "array",
+                    "description": "Rounded-rectangle definitions",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "x1": { "type": "number", "description": "Left X coordinate" },
+                            "y1": { "type": "number", "description": "Bottom Y coordinate" },
+                            "x2": { "type": "number", "description": "Right X coordinate" },
+                            "y2": { "type": "number", "description": "Top Y coordinate" },
+                            "corner_x_radius": { "type": "number", "description": "Horizontal corner radius. Default: 0" },
+                            "corner_y_radius": { "type": "number", "description": "Vertical corner radius. Default: 0" },
+                            "line_width": { "type": "integer", "description": "Border width. Default: 1" },
+                            "line_color": { "type": "integer", "description": "Border BGR colour. Default: 0x000080" },
+                            "fill_color": { "type": "integer", "description": "Fill BGR colour. Default: 0xB0FFFF (Altium light yellow)" },
+                            "line_style": { "type": "integer", "description": "Border line style: 0=Solid, 1=Dashed, 2=Dotted. Default: 0" },
+                            "filled": { "type": "boolean", "description": "Whether filled. Default: true" },
+                            "transparent": { "type": "boolean", "description": "Whether the fill is transparent. Default: false" },
+                            "owner_part_id": { "type": "integer", "description": "Part number (1-based). Default: 1" },
+                            "graphically_locked": { "type": "boolean", "description": "Whether the shape is graphically locked. Default: false" },
+                            "disabled": { "type": "boolean", "description": "Whether the shape is disabled. Default: false" },
+                            "dimmed": { "type": "boolean", "description": "Whether the shape is dimmed. Default: false" },
+                            "owner_part_display_mode": { "type": "integer", "description": "Display mode this shape belongs to (0=Normal, 1=first alternate/de-Morgan, ...). Default: 0" },
+                            "unique_id": { "type": "string", "description": "8-char Altium unique ID; preserved on read-modify-write, auto-generated if omitted" },
+                            "raw_params": { "type": "array", "description": "The record's segments as [key, value] string pairs in stored order, exactly as read_schlib emitted them; the writer replays them verbatim unless the field behind one was edited, so the record comes back as Altium wrote it (the UI omits LineWidth=1, a script does not). Pass back unchanged; omit when authoring (the canonical form is written).", "items": { "type": "array", "items": { "type": "string" }, "minItems": 2, "maxItems": 2 } }
+                        },
+                        "required": ["x1", "y1", "x2", "y2", "corner_x_radius", "corner_y_radius"]
+                    }
+                },
+                "lines": {
+                    "type": "array",
+                    "description": "Line definitions",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "x1": { "type": "number", "description": "Start X coordinate" },
+                            "y1": { "type": "number", "description": "Start Y coordinate" },
+                            "x2": { "type": "number", "description": "End X coordinate" },
+                            "y2": { "type": "number", "description": "End Y coordinate" },
+                            "line_width": { "type": "integer", "description": "Line width. Default: 1" },
+                            "color": { "type": "integer", "description": "Line BGR colour. Default: 0x000080" },
+                            "line_style": { "type": "integer", "description": "Line style: 0=Solid, 1=Dashed, 2=Dotted. Default: 0" },
+                            "is_not_accessible": { "type": "boolean", "description": "Whether the line is marked not-accessible (Altium tags every line; default true)" },
+                            "owner_part_id": { "type": "integer", "description": "Part number (1-based). Default: 1" },
+                            "graphically_locked": { "type": "boolean", "description": "Whether the shape is graphically locked. Default: false" },
+                            "disabled": { "type": "boolean", "description": "Whether the shape is disabled. Default: false" },
+                            "dimmed": { "type": "boolean", "description": "Whether the shape is dimmed. Default: false" },
+                            "owner_part_display_mode": { "type": "integer", "description": "Display mode this shape belongs to (0=Normal, 1=first alternate/de-Morgan, ...). Default: 0" },
+                            "unique_id": { "type": "string", "description": "8-char Altium unique ID; preserved on read-modify-write, auto-generated if omitted" },
+                            "raw_params": { "type": "array", "description": "The record's segments as [key, value] string pairs in stored order, exactly as read_schlib emitted them; the writer replays them verbatim unless the field behind one was edited, so the record comes back as Altium wrote it (the UI omits LineWidth=1, a script does not). Pass back unchanged; omit when authoring (the canonical form is written).", "items": { "type": "array", "items": { "type": "string" }, "minItems": 2, "maxItems": 2 } }
+                        },
+                        "required": ["x1", "y1", "x2", "y2"]
+                    }
+                },
+                "polylines": {
+                    "type": "array",
+                    "description": "Polyline definitions (>= 2 connected points). Optional endpoint shapes turn a polyline into an arrow.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "points": {
+                                "type": "array",
+                                "description": "Points (>= 2) as objects with x/y in schematic units. 'vertices' is accepted as an alias.",
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "x": { "type": "number" },
+                                        "y": { "type": "number" }
+                                    },
+                                    "required": ["x", "y"]
+                                }
+                            },
+                            "line_width": { "type": "integer", "description": "Line width. Default: 1" },
+                            "color": { "type": "integer", "description": "Line BGR colour. Default: 0x000080" },
+                            "line_style": { "type": "integer", "description": "Line style: 0=Solid, 1=Dashed, 2=Dotted. Default: 0" },
+                            "start_line_shape": { "type": "integer", "description": "Start endpoint (arrowhead) shape id. Default: 0 (none)" },
+                            "end_line_shape": { "type": "integer", "description": "End endpoint (arrowhead) shape id. Default: 0 (none)" },
+                            "line_shape_size": { "type": "integer", "description": "Size of the endpoint shapes. Default: 0" },
+                            "transparent": { "type": "boolean", "description": "Whether the polyline is transparent. Default: false" },
+                            "is_not_accessible": { "type": "boolean", "description": "Whether the polyline is marked not-accessible (Altium tags every polyline; default true)" },
+                            "owner_part_id": { "type": "integer", "description": "Part number (1-based). Default: 1" },
+                            "graphically_locked": { "type": "boolean", "description": "Whether the shape is graphically locked. Default: false" },
+                            "disabled": { "type": "boolean", "description": "Whether the shape is disabled. Default: false" },
+                            "dimmed": { "type": "boolean", "description": "Whether the shape is dimmed. Default: false" },
+                            "owner_part_display_mode": { "type": "integer", "description": "Display mode this shape belongs to (0=Normal, 1=first alternate/de-Morgan, ...). Default: 0" },
+                            "unique_id": { "type": "string", "description": "8-char Altium unique ID; preserved on read-modify-write, auto-generated if omitted" },
+                            "vertices": { "type": "array", "description": "Alias of points, read when points is absent.", "items": { "type": "object", "properties": { "x": { "type": "number" }, "y": { "type": "number" } }, "required": ["x", "y"] } },
+                            "raw_params": { "type": "array", "description": "The record's segments as [key, value] string pairs in stored order, exactly as read_schlib emitted them; the writer replays them verbatim unless the field behind one was edited, so the record comes back as Altium wrote it (the UI omits LineWidth=1, a script does not). Pass back unchanged; omit when authoring (the canonical form is written).", "items": { "type": "array", "items": { "type": "string" }, "minItems": 2, "maxItems": 2 } }
+                        },
+                        "required": ["points"]
+                    }
+                },
+                "polygons": {
+                    "type": "array",
+                    "description": "Filled polygon definitions (>= 3 vertices)",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "points": {
+                                "type": "array",
+                                "description": "Vertices (>= 3) as objects with x/y in schematic units",
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "x": { "type": "number" },
+                                        "y": { "type": "number" }
+                                    },
+                                    "required": ["x", "y"]
+                                }
+                            },
+                            "line_width": { "type": "integer", "description": "Border width. Default: 1" },
+                            "line_color": { "type": "integer", "description": "Border BGR colour. Default: 0x000080" },
+                            "fill_color": { "type": "integer", "description": "Fill BGR colour. Default: 0xB0FFFF (Altium light yellow)" },
+                            "line_style": { "type": "integer", "description": "Border style: 0=Solid, 1=Dashed, 2=Dotted. Default: 0" },
+                            "filled": { "type": "boolean", "description": "Whether filled. Default: true" },
+                            "transparent": { "type": "boolean", "description": "Whether the fill is transparent (vs opaque). Default: false" },
+                            "is_not_accessible": { "type": "boolean", "description": "Whether the polygon is marked not-accessible (Altium tags every polygon; default true)" },
+                            "owner_part_id": { "type": "integer", "description": "Part number (1-based). Default: 1" },
+                            "graphically_locked": { "type": "boolean", "description": "Whether the shape is graphically locked. Default: false" },
+                            "disabled": { "type": "boolean", "description": "Whether the shape is disabled. Default: false" },
+                            "dimmed": { "type": "boolean", "description": "Whether the shape is dimmed. Default: false" },
+                            "owner_part_display_mode": { "type": "integer", "description": "Display mode this shape belongs to (0=Normal, 1=first alternate/de-Morgan, ...). Default: 0" },
+                            "unique_id": { "type": "string", "description": "8-char Altium unique ID; preserved on read-modify-write, auto-generated if omitted" },
+                            "vertices": { "type": "array", "description": "Alias of points, read when points is absent.", "items": { "type": "object", "properties": { "x": { "type": "number" }, "y": { "type": "number" } }, "required": ["x", "y"] } },
+                            "raw_params": { "type": "array", "description": "The record's segments as [key, value] string pairs in stored order, exactly as read_schlib emitted them; the writer replays them verbatim unless the field behind one was edited, so the record comes back as Altium wrote it (the UI omits LineWidth=1, a script does not). Pass back unchanged; omit when authoring (the canonical form is written).", "items": { "type": "array", "items": { "type": "string" }, "minItems": 2, "maxItems": 2 } }
+                        },
+                        "required": ["points"]
+                    }
+                },
+                "arcs": {
+                    "type": "array",
+                    "description": "Arc/circle definitions",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "x": { "type": "number", "description": "Centre X coordinate" },
+                            "y": { "type": "number", "description": "Centre Y coordinate" },
+                            "radius": { "type": "number", "description": "Radius in schematic units" },
+                            "start_angle": { "type": "number", "description": "Start angle in degrees (0 = right, CCW). Default: 0" },
+                            "end_angle": { "type": "number", "description": "End angle in degrees. Default: 360 (full circle)" },
+                            "line_width": { "type": "integer", "description": "Line width. Default: 1" },
+                            "color": { "type": "integer", "description": "Line BGR colour. Default: 0x000080" },
+                            "fill_color": { "type": "integer", "description": "Fill BGR colour (maps to AreaColor). Default: 0 (no fill)" },
+                            "is_not_accessible": { "type": "boolean", "description": "Whether the arc is marked not-accessible (Altium tags every arc; default true)" },
+                            "owner_part_id": { "type": "integer", "description": "Part number (1-based). Default: 1" },
+                            "graphically_locked": { "type": "boolean", "description": "Whether the shape is graphically locked. Default: false" },
+                            "disabled": { "type": "boolean", "description": "Whether the shape is disabled. Default: false" },
+                            "dimmed": { "type": "boolean", "description": "Whether the shape is dimmed. Default: false" },
+                            "owner_part_display_mode": { "type": "integer", "description": "Display mode this shape belongs to (0=Normal, 1=first alternate/de-Morgan, ...). Default: 0" },
+                            "unique_id": { "type": "string", "description": "8-char Altium unique ID; preserved on read-modify-write, auto-generated if omitted" },
+                            "raw_params": { "type": "array", "description": "The record's segments as [key, value] string pairs in stored order, exactly as read_schlib emitted them; the writer replays them verbatim unless the field behind one was edited, so the record comes back as Altium wrote it (the UI omits LineWidth=1, a script does not). Pass back unchanged; omit when authoring (the canonical form is written).", "items": { "type": "array", "items": { "type": "string" }, "minItems": 2, "maxItems": 2 } }
+                        },
+                        "required": ["x", "y", "radius"]
+                    }
+                },
+                "pies": {
+                    "type": "array",
+                    "description": "Pie (filled circular sector / wedge) definitions",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "x": { "type": "number", "description": "Centre X coordinate" },
+                            "y": { "type": "number", "description": "Centre Y coordinate" },
+                            "radius": { "type": "number", "description": "Radius in schematic units" },
+                            "start_angle": { "type": "number", "description": "Start angle in degrees (0 = right, CCW). Default: 0" },
+                            "end_angle": { "type": "number", "description": "End angle in degrees. Default: 360" },
+                            "line_width": { "type": "integer", "description": "Border width. Default: 1" },
+                            "line_color": { "type": "integer", "description": "Border BGR colour. Default: 0" },
+                            "fill_color": { "type": "integer", "description": "Fill BGR colour (maps to AreaColor). Default: 0" },
+                            "filled": { "type": "boolean", "description": "Whether the pie is filled (IsSolid). Default: true" },
+                            "transparent": { "type": "boolean", "description": "Whether the fill is transparent. Default: false" },
+                            "is_not_accessible": { "type": "boolean", "description": "Whether the pie is marked not-accessible (Altium tags every shape; default true)" },
+                            "owner_part_id": { "type": "integer", "description": "Part number (1-based). Default: 1" },
+                            "graphically_locked": { "type": "boolean", "description": "Whether the shape is graphically locked. Default: false" },
+                            "disabled": { "type": "boolean", "description": "Whether the shape is disabled. Default: false" },
+                            "dimmed": { "type": "boolean", "description": "Whether the shape is dimmed. Default: false" },
+                            "owner_part_display_mode": { "type": "integer", "description": "Display mode this shape belongs to (0=Normal, 1=first alternate/de-Morgan, ...). Default: 0" },
+                            "unique_id": { "type": "string", "description": "8-char Altium unique ID; preserved on read-modify-write, auto-generated if omitted" },
+                            "raw_params": { "type": "array", "description": "The record's segments as [key, value] string pairs in stored order, exactly as read_schlib emitted them; the writer replays them verbatim unless the field behind one was edited, so the record comes back as Altium wrote it (the UI omits LineWidth=1, a script does not). Pass back unchanged; omit when authoring (the canonical form is written).", "items": { "type": "array", "items": { "type": "string" }, "minItems": 2, "maxItems": 2 } }
+                        },
+                        "required": ["x", "y", "radius"]
+                    }
+                },
+                "images": {
+                    "type": "array",
+                    "description": "Embedded/linked raster image definitions (RECORD=30). The record metadata round-trips; embedded image bytes are authored via image_data (base64) and stored in the library /Storage stream.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "x1": { "type": "number", "description": "First corner X (Location.X)" },
+                            "y1": { "type": "number", "description": "First corner Y (Location.Y)" },
+                            "x2": { "type": "number", "description": "Second corner X (Corner.X)" },
+                            "y2": { "type": "number", "description": "Second corner Y (Corner.Y)" },
+                            "line_width": { "type": "integer", "description": "Border width. Default: 1" },
+                            "line_color": { "type": "integer", "description": "Border BGR colour. Default: 0" },
+                            "line_style": { "type": "integer", "description": "Border style: 0=Solid, 1=Dashed, 2=Dotted. Default: 0" },
+                            "fill_color": { "type": "integer", "description": "Fill BGR colour (AreaColor). Default: 0" },
+                            "filled": { "type": "boolean", "description": "Whether the box is filled (IsSolid). Default: false" },
+                            "transparent": { "type": "boolean", "description": "Whether the fill is transparent. Default: false" },
+                            "show_border": { "type": "boolean", "description": "Whether the border is shown. Default: false" },
+                            "keep_aspect": { "type": "boolean", "description": "Whether the image keeps its aspect ratio. Default: false" },
+                            "embed_image": { "type": "boolean", "description": "Whether the image bytes are embedded (vs a link to file_name). Default: false" },
+                            "file_name": { "type": "string", "description": "Image file name / embedded key (Altium stores the full source file path for embedded images)" },
+                            "image_data": { "type": "string", "description": "Base64-encoded raw image bytes; stored in the library /Storage stream when embed_image is true" },
+                            "is_not_accessible": { "type": "boolean", "description": "Whether the image is marked not-accessible (Altium tags every shape; default true)" },
+                            "owner_part_id": { "type": "integer", "description": "Part number (1-based). Default: 1" },
+                            "graphically_locked": { "type": "boolean", "description": "Whether the shape is graphically locked. Default: false" },
+                            "disabled": { "type": "boolean", "description": "Whether the shape is disabled. Default: false" },
+                            "dimmed": { "type": "boolean", "description": "Whether the shape is dimmed. Default: false" },
+                            "owner_part_display_mode": { "type": "integer", "description": "Display mode this shape belongs to (0=Normal, 1=first alternate/de-Morgan, ...). Default: 0" },
+                            "unique_id": { "type": "string", "description": "8-char Altium unique ID; preserved on read-modify-write, auto-generated if omitted" },
+                            "raw_params": { "type": "array", "description": "The record's segments as [key, value] string pairs in stored order, exactly as read_schlib emitted them; the writer replays them verbatim unless the field behind one was edited, so the record comes back as Altium wrote it (the UI omits LineWidth=1, a script does not). Pass back unchanged; omit when authoring (the canonical form is written).", "items": { "type": "array", "items": { "type": "string" }, "minItems": 2, "maxItems": 2 } }
+                        },
+                        "required": ["x1", "y1", "x2", "y2"]
+                    }
+                },
+                "text_frames": {
+                    "type": "array",
+                    "description": "Text frame definitions (RECORD=28): a bordered multi-line text box, distinct from labels/text (frame rectangle, word-wrap, alignment, clip-to-rect).",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "x1": { "type": "number", "description": "First corner X (Location.X)" },
+                            "y1": { "type": "number", "description": "First corner Y (Location.Y)" },
+                            "x2": { "type": "number", "description": "Second corner X (Corner.X)" },
+                            "y2": { "type": "number", "description": "Second corner Y (Corner.Y)" },
+                            "text": { "type": "string", "description": "Text content of the frame" },
+                            "color": { "type": "integer", "description": "Border BGR colour. Default: 0" },
+                            "area_color": { "type": "integer", "description": "Fill BGR colour (AreaColor). Default: 16777215 (white)" },
+                            "text_color": { "type": "integer", "description": "Text BGR colour. Default: 0" },
+                            "text_margin": { "type": "number", "description": "Margin between the frame border and the text, in schematic units. Default: 0.00005 (Altium's from-scratch default)" },
+                            "line_width": { "type": "integer", "description": "Border width. Default: 0" },
+                            "line_style": { "type": "integer", "description": "Border style: 0=Solid, 1=Dashed, 2=Dotted. Default: 0" },
+                            "transparent": { "type": "boolean", "description": "Whether the fill is transparent. Default: false" },
+                            "font_id": { "type": "integer", "description": "Font ID (1-based index into library fonts). Default: 1" },
+                            "orientation": { "type": "integer", "description": "Text orientation: 0/1/2/3 = 0/90/180/270 degrees. Default: 0" },
+                            "alignment": { "type": "integer", "description": "Text alignment: 0=left, 1=centre, 2=right. Default: 1 (centre)" },
+                            "is_solid": { "type": "boolean", "description": "Whether the frame is filled (IsSolid). Default: false" },
+                            "show_border": { "type": "boolean", "description": "Whether the border is shown. Default: true" },
+                            "word_wrap": { "type": "boolean", "description": "Whether the text word-wraps inside the frame. Default: true" },
+                            "clip_to_rect": { "type": "boolean", "description": "Whether the text is clipped to the frame rectangle. Default: true" },
+                            "is_not_accessible": { "type": "boolean", "description": "Whether the frame is marked not-accessible (Altium tags every shape; default true)" },
+                            "owner_part_id": { "type": "integer", "description": "Part number (1-based). Default: 1" },
+                            "graphically_locked": { "type": "boolean", "description": "Whether the shape is graphically locked. Default: false" },
+                            "disabled": { "type": "boolean", "description": "Whether the shape is disabled. Default: false" },
+                            "dimmed": { "type": "boolean", "description": "Whether the shape is dimmed. Default: false" },
+                            "owner_part_display_mode": { "type": "integer", "description": "Display mode this shape belongs to (0=Normal, 1=first alternate/de-Morgan, ...). Default: 0" },
+                            "unique_id": { "type": "string", "description": "8-char Altium unique ID; preserved on read-modify-write, auto-generated if omitted" },
+                            "raw_params": { "type": "array", "description": "The record's segments as [key, value] string pairs in stored order, exactly as read_schlib emitted them; the writer replays them verbatim unless the field behind one was edited, so the record comes back as Altium wrote it (the UI omits LineWidth=1, a script does not). Pass back unchanged; omit when authoring (the canonical form is written).", "items": { "type": "array", "items": { "type": "string" }, "minItems": 2, "maxItems": 2 } }
+                        },
+                        "required": ["x1", "y1", "x2", "y2", "text"]
+                    }
+                },
+                "beziers": {
+                    "type": "array",
+                    "description": "Cubic Bezier curve definitions (four control points)",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "x1": { "type": "number", "description": "First control point X" },
+                            "y1": { "type": "number", "description": "First control point Y" },
+                            "x2": { "type": "number", "description": "Second control point X" },
+                            "y2": { "type": "number", "description": "Second control point Y" },
+                            "x3": { "type": "number", "description": "Third control point X" },
+                            "y3": { "type": "number", "description": "Third control point Y" },
+                            "x4": { "type": "number", "description": "Fourth control point X" },
+                            "y4": { "type": "number", "description": "Fourth control point Y" },
+                            "line_width": { "type": "integer", "description": "Curve width. Default: 1" },
+                            "color": { "type": "integer", "description": "Curve BGR colour. Default: 0x000080 (128, dark red)" },
+                            "is_not_accessible": { "type": "boolean", "description": "Whether the curve is marked not-accessible (Altium tags every shape; default true)" },
+                            "owner_part_id": { "type": "integer", "description": "Part number (1-based). Default: 1" },
+                            "graphically_locked": { "type": "boolean", "description": "Whether the shape is graphically locked. Default: false" },
+                            "unique_id": { "type": "string", "description": "8-char Altium unique ID; preserved on read-modify-write, auto-generated if omitted" },
+                            "disabled": { "type": "boolean", "description": "Whether the shape is disabled. Default: false" },
+                            "dimmed": { "type": "boolean", "description": "Whether the shape is dimmed. Default: false" },
+                            "owner_part_display_mode": { "type": "integer", "description": "Display mode this shape belongs to (0=Normal, 1=first alternate/de-Morgan, ...). Default: 0" },
+                            "raw_params": { "type": "array", "description": "The record's segments as [key, value] string pairs in stored order, exactly as read_schlib emitted them; the writer replays them verbatim unless the field behind one was edited, so the record comes back as Altium wrote it (the UI omits LineWidth=1, a script does not). Pass back unchanged; omit when authoring (the canonical form is written).", "items": { "type": "array", "items": { "type": "string" }, "minItems": 2, "maxItems": 2 } }
+                        },
+                        "required": ["x1", "y1", "x2", "y2", "x3", "y3", "x4", "y4"]
+                    }
+                },
+                "elliptical_arcs": {
+                    "type": "array",
+                    "description": "Elliptical arc definitions (arc with independent X/Y radii)",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "x": { "type": "number", "description": "Centre X coordinate" },
+                            "y": { "type": "number", "description": "Centre Y coordinate" },
+                            "radius": { "type": "number", "description": "Primary (X) radius in schematic units" },
+                            "secondary_radius": { "type": "number", "description": "Secondary (Y) radius in schematic units" },
+                            "start_angle": { "type": "number", "description": "Start angle in degrees (0 = right, CCW). Default: 0" },
+                            "end_angle": { "type": "number", "description": "End angle in degrees. Default: 360" },
+                            "line_width": { "type": "integer", "description": "Arc width. Default: 1" },
+                            "color": { "type": "integer", "description": "Arc BGR colour. Default: 0x000080 (128, dark red)" },
+                            "fill_color": { "type": "integer", "description": "Fill BGR colour (AreaColor). Default: 0" },
+                            "owner_part_id": { "type": "integer", "description": "Part number (1-based). Default: 1" },
+                            "unique_id": { "type": "string", "description": "8-char Altium unique ID; preserved on read-modify-write, auto-generated if omitted" },
+                            "graphically_locked": { "type": "boolean", "description": "Whether the shape is graphically locked. Default: false" },
+                            "disabled": { "type": "boolean", "description": "Whether the shape is disabled. Default: false" },
+                            "dimmed": { "type": "boolean", "description": "Whether the shape is dimmed. Default: false" },
+                            "owner_part_display_mode": { "type": "integer", "description": "Display mode this shape belongs to (0=Normal, 1=first alternate/de-Morgan, ...). Default: 0" },
+                            "raw_params": { "type": "array", "description": "The record's segments as [key, value] string pairs in stored order, exactly as read_schlib emitted them; the writer replays them verbatim unless the field behind one was edited, so the record comes back as Altium wrote it (the UI omits LineWidth=1, a script does not). Pass back unchanged; omit when authoring (the canonical form is written).", "items": { "type": "array", "items": { "type": "string" }, "minItems": 2, "maxItems": 2 } }
+                        },
+                        "required": ["x", "y", "radius", "secondary_radius"]
+                    }
+                },
+                "ellipses": {
+                    "type": "array",
+                    "description": "Ellipse definitions",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "x": { "type": "number", "description": "Centre X coordinate" },
+                            "y": { "type": "number", "description": "Centre Y coordinate" },
+                            "radius_x": { "type": "number", "description": "Horizontal radius" },
+                            "radius_y": { "type": "number", "description": "Vertical radius" },
+                            "line_width": { "type": "integer", "description": "Border width. Default: 1" },
+                            "line_color": { "type": "integer", "description": "Border BGR colour. Default: 0x000080" },
+                            "fill_color": { "type": "integer", "description": "Fill BGR colour. Default: 0xB0FFFF (Altium light yellow)" },
+                            "filled": { "type": "boolean", "description": "Whether filled. Default: true" },
+                            "transparent": { "type": "boolean", "description": "Whether the fill is transparent. Default: false" },
+                            "is_not_accessible": { "type": "boolean", "description": "Whether the ellipse is marked not-accessible (Altium tags every ellipse; default true)" },
+                            "owner_part_id": { "type": "integer", "description": "Part number (1-based). Default: 1" },
+                            "graphically_locked": { "type": "boolean", "description": "Whether the shape is graphically locked. Default: false" },
+                            "disabled": { "type": "boolean", "description": "Whether the shape is disabled. Default: false" },
+                            "dimmed": { "type": "boolean", "description": "Whether the shape is dimmed. Default: false" },
+                            "owner_part_display_mode": { "type": "integer", "description": "Display mode this shape belongs to (0=Normal, 1=first alternate/de-Morgan, ...). Default: 0" },
+                            "unique_id": { "type": "string", "description": "8-char Altium unique ID; preserved on read-modify-write, auto-generated if omitted" },
+                            "raw_params": { "type": "array", "description": "The record's segments as [key, value] string pairs in stored order, exactly as read_schlib emitted them; the writer replays them verbatim unless the field behind one was edited, so the record comes back as Altium wrote it (the UI omits LineWidth=1, a script does not). Pass back unchanged; omit when authoring (the canonical form is written).", "items": { "type": "array", "items": { "type": "string" }, "minItems": 2, "maxItems": 2 } }
+                        },
+                        "required": ["x", "y", "radius_x", "radius_y"]
+                    }
+                },
+                "labels": {
+                    "type": "array",
+                    "description": "Text string definitions (RECORD=4) — Altium's only free text on a symbol.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "x": { "type": "number", "description": "X position" },
+                            "y": { "type": "number", "description": "Y position" },
+                            "text": { "type": "string", "description": "Text content" },
+                            "font_id": { "type": "integer", "description": "Font ID. Default: 1" },
+                            "color": { "type": "integer", "description": "BGR colour. Default: 0x000080" },
+                            "justification": { "type": "string", "enum": accepted::TEXT_JUSTIFICATIONS, "description": "Alignment. Default: bottom_left" },
+                            "rotation": { "type": "number", "description": "Rotation in degrees. Default: 0" },
+                            "is_mirrored": { "type": "boolean", "description": "Mirrored. Default: false" },
+                            "is_hidden": { "type": "boolean", "description": "Hidden. Default: false" },
+                            "owner_part_id": { "type": "integer", "description": "Part number (1-based). Default: 1" },
+                            "graphically_locked": { "type": "boolean", "description": "Whether the shape is graphically locked. Default: false" },
+                            "disabled": { "type": "boolean", "description": "Whether the shape is disabled. Default: false" },
+                            "dimmed": { "type": "boolean", "description": "Whether the shape is dimmed. Default: false" },
+                            "owner_part_display_mode": { "type": "integer", "description": "Display mode this shape belongs to (0=Normal, 1=first alternate/de-Morgan, ...). Default: 0" },
+                            "unique_id": { "type": "string", "description": "8-char Altium unique ID; preserved on read-modify-write, auto-generated if omitted" },
+                            "hidden": { "type": "boolean", "description": "Alias of is_hidden. Default: false" },
+                            "raw_params": { "type": "array", "description": "The record's segments as [key, value] string pairs in stored order, exactly as read_schlib emitted them; the writer replays them verbatim unless the field behind one was edited, so the record comes back as Altium wrote it (the UI omits LineWidth=1, a script does not). Pass back unchanged; omit when authoring (the canonical form is written).", "items": { "type": "array", "items": { "type": "string" }, "minItems": 2, "maxItems": 2 } }
+                        },
+                        "required": ["x", "y", "text"]
+                    }
+                },
+                "ieee_symbols": {
+                    "type": "array",
+                    "description": "IEEE symbol glyphs (RECORD=3): a dot, a clock, an active-low input, ... placed at a point with a scale.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "x": { "type": "number", "description": "Anchor X" },
+                            "y": { "type": "number", "description": "Anchor Y" },
+                            "symbol": { "type": "integer", "description": "Glyph, as Altium's TIeeeSymbol id: 1 Dot, 2 Right-Left Signal Flow, 3 Clock, 4 Active Low Input, 5 Analog Signal In, 6 Not Logic Connection, 7 Shift Right, 8 Postponed Output, 9 Open Collector, 10 Hi-Z, 11 High Current, 12 Pulse, 13 Schmitt, 14 Delay, 15 Group Line, 16 Group Binary, 17 Active Low Output, 18 Pi, 19 Greater Equal, 20 Less Equal, 21 Sigma, 22 Open Collector Pull Up, 23 Open Emitter, 24 Open Emitter Pull Up, 25 Digital Signal In, 26 And, 27 Invertor, 28 Or, 29 Xor, 30 Shift Left, 31 Input Output, 32 Open Circuit Output, 33 Left-Right Signal Flow, 34 Bidirectional Signal Flow" },
+                            "scale_factor": { "type": "number", "description": "Glyph size in schematic units. Default: 10" },
+                            "rotation": { "type": "number", "description": "Rotation in degrees (0/90/180/270). Default: 0" },
+                            "is_mirrored": { "type": "boolean", "description": "Mirrored. Default: false" },
+                            "line_width": { "type": "integer", "description": "Line width (0=smallest, 1=small, 2=medium, 3=large). Default: 1" },
+                            "color": { "type": "integer", "description": "BGR colour. Default: 0" },
+                            "owner_part_id": { "type": "integer", "description": "Part number (1-based). Default: 1" },
+                            "graphically_locked": { "type": "boolean", "description": "Whether the shape is graphically locked. Default: false" },
+                            "disabled": { "type": "boolean", "description": "Whether the shape is disabled. Default: false" },
+                            "dimmed": { "type": "boolean", "description": "Whether the shape is dimmed. Default: false" },
+                            "owner_part_display_mode": { "type": "integer", "description": "Display mode this shape belongs to (0=Normal, 1=first alternate/de-Morgan, ...). Default: 0" },
+                            "raw_params": { "type": "array", "description": "The record's segments as [key, value] string pairs in stored order, exactly as read_schlib emitted them; the writer replays them verbatim unless the field behind one was edited, so the record comes back as Altium wrote it (the UI omits LineWidth=1, a script does not). Pass back unchanged; omit when authoring (the canonical form is written).", "items": { "type": "array", "items": { "type": "string" }, "minItems": 2, "maxItems": 2 } }
+                        },
+                        "required": ["x", "y", "symbol"]
+                    }
+                },
+                "parameters": {
+                    "type": "array",
+                    "description": "Symbol parameters (e.g., Value, Part Number)",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "name": { "type": "string", "description": "Parameter name (e.g., 'Value')" },
+                            "value": { "type": "string", "description": "Parameter value (e.g., '10k'). Default: '*'" },
+                            "x": { "type": "number", "description": "X position. Default: 0" },
+                            "y": { "type": "number", "description": "Y position. Default: 0" },
+                            "font_id": { "type": "integer", "description": "Font ID. Default: 1" },
+                            "color": { "type": "integer", "description": "BGR colour. Default: 0x800000 (dark blue)" },
+                            "hidden": { "type": "boolean", "description": "Whether hidden. Default: false" },
+                            "read_only_state": { "type": "integer", "description": "Read-only state (0=editable, 1=read-only). Default: 0" },
+                            "param_type": { "type": "integer", "description": "Parameter type (0=String, 1=Boolean, 2=Integer, 3=Float). Default: 0" },
+                            "unique_id": { "type": "string", "description": "8-char Altium unique ID. Default: auto-generated" },
+                            "orientation": { "type": "integer", "description": "Text orientation (0/1/2/3 = 0/90/180/270 degrees). Default: 0" },
+                            "justification": { "type": "integer", "description": "Text anchor id 0-8 (0=bottom-left, 4=middle-centre, 8=top-right). Default: 0" },
+                            "show_name": { "type": "boolean", "description": "Whether the parameter name is shown alongside the value. Default: false" },
+                            "hide_name": { "type": "boolean", "description": "Whether the parameter name is hidden (only the value shown). Default: false" },
+                            "is_mirrored": { "type": "boolean", "description": "Whether the parameter text is mirrored. Default: false" },
+                            "description": { "type": "string", "description": "Parameter description text. Default: empty" },
+                            "is_configurable": { "type": "boolean", "description": "Whether the parameter is variant-configurable. Default: false" },
+                            "auto_position": { "type": "boolean", "description": "Whether Altium auto-positions the parameter label relative to the component. Stored inverted on the wire (NotAutoPosition=T) and only when turned off. Default: true" },
+                            "is_rule": { "type": "boolean", "description": "Whether the parameter carries a PCB design-rule directive. Default: false" },
+                            "is_system_parameter": { "type": "boolean", "description": "Whether this is a system parameter rather than a user one. Default: false" },
+                            "text_horz_anchor": { "type": "integer", "description": "Horizontal text-box anchor, distinct from justification. Default: 0" },
+                            "text_vert_anchor": { "type": "integer", "description": "Vertical text-box anchor. Default: 0" },
+                            "owner_part_id": { "type": "integer", "description": "Part number (1-based). Default: 1" },
+                            "graphically_locked": { "type": "boolean", "description": "Whether the shape is graphically locked. Default: false" },
+                            "disabled": { "type": "boolean", "description": "Whether the shape is disabled. Default: false" },
+                            "dimmed": { "type": "boolean", "description": "Whether the shape is dimmed. Default: false" },
+                            "owner_part_display_mode": { "type": "integer", "description": "Display mode this shape belongs to (0=Normal, 1=first alternate/de-Morgan, ...). Default: 0" },
+                            "raw_params": { "type": "array", "description": "The record's segments as [key, value] string pairs in stored order, exactly as read_schlib emitted them; the writer replays them verbatim unless the field behind one was edited, so the record comes back as Altium wrote it (the UI omits LineWidth=1, a script does not). Pass back unchanged; omit when authoring (the canonical form is written).", "items": { "type": "array", "items": { "type": "string" }, "minItems": 2, "maxItems": 2 } }
+                        },
+                        "required": ["name"]
+                    }
+                },
+                "footprints": {
+                    "type": "array",
+                    "description": "Footprint model references (links to PCB footprints)",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "name": { "type": "string", "description": "Footprint name (entity in the PcbLib)" },
+                            "description": { "type": "string", "description": "Model description" },
+                            "library_path": { "type": "string", "description": "Optional absolute path to the .PcbLib containing the footprint, written as ModelDatafile0 so Altium resolves/previews the model. Omit to link by name only (requires the library to be installed/in the project)." },
+                            "is_current": { "type": "boolean", "description": "Whether this is the current (default) footprint model (IsCurrent=T). Read-preserved; on write the first model is emitted as current. Default: false" },
+                            "unique_id": { "type": "string", "description": "8-char Altium unique ID of the model link; preserved on read-modify-write, auto-generated if omitted" },
+                            "raw_params": { "type": "array", "description": "The model link's (RECORD=45) segments as [key, value] string pairs in stored order, exactly as read_schlib emitted them; the writer replays them verbatim unless the field behind one was edited, so the record comes back as Altium wrote it (the UI omits LineWidth=1, a script does not). Pass back unchanged; omit when authoring (the canonical form is written).", "items": { "type": "array", "items": { "type": "string" }, "minItems": 2, "maxItems": 2 } }
+                        },
+                        "required": ["name"]
+                    }
+                },
+                "designator": { "type": "string", "description": "The full reference-designator text, e.g. 'R?' or 'U1', as read_schlib emits it; takes precedence over designator_prefix and component_type. Default: '<prefix>?'" },
+                "all_pin_count": { "type": "integer", "description": "AllPinCount as stored in the header. Altium keeps a stale value here, so read_schlib emits it and a read-modify-write passes it back unchanged; omit when authoring (the pin count is written)." },
+                "header_params": { "type": "array", "description": "The header record (RECORD=1) segments as [key, value] string pairs in stored order, exactly as read_schlib emitted them; the writer replays each verbatim unless the field behind it was edited, so the header comes back byte for byte. Pass back unchanged; omit when authoring (the canonical header is written).", "items": { "type": "array", "items": { "type": "string" }, "minItems": 2, "maxItems": 2 } },
+                "extra_streams": { "type": "array", "description": "Streams of the symbol's storage this tool does not model (a PinFunctionData from a newer Altium, say) as [name, base64] pairs, exactly as read_schlib emitted them; written back beside the modelled ones so nothing Altium stored is dropped. Pass back unchanged; omit when authoring.", "items": { "type": "array", "items": { "type": "string" }, "minItems": 2, "maxItems": 2 } },
+                "primitive_order": { "type": "array", "description": "The symbol's content records in stored order, one kind name per record, as read_schlib reports it; Altium numbers records in this sequence, so passing it back keeps IndexInSheet stable on a read-modify-write. Omit when authoring: records are written in the tool's own order, body graphics first.", "items": { "type": "string", "enum": crate::altium::schlib::SchPrimitiveKind::WRITE_ORDER.iter().map(|k| k.name()).collect::<Vec<_>>() } }
+            },
+            "required": ["name"]
+        })
+    }
+
+    /// `schema` captioned for the tool it appears in.
+    fn described(mut schema: serde_json::Value, description: &str) -> serde_json::Value {
+        schema["description"] = json!(description);
+        schema
+    }
+
     /// Tool schemas for the library-writing family.
     #[allow(clippy::too_many_lines)]
     fn writing_tool_definitions() -> Vec<ToolDefinition> {
@@ -222,358 +1160,7 @@ impl McpServer {
                         "footprints": {
                             "type": "array",
                             "description": "Array of footprint definitions",
-                            "items": {
-                                "type": "object",
-                                "properties": {
-                                    "name": {
-                                        "type": "string",
-                                        "description": "Footprint name (e.g., 'RESC1608X55N')"
-                                    },
-                                    "description": {
-                                        "type": "string",
-                                        "description": "Footprint description. Keep to 256 characters if the library will be imported into an Altium 365 workspace — that importer refuses longer ones; a longer description is written and reported as a validation warning."
-                                    },
-                                    "pads": {
-                                        "type": "array",
-                                        "description": "Pad definitions",
-                                        "items": {
-                                            "type": "object",
-                                            "properties": {
-                                                "designator": { "type": "string" },
-                                                "x": { "type": "number", "description": "X position in mm" },
-                                                "y": { "type": "number", "description": "Y position in mm" },
-                                                "width": { "type": "number", "description": "Pad width in mm" },
-                                                "height": { "type": "number", "description": "Pad height in mm" },
-                                                "shape": {
-                                                    "type": "string",
-                                                    "enum": ["rectangle", "rounded_rectangle", "round", "circle", "oval", "octagonal"],
-                                                    "description": "Pad shape. Omitting this field yields rounded_rectangle, which suits chip/QFN lands but is WRONG for BGA/CSP: circular NSMD BGA lands must set \"round\" explicitly. rectangle is conventional for pin 1; round/circle are equivalent and used for both BGA lands and through-hole pads; also oval, octagonal. Matching is case-insensitive and ignores '_'/'-'."
-                                                },
-                                                "layer": { "type": "string", "description": "Layer name: Top Layer, Bottom Layer, Multi-Layer (default for SMD)" },
-                                                "hole_size": { "type": "number", "description": "Hole diameter for through-hole pads (mm)" },
-                                                "is_plated": { "type": "boolean", "description": "Whether the hole is plated. Altium stores this for every pad (SMD included). Default: true" },
-                                                "solder_mask_expansion_from_hole_edge": { "type": "boolean", "description": "Measure solder-mask expansion from the HOLE edge instead of the pad edge. Only meaningful on a pad with a hole. Default: false" },
-                                                "jumper_id": { "type": "integer", "description": "Jumper group id. Pads sharing a non-zero id are linked as a jumper / 0-ohm net. Default: 0" },
-                                                "stack_mode": { "type": "string", "enum": accepted::STACK_MODES, "description": "Per-layer pad stack. \"simple\" (default) uses one size and shape on every layer; \"top_middle_bottom\" takes 3 per-layer entries [top, mid, bottom]; \"full_stack\" takes 32 (index 0 = Top, 1 = Bottom, 2-31 = Mid layers)." },
-                                                "per_layer_sizes": { "type": "array", "description": "Per-layer pad sizes in mm, used when stack_mode is not \"simple\". Entry count must match the stack mode (3 or 32).", "items": { "type": "object", "properties": { "width": { "type": "number" }, "height": { "type": "number" } }, "required": ["width", "height"] } },
-                                                "per_layer_shapes": { "type": "array", "description": "Per-layer pad shapes, same ordering and count as per_layer_sizes. Same vocabulary as shape.", "items": { "type": "string", "enum": ["rectangle", "rounded_rectangle", "round", "circle", "oval", "octagonal"] } },
-                                                "per_layer_corner_radii": { "type": "array", "description": "Per-layer corner radius as a percentage (0-100), for rounded-rectangle layers.", "items": { "type": "integer" } },
-                                                "per_layer_offsets": { "type": "array", "description": "Per-layer pad offsets in mm from the pad centre.", "items": { "type": "object", "properties": { "x": { "type": "number" }, "y": { "type": "number" } }, "required": ["x", "y"] } },
-                                                "hole_shape": {
-                                                    "type": "string",
-                                                    "enum": accepted::HOLE_SHAPES,
-                                                    "description": "Drill hole shape. Default: round. Use slot for oblong holes (set hole_slot_length)"
-                                                },
-                                                "hole_slot_length": { "type": "number", "description": "Slot length in mm for a slot hole (hole_shape=slot). Default: 0" },
-                                                "hole_rotation": { "type": "number", "description": "Hole rotation in degrees (rotates a slot hole). Default: 0" },
-                                                "hole_positive_tolerance": { "type": "number", "description": "Positive drill tolerance in mm (optional; omit to leave unset)" },
-                                                "hole_negative_tolerance": { "type": "number", "description": "Negative drill tolerance in mm (optional; omit to leave unset)" },
-                                                "solder_mask_expansion": { "type": "number", "description": "Solder mask expansion in mm (optional; omit to use the rule default)" },
-                                                "solder_mask_expansion_mode": {
-                                                    "type": "string",
-                                                    "enum": accepted::MASK_EXPANSION_MODES,
-                                                    "description": "Solder mask expansion mode. 'none' (the default) leaves the cached value stale so Altium takes the expansion from the design rule; 'from_rule' tells Altium the stored value is a rule result to honour as-is; 'manual' uses the stored value as hand-specified."
-                                                },
-                                                "paste_mask_expansion": { "type": "number", "description": "Paste (stencil) mask expansion in mm (optional; omit to use the rule default)" },
-                                                "paste_mask_expansion_mode": {
-                                                    "type": "string",
-                                                    "enum": accepted::MASK_EXPANSION_MODES,
-                                                    "description": "Paste mask expansion mode. 'none' (the default) leaves the cached value stale so Altium takes the expansion from the design rule; 'from_rule' tells Altium the stored value is a rule result to honour as-is; 'manual' uses the stored value as hand-specified."
-                                                },
-                                                "corner_radius_percent": { "type": "integer", "description": "Rounded-rectangle corner radius as a percentage of the shorter side (0-100). Default: 0" },
-                                                "rotation": { "type": "number", "description": "Pad rotation in degrees. Default: 0" },
-                                                "power_plane_connect_style": {
-                                                    "type": "string",
-                                                    "enum": accepted::POWER_PLANE_CONNECT_STYLES,
-                                                    "description": "How the pad connects to an internal power plane. Default: relief (thermal spokes)"
-                                                },
-                                                "relief_conductor_width": { "type": "number", "description": "Thermal-relief spoke (conductor) width in mm. Default: 0.254 (10 mil)" },
-                                                "relief_entries": { "type": "integer", "description": "Number of thermal-relief spokes. Default: 4" },
-                                                "relief_air_gap": { "type": "number", "description": "Thermal-relief air-gap width in mm. Default: 0.254 (10 mil)" },
-                                                "power_plane_relief_expansion": { "type": "number", "description": "Power-plane relief expansion in mm. Default: 0.508 (20 mil)" },
-                                                "power_plane_clearance": { "type": "number", "description": "Power-plane (anti-pad) clearance to the plane in mm. Default: 0.508 (20 mil)" },
-                                                "net_index": { "type": "integer", "description": "Net index into the board net list (common header, 0-65534; 65535 = no net). Normally omitted for library footprints; preserved on a read-modify-write. Default: 65535" },
-                                                "polygon_index": { "type": "integer", "description": "Polygon index (common header; 65535 = none). Normally omitted; preserved on a read-modify-write. Default: 65535" },
-                                                "component_index": { "type": "integer", "description": "Component index into the board component list (common header; -1 = free primitive). Normally omitted; preserved on a read-modify-write. Default: -1" },
-                                                "unique_id": { "type": "string", "description": "8-char Altium unique ID; preserved on read-modify-write, auto-generated if omitted" },
-                                                "identity_guid": { "type": "string", "description": "Per-pad identity GUID (braced string, e.g. \"{A5172B29-...}\"); preserved verbatim on read-modify-write, freshly generated if omitted" },
-                                                "identity_guid_b": { "type": "string", "description": "Pad-stack/footprint-scoped identity GUID (braced string); preserved verbatim on read-modify-write, freshly generated if omitted" },
-                                                "flags": { "type": ["string", "integer"], "description": "Primitive flags (optional). Accepts the name string read_pcblib emits (e.g. \"LOCKED\" or \"LOCKED | KEEPOUT\") or a raw bitmask integer (1=locked, 2=polygon, 4=keepout, 8=tenting-top, 16=tenting-bottom, 32=testpoint-top, 64=testpoint-bottom; 128 and above are on-disk bits read_pcblib carries verbatim as DISK_BIT_n — pass them back unchanged). Default: none" }
-                                            },
-                                            "required": ["designator", "x", "y", "width", "height"]
-                                        }
-                                    },
-                                    "tracks": {
-                                        "type": "array",
-                                        "description": "Track/line definitions for silkscreen, assembly, etc.",
-                                        "items": {
-                                            "type": "object",
-                                            "properties": {
-                                                "x1": { "type": "number" },
-                                                "y1": { "type": "number" },
-                                                "x2": { "type": "number" },
-                                                "y2": { "type": "number" },
-                                                "width": { "type": "number", "description": "Line width in mm" },
-                                                "layer": { "type": "string", "description": "Layer name: Top Overlay, Top Assembly, Top Courtyard, Mechanical 1, etc." },
-                                                "solder_mask_expansion": { "type": "number", "description": "Solder mask expansion override in mm (optional; omit to use the rule default)" },
-                                                "keepout_restrictions": { "type": "integer", "description": "Keepout restriction bitmask (optional; defaults to 0)" },
-                                                "net_index": { "type": "integer", "description": "Net index into the board net list (common header, 0-65534; 65535 = no net). Normally omitted for library footprints; preserved on a read-modify-write. Default: 65535" },
-                                                "polygon_index": { "type": "integer", "description": "Polygon index (common header; 65535 = none). Normally omitted; preserved on a read-modify-write. Default: 65535" },
-                                                "component_index": { "type": "integer", "description": "Component index into the board component list (common header; -1 = free primitive). Normally omitted; preserved on a read-modify-write. Default: -1" },
-                                                "unique_id": { "type": "string", "description": "8-char Altium unique ID; preserved on read-modify-write, auto-generated if omitted" },
-                                                "flags": { "type": ["string", "integer"], "description": "Primitive flags (optional). Accepts the name string read_pcblib emits (e.g. \"LOCKED\" or \"LOCKED | KEEPOUT\") or a raw bitmask integer (1=locked, 2=polygon, 4=keepout, 8=tenting-top, 16=tenting-bottom, 32=testpoint-top, 64=testpoint-bottom; 128 and above are on-disk bits read_pcblib carries verbatim as DISK_BIT_n — pass them back unchanged). Default: none" }
-                                            },
-                                            "required": ["x1", "y1", "x2", "y2", "width", "layer"]
-                                        }
-                                    },
-                                    "vias": {
-                                        "type": "array",
-                                        "description": "Via definitions (vertical interconnects between copper layers, with a drill hole and annular ring).",
-                                        "items": {
-                                            "type": "object",
-                                            "properties": {
-                                                "x": { "type": "number", "description": "X position in mm" },
-                                                "y": { "type": "number", "description": "Y position in mm" },
-                                                "diameter": { "type": "number", "description": "Annular ring outer diameter in mm" },
-                                                "hole_size": { "type": "number", "description": "Drill hole diameter in mm (must be smaller than diameter)" },
-                                                "from_layer": { "type": "string", "description": "Starting layer (default Top Layer): Top Layer, Bottom Layer, Mid-Layer 1, etc." },
-                                                "to_layer": { "type": "string", "description": "Ending layer (default Bottom Layer): Top Layer, Bottom Layer, Mid-Layer 1, etc." },
-                                                "solder_mask_expansion": { "type": "number", "description": "Solder mask expansion in mm (negative = tented). Default: 0" },
-                                                "solder_mask_expansion_mode": {
-                                                    "type": "string",
-                                                    "enum": accepted::MASK_EXPANSION_MODES,
-                                                    "description": "Solder mask expansion mode. 'none' (the default) leaves the cached value stale so Altium takes the expansion from the design rule; 'from_rule' tells Altium the stored value is a rule result to honour as-is; 'manual' uses the stored value as hand-specified."
-                                                },
-                                                "thermal_relief_gap": { "type": "number", "description": "Thermal relief air-gap width in mm. Default: 0.254 (10 mil)" },
-                                                "solder_mask_expansion_from_hole_edge": { "type": "boolean", "description": "Measure solder-mask expansion from the HOLE edge instead of the pad edge. Default: false" },
-                                                "drill_layer_pair_type": { "type": "string", "enum": accepted::DRILL_LAYER_PAIR_TYPES, "description": "Drill-pair classification. \"through\" (default) spans the whole board; the others mark a via's place in a blind/buried drill-pair sequence." },
-                                                "thermal_relief_conductors": { "type": "integer", "description": "Number of thermal relief conductors. Default: 4" },
-                                                "thermal_relief_width": { "type": "number", "description": "Thermal relief conductor width in mm. Default: 0.254 (10 mil)" },
-                                                "power_plane_connect_style": {
-                                                    "type": "string",
-                                                    "enum": accepted::POWER_PLANE_CONNECT_STYLES,
-                                                    "description": "How the via connects to an internal power plane. Default: relief (thermal spokes)"
-                                                },
-                                                "power_plane_relief_expansion": { "type": "number", "description": "Power-plane relief expansion in mm. Default: 0.508 (20 mil)" },
-                                                "power_plane_clearance": { "type": "number", "description": "Power-plane (anti-pad) clearance in mm. Default: 0.508 (20 mil)" },
-                                                "paste_mask_expansion": { "type": "number", "description": "Paste-mask expansion in mm. Default: 0" },
-                                                "net_index": { "type": "integer", "description": "Net index into the board net list (0-65534; 65535 = no net). Default: 65535" },
-                                                "polygon_index": { "type": "integer", "description": "Polygon index (common header; 65535 = none). Normally omitted; preserved on a read-modify-write. Default: 65535" },
-                                                "component_index": { "type": "integer", "description": "Component index into the board component list (common header; -1 = free primitive). Normally omitted; preserved on a read-modify-write. Default: -1" },
-                                                "hole_positive_tolerance": { "type": "number", "description": "Positive drill tolerance in mm (optional; omit to leave unset)" },
-                                                "hole_negative_tolerance": { "type": "number", "description": "Negative drill tolerance in mm (optional; omit to leave unset)" },
-                                                "unique_id": { "type": "string", "description": "8-char Altium unique ID; preserved on read-modify-write, auto-generated if omitted" },
-                                                "flags": { "type": ["string", "integer"], "description": "Primitive flags (optional). Accepts the name string read_pcblib emits (e.g. \"TENTING_TOP\" or \"LOCKED | KEEPOUT\") or a raw bitmask integer (1=locked, 2=polygon, 4=keepout, 8=tenting-top, 16=tenting-bottom, 32=testpoint-top, 64=testpoint-bottom; 128 and above are on-disk bits read_pcblib carries verbatim as DISK_BIT_n — pass them back unchanged). Tenting covers the via with solder mask. Default: none" }
-                                            },
-                                            "required": ["x", "y", "diameter", "hole_size"]
-                                        }
-                                    },
-                                    "fills": {
-                                        "type": "array",
-                                        "description": "Filled rectangle definitions (solid copper/keepout fill defined by two opposite corners).",
-                                        "items": {
-                                            "type": "object",
-                                            "properties": {
-                                                "x1": { "type": "number", "description": "First corner X in mm" },
-                                                "y1": { "type": "number", "description": "First corner Y in mm" },
-                                                "x2": { "type": "number", "description": "Second corner X in mm" },
-                                                "y2": { "type": "number", "description": "Second corner Y in mm" },
-                                                "layer": { "type": "string", "description": "Layer name (default Top Layer): Top Layer, Bottom Layer, Top Overlay, Mechanical 1, etc." },
-                                                "rotation": { "type": "number", "description": "Rotation in degrees. Default: 0" },
-                                                "solder_mask_expansion": { "type": "number", "description": "Solder mask expansion override in mm (optional; omit to use the rule default)" },
-                                                "keepout_restrictions": { "type": "integer", "description": "Keepout restriction bitmask (optional; defaults to 0)" },
-                                                "net_index": { "type": "integer", "description": "Net index into the board net list (common header, 0-65534; 65535 = no net). Normally omitted for library footprints; preserved on a read-modify-write. Default: 65535" },
-                                                "polygon_index": { "type": "integer", "description": "Polygon index (common header; 65535 = none). Normally omitted; preserved on a read-modify-write. Default: 65535" },
-                                                "component_index": { "type": "integer", "description": "Component index into the board component list (common header; -1 = free primitive). Normally omitted; preserved on a read-modify-write. Default: -1" },
-                                                "unique_id": { "type": "string", "description": "8-char Altium unique ID; preserved on read-modify-write, auto-generated if omitted" },
-                                                "flags": { "type": ["string", "integer"], "description": "Primitive flags (optional). Accepts the name string read_pcblib emits (e.g. \"LOCKED\" or \"LOCKED | KEEPOUT\") or a raw bitmask integer (1=locked, 2=polygon, 4=keepout, 8=tenting-top, 16=tenting-bottom, 32=testpoint-top, 64=testpoint-bottom; 128 and above are on-disk bits read_pcblib carries verbatim as DISK_BIT_n — pass them back unchanged). Default: none" }
-                                            },
-                                            "required": ["x1", "y1", "x2", "y2"]
-                                        }
-                                    },
-                                    "arcs": {
-                                        "type": "array",
-                                        "description": "Arc definitions",
-                                        "items": {
-                                            "type": "object",
-                                            "properties": {
-                                                "x": { "type": "number", "description": "Centre X" },
-                                                "y": { "type": "number", "description": "Centre Y" },
-                                                "radius": { "type": "number" },
-                                                "start_angle": { "type": "number", "description": "Start angle in degrees" },
-                                                "end_angle": { "type": "number", "description": "End angle in degrees" },
-                                                "width": { "type": "number", "description": "Line width in mm" },
-                                                "layer": { "type": "string", "description": "Layer name: Top Overlay, Top Assembly, Mechanical 1, etc." },
-                                                "solder_mask_expansion": { "type": "number", "description": "Solder mask expansion override in mm (optional; omit to use the rule default)" },
-                                                "keepout_restrictions": { "type": "integer", "description": "Keepout restriction bitmask (optional; defaults to 0)" },
-                                                "net_index": { "type": "integer", "description": "Net index into the board net list (common header, 0-65534; 65535 = no net). Normally omitted for library footprints; preserved on a read-modify-write. Default: 65535" },
-                                                "polygon_index": { "type": "integer", "description": "Polygon index (common header; 65535 = none). Normally omitted; preserved on a read-modify-write. Default: 65535" },
-                                                "component_index": { "type": "integer", "description": "Component index into the board component list (common header; -1 = free primitive). Normally omitted; preserved on a read-modify-write. Default: -1" },
-                                                "unique_id": { "type": "string", "description": "8-char Altium unique ID; preserved on read-modify-write, auto-generated if omitted" },
-                                                "flags": { "type": ["string", "integer"], "description": "Primitive flags (optional). Accepts the name string read_pcblib emits (e.g. \"LOCKED\" or \"LOCKED | KEEPOUT\") or a raw bitmask integer (1=locked, 2=polygon, 4=keepout, 8=tenting-top, 16=tenting-bottom, 32=testpoint-top, 64=testpoint-bottom; 128 and above are on-disk bits read_pcblib carries verbatim as DISK_BIT_n — pass them back unchanged). Default: none" }
-                                            },
-                                            "required": ["x", "y", "radius", "start_angle", "end_angle", "width", "layer"]
-                                        }
-                                    },
-                                    "regions": {
-                                        "type": "array",
-                                        "description": "Filled region definitions (courtyard, copper pour, cutout, etc.)",
-                                        "items": {
-                                            "type": "object",
-                                            "properties": {
-                                                "vertices": {
-                                                    "type": "array",
-                                                    "items": {
-                                                        "type": "object",
-                                                        "properties": {
-                                                            "x": { "type": "number" },
-                                                            "y": { "type": "number" }
-                                                        }
-                                                    }
-                                                },
-                                                "layer": { "type": "string", "description": "Layer name: Top Courtyard, Top Assembly, Mechanical 1, etc." },
-                                                "kind": { "type": ["string", "integer"], "examples": accepted::REGION_KINDS, "description": "Region kind (optional). \"copper\" (default) for a copper pour/fill, \"cutout\" for a board/polygon cutout, or a raw Altium KIND integer. Default: copper" },
-                                                "name": { "type": "string", "description": "Region name (the NAME parameter, optional). Default: empty" },
-                                                "net_index": { "type": "integer", "description": "Net index into the board net list (optional). 65535 = no net. Default: 65535" },
-                                                "polygon_index": { "type": "integer", "description": "Polygon index (common header; 65535 = none). Normally omitted; preserved on a read-modify-write. Default: 65535" },
-                                                "component_index": { "type": "integer", "description": "Component index into the board component list (common header; -1 = free primitive). Normally omitted; preserved on a read-modify-write. Default: -1" },
-                                                "cavity_height": { "type": "number", "description": "Cavity height in mm for embedded components (optional). Default: 0" },
-                                                "arc_resolution": { "type": "number", "description": "Altium ARCRESOLUTION (arc-to-line tolerance, optional). Normally omitted; preserved on a read-modify-write. Default: 0" },
-                                                "sub_poly_index": { "type": "integer", "description": "Altium SUBPOLYINDEX; -1 when not a polygon sub-shape. Preserved on a read-modify-write. Default: -1" },
-                                                "union_index": { "type": "integer", "description": "Altium UNIONINDEX for grouped primitives. Preserved on a read-modify-write. Default: 0" },
-                                                "is_shape_based": { "type": "boolean", "description": "Altium ISSHAPEBASED. Preserved on a read-modify-write. Default: false" },
-                                                "holes": {
-                                                    "type": "array",
-                                                    "description": "Interior hole/cutout contours (optional). Each hole is an array of {x,y} vertices subtracted from the outline.",
-                                                    "items": {
-                                                        "type": "array",
-                                                        "items": {
-                                                            "type": "object",
-                                                            "properties": {
-                                                                "x": { "type": "number" },
-                                                                "y": { "type": "number" }
-                                                            }
-                                                        }
-                                                    }
-                                                },
-                                                "unique_id": { "type": "string", "description": "Unique ID (optional, 8-char alphanumeric). Default: none" },
-                                                "additional_parameters": { "type": "array", "description": "Unmodelled region parameter keys captured verbatim on read (e.g. board-region keys like LAYER, KEEPOUT, ISBOARDCUTOUT). Each entry is a [key, value] string pair. Round-tripped so a read-modify-write does not drop keys the tool does not model. Normally omitted; supply only the pairs read_pcblib returned.", "items": { "type": "array", "items": { "type": "string" }, "minItems": 2, "maxItems": 2 } },
-                                                "flags": { "type": ["string", "integer"], "description": "Primitive flags (optional). Accepts the name string read_pcblib emits (e.g. \"LOCKED\" or \"LOCKED | KEEPOUT\") or a raw bitmask integer (1=locked, 2=polygon, 4=keepout, 8=tenting-top, 16=tenting-bottom, 32=testpoint-top, 64=testpoint-bottom; 128 and above are on-disk bits read_pcblib carries verbatim as DISK_BIT_n — pass them back unchanged). Default: none" }
-                                            },
-                                            "required": ["vertices", "layer"]
-                                        }
-                                    },
-                                    "text": {
-                                        "type": "array",
-                                        "description": "Text/string definitions",
-                                        "items": {
-                                            "type": "object",
-                                            "properties": {
-                                                "x": { "type": "number" },
-                                                "y": { "type": "number" },
-                                                "text": { "type": "string" },
-                                                "height": { "type": "number", "description": "Text height in mm" },
-                                                "layer": { "type": "string", "description": "Layer name: Top Overlay, Top Assembly, Mechanical 1, etc." },
-                                                "rotation": { "type": "number", "description": "Rotation in degrees" },
-                                                "kind": { "type": "string", "enum": accepted::TEXT_KINDS, "description": "Text rendering kind. \"stroke\" (default) uses a vector stroke font (most common for silkscreen); \"true_type\" renders with the TrueType font named by font_name; \"bar_code\" is a barcode. Default: stroke" },
-                                                "stroke_font": { "type": "string", "enum": accepted::STROKE_FONTS, "description": "Stroke font selection (only meaningful when kind is \"stroke\"). Default: default (Altium's built-in stroke font)" },
-                                                "font_name": { "type": "string", "description": "TrueType font name (only meaningful when kind is \"true_type\"). Default: Arial" },
-                                                "bold": { "type": "boolean", "description": "Bold font style (TrueType). Default: false" },
-                                                "italic": { "type": "boolean", "description": "Italic font style (TrueType). Default: false" },
-                                                "mirror": { "type": "boolean", "description": "Mirror the text (bottom-side silkscreen). Default: false" },
-                                                "is_comment": { "type": "boolean", "description": "Mark this text as the component's Comment field (Altium IsComment). Preserved on read-modify-write. Default: false" },
-                                                "is_designator": { "type": "boolean", "description": "Mark this text as the component's Designator field (Altium IsDesignator). Preserved on read-modify-write. Default: false" },
-                                                "justification": { "type": "string", "enum": accepted::TEXT_JUSTIFICATIONS, "description": "Text anchor / justification within its frame. Default: bottom_left" },
-                                                "stroke_width": { "type": "number", "description": "Stroke line width in mm (optional; defaults to Altium's ~4 mil)" },
-                                                "is_inverted": { "type": "boolean", "description": "Draw the text inverted (knockout): a filled bar with the glyphs punched out. Default: false" },
-                                                "inverted_border": { "type": "number", "description": "Border margin around inverted text in mm (only meaningful when is_inverted). Default: none" },
-                                                "use_inverted_rectangle": { "type": "boolean", "description": "Use an explicit framed rectangle (inverted_rect_width / inverted_rect_height) for the inverted text box instead of auto-sizing to the glyphs. Default: false" },
-                                                "inverted_rect_width": { "type": "number", "description": "Inverted-rectangle width in mm (only meaningful when use_inverted_rectangle). Default: none" },
-                                                "inverted_rect_height": { "type": "number", "description": "Inverted-rectangle height in mm (only meaningful when use_inverted_rectangle). Default: none" },
-                                                "inverted_rect_text_offset": { "type": "number", "description": "Text offset within the inverted rectangle in mm (only meaningful when use_inverted_rectangle). Default: none" },
-                                                "net_index": { "type": "integer", "description": "Net index into the board net list (common header, 0-65534; 65535 = no net). Normally omitted for library footprints; preserved on a read-modify-write. Default: 65535" },
-                                                "polygon_index": { "type": "integer", "description": "Polygon index (common header; 65535 = none). Normally omitted; preserved on a read-modify-write. Default: 65535" },
-                                                "component_index": { "type": "integer", "description": "Component index into the board component list (common header; -1 = free primitive). Normally omitted; preserved on a read-modify-write. Default: -1" },
-                                                "unique_id": { "type": "string", "description": "8-char Altium unique ID; preserved on read-modify-write, auto-generated if omitted" },
-                                                "flags": { "type": ["string", "integer"], "description": "Primitive flags (optional). Accepts the name string read_pcblib emits (e.g. \"LOCKED\" or \"LOCKED | KEEPOUT\") or a raw bitmask integer (1=locked, 2=polygon, 4=keepout, 8=tenting-top, 16=tenting-bottom, 32=testpoint-top, 64=testpoint-bottom; 128 and above are on-disk bits read_pcblib carries verbatim as DISK_BIT_n — pass them back unchanged). Default: none" }
-                                            },
-                                            "required": ["x", "y", "text", "height", "layer"]
-                                        }
-                                    },
-                                    "step_model": {
-                                        "type": "object",
-                                        "description": "Optional STEP 3D model attachment",
-                                        "properties": {
-                                            "filepath": { "type": "string", "description": "Path to .step file (for embedding) or model name (for external reference)" },
-                                            "embed": { "type": "boolean", "description": "If true (default), embed the STEP file. If false, create external reference only (file doesn't need to exist)" },
-                                            "x_offset": { "type": "number" },
-                                            "y_offset": { "type": "number" },
-                                            "z_offset": { "type": "number" },
-                                            "rotation": { "type": "number", "description": "Z rotation in degrees" }
-                                        },
-                                        "required": ["filepath"]
-                                    },
-                                    "model_3d": {
-                                        "type": ["object", "null"],
-                                        "description": "Alternative spelling of the same 3D-model reference, matching read_pcblib's output shape so a read result replays into write_pcblib unchanged. Ignored when 'step_model' is also given; null is accepted and ignored.",
-                                        "properties": {
-                                            "filepath": { "type": "string", "description": "Path to a .step file (embedded at save when it exists on disk) or a bare model name (kept as a reference)" },
-                                            "x_offset": { "type": "number" },
-                                            "y_offset": { "type": "number" },
-                                            "z_offset": { "type": "number" },
-                                            "rotation": { "type": "number", "description": "Z rotation in degrees" }
-                                        }
-                                    },
-                                    "component_bodies": {
-                                        "type": "array",
-                                        "description": "Generic extruded 3D bodies (no STEP file). Each is an extruded shape defined by an outline + heights, useful for giving parts a 3D height when no STEP model is available.",
-                                        "items": {
-                                            "type": "object",
-                                            "properties": {
-                                                "overall_height": { "type": "number", "description": "Total body height above the board, in mm (top of extrusion)" },
-                                                "standoff_height": { "type": "number", "description": "Standoff from the board to the bottom of the body, in mm. Default: 0" },
-                                                "cavity_height": { "type": "number", "description": "Cavity depth in mm for a body embedded into a board cavity. Default: 0" },
-                                                "outline": {
-                                                    "type": "array",
-                                                    "description": "Optional 2D outline polygon as {x,y} vertices in mm. If omitted, a bounding box is auto-generated from the footprint pads.",
-                                                    "items": {
-                                                        "type": "object",
-                                                        "properties": { "x": { "type": "number" }, "y": { "type": "number" } },
-                                                        "required": ["x", "y"]
-                                                    }
-                                                },
-                                                "layer": { "type": "string", "description": "Body layer: 'Top 3D Body' (default) or 'Bottom 3D Body'" },
-                                                "z_offset": { "type": "number", "description": "Z offset in mm. Default: 0" },
-                                                "rotation_x": { "type": "number" },
-                                                "rotation_y": { "type": "number" },
-                                                "rotation_z": { "type": "number" },
-                                                "model_checksum": { "type": "integer", "description": "Altium MODEL.CHECKSUM; normally omitted (defaults to 0). Preserved verbatim on a read-modify-write round-trip." },
-                                                "name": { "type": "string", "description": "Altium NAME. Default: \" \" (a single space, as template-default bodies emit)." },
-                                                "kind": { "type": "integer", "description": "Altium KIND (0=extruded, etc.). Default: 0" },
-                                                "sub_poly_index": { "type": "integer", "description": "Altium SUBPOLYINDEX; -1 when not a polygon sub-shape. Default: -1" },
-                                                "union_index": { "type": "integer", "description": "Altium UNIONINDEX for grouped primitives. Default: 0" },
-                                                "is_shape_based": { "type": "boolean", "description": "Altium ISSHAPEBASED (shape-based vs. model-based body). Default: false" },
-                                                "body_projection": { "type": "integer", "description": "Altium BODYPROJECTION (board side). Default: 0" },
-                                                "body_color_3d": { "type": "integer", "description": "3D body colour as decimal RGB (Altium BODYCOLOR3D). Default: 8421504 (0x808080, grey)" },
-                                                "body_opacity_3d": { "type": "number", "description": "3D body opacity, 0.0-1.0 (Altium BODYOPACITY3D). Default: 1.0" },
-                                                "model_2d_rotation": { "type": "number", "description": "2D placement rotation in degrees (Altium MODEL.2D.ROTATION). Default: 0" },
-                                                "model_2d_x": { "type": "number", "description": "Model offset from the body origin in the 2D plane, X in mm (Altium MODEL.2D.X). Default: 0" },
-                                                "model_2d_y": { "type": "number", "description": "Model offset in the 2D plane, Y in mm (Altium MODEL.2D.Y). Default: 0" },
-                                                "model_id": { "type": "string", "description": "Model GUID referencing an embedded model (Altium MODELID). Default: \"\" (none)" },
-                                                "model_name": { "type": "string", "description": "Model filename or external path (Altium MODEL.NAME). Default: \"\" (none)" },
-                                                "embedded": { "type": "boolean", "description": "Whether the model is embedded in the library (Altium MODEL.EMBED). Default: false" },
-                                                "net_index": { "type": "integer", "description": "Net index into the board net list (common header, 0-65534; 65535 = no net). Normally omitted for library footprints; preserved on a read-modify-write. Default: 65535" },
-                                                "polygon_index": { "type": "integer", "description": "Polygon index (common header; 65535 = none). Normally omitted; preserved on a read-modify-write. Default: 65535" },
-                                                "component_index": { "type": "integer", "description": "Component index into the board component list (common header; -1 = free primitive). Normally omitted; preserved on a read-modify-write. Default: -1" },
-                                                "unique_id": { "type": "string", "description": "8-char Altium unique ID; preserved on read-modify-write, auto-generated if omitted" },
-                                                "additional_parameters": { "type": "array", "description": "Unmodelled body parameter keys captured verbatim on read — anything the block carries that this tool has no typed field for (e.g. keys a newer Altium version writes). Each entry is a [key, value] string pair. Round-tripped so a read-modify-write does not drop keys the tool does not model. Normally omitted; supply only the pairs read_pcblib returned.", "items": { "type": "array", "items": { "type": "string" }, "minItems": 2, "maxItems": 2 } }
-                                            },
-                                            "required": ["overall_height"]
-                                        }
-                                    }
-                                },
-                                "required": ["name", "pads"]
-                            }
+                            "items": Self::footprint_schema()
                         },
                         "append": {
                             "type": "boolean",
@@ -633,496 +1220,7 @@ impl McpServer {
                         "symbols": {
                             "type": "array",
                             "description": "Array of symbol definitions",
-                            "items": {
-                                "type": "object",
-                                "properties": {
-                                    "name": { "type": "string" },
-                                    "description": { "type": "string", "description": "Symbol description. Keep to 256 characters if the library will be imported into an Altium 365 workspace — that importer refuses longer ones; a longer description is written and reported as a validation warning." },
-                                    "designator_prefix": { "type": "string", "description": "Reference-designator class letter, e.g. 'R' for resistors, 'U' for ICs. Written as '<prefix>?'. If omitted, falls back to 'component_type' (IEEE 315 / ASME Y14.44 mapping), then to 'U'." },
-                                    "designator_x": { "type": "number", "description": "X position of the designator text. Default: -5 (Altium's from-scratch placement)" },
-                                    "designator_y": { "type": "number", "description": "Y position of the designator text. Default: 5 (Altium's from-scratch placement)" },
-                                    "designator_unique_id": { "type": "string", "description": "8-char unique ID of the designator record; preserved on read-modify-write, auto-generated if omitted" },
-                                    "component_type": { "type": "string", "description": "Optional component category (e.g. 'resistor', 'capacitor', 'inductor', 'diode', 'transistor', 'connector', 'crystal', 'ic') used to derive the IEEE designator letter when 'designator_prefix' is not given. Unknown values default to 'U'." },
-                                    "part_count": { "type": "integer", "description": "Number of parts for multi-part symbols (e.g., 2 for dual op-amp). Default: 1" },
-                                    "display_mode_count": { "type": "integer", "description": "Number of display modes (1 = normal only, 2+ = alternate/de-Morgan views). Default: 1" },
-                                    "current_part_id": { "type": "integer", "description": "Currently selected part (1-based). Default: 1" },
-                                    "part_id_locked": { "type": "boolean", "description": "Whether the part selection is locked. Default: false" },
-                                    "source_library_name": { "type": "string", "description": "Source library name recorded in the symbol header. Default: '*'" },
-                                    "target_file_name": { "type": "string", "description": "Target file name recorded in the symbol header. Default: '*'" },
-                                    "pins": {
-                                        "type": "array",
-                                        "items": {
-                                            "type": "object",
-                                            "properties": {
-                                                "designator": { "type": "string" },
-                                                "name": { "type": "string" },
-                                                "x": { "type": "integer", "description": "Pin's body-attach (INNER) end, in whole schematic units (10 units = 1 grid square). This is the end that touches the symbol body, NOT the connection tip. The pin is drawn from (x,y) extending 'length' units in the 'orientation' direction; the connection tip is at the far end. Pins are integer-positioned; for an off-grid pin supply the sub-unit remainder via 'frac' (a fractional value here is truncated)." },
-                                                "y": { "type": "integer", "description": "Y of the pin's body-attach (inner) end, in whole schematic units. See 'x' (use 'frac' for off-grid)." },
-                                                "length": { "type": "number", "description": "Pin length in schematic units (10 = 1 grid). Drawn from (x,y) outward in the 'orientation' direction." },
-                                                "orientation": { "type": "string", "enum": accepted::PIN_ORIENTATIONS, "description": "Direction the pin POINTS, away from the body — NOT which side it sits on. A pin on the LEFT side uses 'left' (tip at x-length); a RIGHT-side pin uses 'right' (tip at x+length); 'up'/'down' for top/bottom pins. Put each pin's (x,y) on the matching body-rectangle edge so it attaches flush, e.g. left pin {x:-50,y:20,length:30,orientation:'left'} with rectangle x1=-50, and the matching right pin {x:50,y:20,length:30,orientation:'right'} with x2=50. For TOP/BOTTOM pins, (x,y) sits on the body's top/bottom edge and the pin points outward (away from the body centre): a top-side pin uses 'up' (tip at y+length, above the body), a bottom-side pin uses 'down' (tip at y-length, below) — e.g. a vertical 2-pin part with the body near y=0: top pin {x:0,y:10,length:30,orientation:'up'} (tip at y=40), bottom pin {x:0,y:-10,length:30,orientation:'down'} (tip at y=-40)." },
-                                                "electrical_type": { "type": "string", "enum": accepted::PIN_ELECTRICAL_TYPES, "description": "Pin electrical type. 'tristate' is accepted as an alias for 'hi_z'. Default: passive" },
-                                                "owner_part_id": { "type": "integer", "description": "Part number this pin belongs to (1-based). Default: 1" },
-                                                "hidden": { "type": "boolean", "description": "Whether the pin is hidden. Default: false" },
-                                                "show_name": { "type": "boolean", "description": "Whether to show the pin name. Default: true" },
-                                                "show_designator": { "type": "boolean", "description": "Whether to show the pin designator. Default: true" },
-                                                "description": { "type": "string", "description": "Pin description. Default: empty" },
-                                                "colour": { "type": "integer", "description": "Pin colour (BGR integer). Default: 0" },
-                                                "graphically_locked": { "type": "boolean", "description": "Whether the pin is graphically locked. Default: false" },
-                                                "swap_id_group": { "type": "string", "description": "Pin swap-id group, for pin-swap. Default: empty" },
-                                                "part_and_sequence": { "type": "string", "description": "Pin part-and-sequence swap id. Default: '|&|'" },
-                                                "default_value": { "type": "string", "description": "Pin default value. Default: empty" },
-                                                "symbol_inner_edge": { "type": "string", "enum": accepted::PIN_SYMBOLS, "description": "Decoration on the INNER edge (nearest the body), e.g. 'dot' (inversion bubble), 'clock'. Default: none" },
-                                                "symbol_outer_edge": { "type": "string", "enum": accepted::PIN_SYMBOLS, "description": "Decoration on the OUTER edge (furthest from the body), e.g. 'dot', 'clock'. Default: none" },
-                                                "symbol_inside": { "type": "string", "enum": accepted::PIN_SYMBOLS, "description": "Decoration drawn inside the pin line, e.g. 'postponed_output', 'open_collector'. Default: none" },
-                                                "symbol_outside": { "type": "string", "enum": accepted::PIN_SYMBOLS, "description": "Decoration drawn outside the pin line, e.g. 'right_left_signal_flow', 'analog_signal_in'. Default: none" },
-                                                "owner_part_display_mode": { "type": "integer", "description": "Pin's alternate-view (display-mode) index in the binary pin record. Default: 0" },
-                                                "symbol_line_width": { "type": "integer", "description": "Pin symbol line-width index. Non-zero writes a PinSymbolLineWidth auxiliary stream; 0 (default) writes none." },
-                                                "frac": { "type": "object", "description": "Fractional pin coordinates for off-grid pins, in 1/100000 schematic-unit steps. Non-zero writes a PinFrac auxiliary stream; omit for on-grid pins.", "properties": { "x": { "type": "integer" }, "y": { "type": "integer" }, "length": { "type": "integer" } } }
-                                            },
-                                            "required": ["designator", "name", "x", "y", "length", "orientation"]
-                                        }
-                                    },
-                                    "rectangles": {
-                                        "type": "array",
-                                        "description": "Rectangle definitions",
-                                        "items": {
-                                            "type": "object",
-                                            "properties": {
-                                                "x1": { "type": "number", "description": "Left X coordinate" },
-                                                "y1": { "type": "number", "description": "Bottom Y coordinate" },
-                                                "x2": { "type": "number", "description": "Right X coordinate" },
-                                                "y2": { "type": "number", "description": "Top Y coordinate" },
-                                                "line_width": { "type": "integer", "description": "Border width. Default: 1" },
-                                                "line_color": { "type": "integer", "description": "Border BGR colour. Default: 0x000080" },
-                                                "fill_color": { "type": "integer", "description": "Fill BGR colour. Default: 0xB0FFFF (Altium light yellow)" },
-                                                "line_style": { "type": "integer", "description": "Border line style: 0=Solid, 1=Dashed, 2=Dotted. Default: 0" },
-                                                "filled": { "type": "boolean", "description": "Whether filled. Default: true" },
-                                                "transparent": { "type": "boolean", "description": "Whether the fill is transparent. Default: false" },
-                                                "owner_part_id": { "type": "integer", "description": "Part number (1-based). Default: 1" },
-                                                "graphically_locked": { "type": "boolean", "description": "Whether the shape is graphically locked. Default: false" },
-                                                "disabled": { "type": "boolean", "description": "Whether the shape is disabled. Default: false" },
-                                                "dimmed": { "type": "boolean", "description": "Whether the shape is dimmed. Default: false" },
-                                                "owner_part_display_mode": { "type": "integer", "description": "Display mode this shape belongs to (0=Normal, 1=first alternate/de-Morgan, ...). Default: 0" },
-                                                "unique_id": { "type": "string", "description": "8-char Altium unique ID; preserved on read-modify-write, auto-generated if omitted" }
-                                            },
-                                            "required": ["x1", "y1", "x2", "y2"]
-                                        }
-                                    },
-                                    "round_rects": {
-                                        "type": "array",
-                                        "description": "Rounded-rectangle definitions",
-                                        "items": {
-                                            "type": "object",
-                                            "properties": {
-                                                "x1": { "type": "number", "description": "Left X coordinate" },
-                                                "y1": { "type": "number", "description": "Bottom Y coordinate" },
-                                                "x2": { "type": "number", "description": "Right X coordinate" },
-                                                "y2": { "type": "number", "description": "Top Y coordinate" },
-                                                "corner_x_radius": { "type": "number", "description": "Horizontal corner radius. Default: 0" },
-                                                "corner_y_radius": { "type": "number", "description": "Vertical corner radius. Default: 0" },
-                                                "line_width": { "type": "integer", "description": "Border width. Default: 1" },
-                                                "line_color": { "type": "integer", "description": "Border BGR colour. Default: 0x000080" },
-                                                "fill_color": { "type": "integer", "description": "Fill BGR colour. Default: 0xB0FFFF (Altium light yellow)" },
-                                                "line_style": { "type": "integer", "description": "Border line style: 0=Solid, 1=Dashed, 2=Dotted. Default: 0" },
-                                                "filled": { "type": "boolean", "description": "Whether filled. Default: true" },
-                                                "transparent": { "type": "boolean", "description": "Whether the fill is transparent. Default: false" },
-                                                "owner_part_id": { "type": "integer", "description": "Part number (1-based). Default: 1" },
-                                                "graphically_locked": { "type": "boolean", "description": "Whether the shape is graphically locked. Default: false" },
-                                                "disabled": { "type": "boolean", "description": "Whether the shape is disabled. Default: false" },
-                                                "dimmed": { "type": "boolean", "description": "Whether the shape is dimmed. Default: false" },
-                                                "owner_part_display_mode": { "type": "integer", "description": "Display mode this shape belongs to (0=Normal, 1=first alternate/de-Morgan, ...). Default: 0" },
-                                                "unique_id": { "type": "string", "description": "8-char Altium unique ID; preserved on read-modify-write, auto-generated if omitted" }
-                                            },
-                                            "required": ["x1", "y1", "x2", "y2", "corner_x_radius", "corner_y_radius"]
-                                        }
-                                    },
-                                    "lines": {
-                                        "type": "array",
-                                        "description": "Line definitions",
-                                        "items": {
-                                            "type": "object",
-                                            "properties": {
-                                                "x1": { "type": "number", "description": "Start X coordinate" },
-                                                "y1": { "type": "number", "description": "Start Y coordinate" },
-                                                "x2": { "type": "number", "description": "End X coordinate" },
-                                                "y2": { "type": "number", "description": "End Y coordinate" },
-                                                "line_width": { "type": "integer", "description": "Line width. Default: 1" },
-                                                "color": { "type": "integer", "description": "Line BGR colour. Default: 0x000080" },
-                                                "line_style": { "type": "integer", "description": "Line style: 0=Solid, 1=Dashed, 2=Dotted. Default: 0" },
-                                                "is_not_accessible": { "type": "boolean", "description": "Whether the line is marked not-accessible (Altium tags every line; default true)" },
-                                                "owner_part_id": { "type": "integer", "description": "Part number (1-based). Default: 1" },
-                                                "graphically_locked": { "type": "boolean", "description": "Whether the shape is graphically locked. Default: false" },
-                                                "disabled": { "type": "boolean", "description": "Whether the shape is disabled. Default: false" },
-                                                "dimmed": { "type": "boolean", "description": "Whether the shape is dimmed. Default: false" },
-                                                "owner_part_display_mode": { "type": "integer", "description": "Display mode this shape belongs to (0=Normal, 1=first alternate/de-Morgan, ...). Default: 0" },
-                                                "unique_id": { "type": "string", "description": "8-char Altium unique ID; preserved on read-modify-write, auto-generated if omitted" }
-                                            },
-                                            "required": ["x1", "y1", "x2", "y2"]
-                                        }
-                                    },
-                                    "polylines": {
-                                        "type": "array",
-                                        "description": "Polyline definitions (>= 2 connected points). Optional endpoint shapes turn a polyline into an arrow.",
-                                        "items": {
-                                            "type": "object",
-                                            "properties": {
-                                                "points": {
-                                                    "type": "array",
-                                                    "description": "Points (>= 2) as objects with x/y in schematic units. 'vertices' is accepted as an alias.",
-                                                    "items": {
-                                                        "type": "object",
-                                                        "properties": {
-                                                            "x": { "type": "number" },
-                                                            "y": { "type": "number" }
-                                                        },
-                                                        "required": ["x", "y"]
-                                                    }
-                                                },
-                                                "line_width": { "type": "integer", "description": "Line width. Default: 1" },
-                                                "color": { "type": "integer", "description": "Line BGR colour. Default: 0x000080" },
-                                                "line_style": { "type": "integer", "description": "Line style: 0=Solid, 1=Dashed, 2=Dotted. Default: 0" },
-                                                "start_line_shape": { "type": "integer", "description": "Start endpoint (arrowhead) shape id. Default: 0 (none)" },
-                                                "end_line_shape": { "type": "integer", "description": "End endpoint (arrowhead) shape id. Default: 0 (none)" },
-                                                "line_shape_size": { "type": "integer", "description": "Size of the endpoint shapes. Default: 0" },
-                                                "transparent": { "type": "boolean", "description": "Whether the polyline is transparent. Default: false" },
-                                                "is_not_accessible": { "type": "boolean", "description": "Whether the polyline is marked not-accessible (Altium tags every polyline; default true)" },
-                                                "owner_part_id": { "type": "integer", "description": "Part number (1-based). Default: 1" },
-                                                "graphically_locked": { "type": "boolean", "description": "Whether the shape is graphically locked. Default: false" },
-                                                "disabled": { "type": "boolean", "description": "Whether the shape is disabled. Default: false" },
-                                                "dimmed": { "type": "boolean", "description": "Whether the shape is dimmed. Default: false" },
-                                                "owner_part_display_mode": { "type": "integer", "description": "Display mode this shape belongs to (0=Normal, 1=first alternate/de-Morgan, ...). Default: 0" },
-                                                "unique_id": { "type": "string", "description": "8-char Altium unique ID; preserved on read-modify-write, auto-generated if omitted" }
-                                            },
-                                            "required": ["points"]
-                                        }
-                                    },
-                                    "polygons": {
-                                        "type": "array",
-                                        "description": "Filled polygon definitions (>= 3 vertices)",
-                                        "items": {
-                                            "type": "object",
-                                            "properties": {
-                                                "points": {
-                                                    "type": "array",
-                                                    "description": "Vertices (>= 3) as objects with x/y in schematic units",
-                                                    "items": {
-                                                        "type": "object",
-                                                        "properties": {
-                                                            "x": { "type": "number" },
-                                                            "y": { "type": "number" }
-                                                        },
-                                                        "required": ["x", "y"]
-                                                    }
-                                                },
-                                                "line_width": { "type": "integer", "description": "Border width. Default: 1" },
-                                                "line_color": { "type": "integer", "description": "Border BGR colour. Default: 0x000080" },
-                                                "fill_color": { "type": "integer", "description": "Fill BGR colour. Default: 0xB0FFFF (Altium light yellow)" },
-                                                "line_style": { "type": "integer", "description": "Border style: 0=Solid, 1=Dashed, 2=Dotted. Default: 0" },
-                                                "filled": { "type": "boolean", "description": "Whether filled. Default: true" },
-                                                "transparent": { "type": "boolean", "description": "Whether the fill is transparent (vs opaque). Default: false" },
-                                                "is_not_accessible": { "type": "boolean", "description": "Whether the polygon is marked not-accessible (Altium tags every polygon; default true)" },
-                                                "owner_part_id": { "type": "integer", "description": "Part number (1-based). Default: 1" },
-                                                "graphically_locked": { "type": "boolean", "description": "Whether the shape is graphically locked. Default: false" },
-                                                "disabled": { "type": "boolean", "description": "Whether the shape is disabled. Default: false" },
-                                                "dimmed": { "type": "boolean", "description": "Whether the shape is dimmed. Default: false" },
-                                                "owner_part_display_mode": { "type": "integer", "description": "Display mode this shape belongs to (0=Normal, 1=first alternate/de-Morgan, ...). Default: 0" },
-                                                "unique_id": { "type": "string", "description": "8-char Altium unique ID; preserved on read-modify-write, auto-generated if omitted" }
-                                            },
-                                            "required": ["points"]
-                                        }
-                                    },
-                                    "arcs": {
-                                        "type": "array",
-                                        "description": "Arc/circle definitions",
-                                        "items": {
-                                            "type": "object",
-                                            "properties": {
-                                                "x": { "type": "number", "description": "Centre X coordinate" },
-                                                "y": { "type": "number", "description": "Centre Y coordinate" },
-                                                "radius": { "type": "number", "description": "Radius in schematic units" },
-                                                "start_angle": { "type": "number", "description": "Start angle in degrees (0 = right, CCW). Default: 0" },
-                                                "end_angle": { "type": "number", "description": "End angle in degrees. Default: 360 (full circle)" },
-                                                "line_width": { "type": "integer", "description": "Line width. Default: 1" },
-                                                "color": { "type": "integer", "description": "Line BGR colour. Default: 0x000080" },
-                                                "fill_color": { "type": "integer", "description": "Fill BGR colour (maps to AreaColor). Default: 0 (no fill)" },
-                                                "is_not_accessible": { "type": "boolean", "description": "Whether the arc is marked not-accessible (Altium tags every arc; default true)" },
-                                                "owner_part_id": { "type": "integer", "description": "Part number (1-based). Default: 1" },
-                                                "graphically_locked": { "type": "boolean", "description": "Whether the shape is graphically locked. Default: false" },
-                                                "disabled": { "type": "boolean", "description": "Whether the shape is disabled. Default: false" },
-                                                "dimmed": { "type": "boolean", "description": "Whether the shape is dimmed. Default: false" },
-                                                "owner_part_display_mode": { "type": "integer", "description": "Display mode this shape belongs to (0=Normal, 1=first alternate/de-Morgan, ...). Default: 0" },
-                                                "unique_id": { "type": "string", "description": "8-char Altium unique ID; preserved on read-modify-write, auto-generated if omitted" }
-                                            },
-                                            "required": ["x", "y", "radius"]
-                                        }
-                                    },
-                                    "pies": {
-                                        "type": "array",
-                                        "description": "Pie (filled circular sector / wedge) definitions",
-                                        "items": {
-                                            "type": "object",
-                                            "properties": {
-                                                "x": { "type": "number", "description": "Centre X coordinate" },
-                                                "y": { "type": "number", "description": "Centre Y coordinate" },
-                                                "radius": { "type": "number", "description": "Radius in schematic units" },
-                                                "start_angle": { "type": "number", "description": "Start angle in degrees (0 = right, CCW). Default: 0" },
-                                                "end_angle": { "type": "number", "description": "End angle in degrees. Default: 360" },
-                                                "line_width": { "type": "integer", "description": "Border width. Default: 1" },
-                                                "line_color": { "type": "integer", "description": "Border BGR colour. Default: 0" },
-                                                "fill_color": { "type": "integer", "description": "Fill BGR colour (maps to AreaColor). Default: 0" },
-                                                "filled": { "type": "boolean", "description": "Whether the pie is filled (IsSolid). Default: true" },
-                                                "transparent": { "type": "boolean", "description": "Whether the fill is transparent. Default: false" },
-                                                "is_not_accessible": { "type": "boolean", "description": "Whether the pie is marked not-accessible (Altium tags every shape; default true)" },
-                                                "owner_part_id": { "type": "integer", "description": "Part number (1-based). Default: 1" },
-                                                "graphically_locked": { "type": "boolean", "description": "Whether the shape is graphically locked. Default: false" },
-                                                "disabled": { "type": "boolean", "description": "Whether the shape is disabled. Default: false" },
-                                                "dimmed": { "type": "boolean", "description": "Whether the shape is dimmed. Default: false" },
-                                                "owner_part_display_mode": { "type": "integer", "description": "Display mode this shape belongs to (0=Normal, 1=first alternate/de-Morgan, ...). Default: 0" },
-                                                "unique_id": { "type": "string", "description": "8-char Altium unique ID; preserved on read-modify-write, auto-generated if omitted" }
-                                            },
-                                            "required": ["x", "y", "radius"]
-                                        }
-                                    },
-                                    "images": {
-                                        "type": "array",
-                                        "description": "Embedded/linked raster image definitions (RECORD=30). The record metadata round-trips; embedded image bytes are authored via image_data (base64) and stored in the library /Storage stream.",
-                                        "items": {
-                                            "type": "object",
-                                            "properties": {
-                                                "x1": { "type": "number", "description": "First corner X (Location.X)" },
-                                                "y1": { "type": "number", "description": "First corner Y (Location.Y)" },
-                                                "x2": { "type": "number", "description": "Second corner X (Corner.X)" },
-                                                "y2": { "type": "number", "description": "Second corner Y (Corner.Y)" },
-                                                "line_width": { "type": "integer", "description": "Border width. Default: 1" },
-                                                "line_color": { "type": "integer", "description": "Border BGR colour. Default: 0" },
-                                                "line_style": { "type": "integer", "description": "Border style: 0=Solid, 1=Dashed, 2=Dotted. Default: 0" },
-                                                "fill_color": { "type": "integer", "description": "Fill BGR colour (AreaColor). Default: 0" },
-                                                "filled": { "type": "boolean", "description": "Whether the box is filled (IsSolid). Default: false" },
-                                                "transparent": { "type": "boolean", "description": "Whether the fill is transparent. Default: false" },
-                                                "show_border": { "type": "boolean", "description": "Whether the border is shown. Default: false" },
-                                                "keep_aspect": { "type": "boolean", "description": "Whether the image keeps its aspect ratio. Default: false" },
-                                                "embed_image": { "type": "boolean", "description": "Whether the image bytes are embedded (vs a link to file_name). Default: false" },
-                                                "file_name": { "type": "string", "description": "Image file name / embedded key (Altium stores the full source file path for embedded images)" },
-                                                "image_data": { "type": "string", "description": "Base64-encoded raw image bytes; stored in the library /Storage stream when embed_image is true" },
-                                                "is_not_accessible": { "type": "boolean", "description": "Whether the image is marked not-accessible (Altium tags every shape; default true)" },
-                                                "owner_part_id": { "type": "integer", "description": "Part number (1-based). Default: 1" },
-                                                "graphically_locked": { "type": "boolean", "description": "Whether the shape is graphically locked. Default: false" },
-                                                "disabled": { "type": "boolean", "description": "Whether the shape is disabled. Default: false" },
-                                                "dimmed": { "type": "boolean", "description": "Whether the shape is dimmed. Default: false" },
-                                                "owner_part_display_mode": { "type": "integer", "description": "Display mode this shape belongs to (0=Normal, 1=first alternate/de-Morgan, ...). Default: 0" },
-                                                "unique_id": { "type": "string", "description": "8-char Altium unique ID; preserved on read-modify-write, auto-generated if omitted" }
-                                            },
-                                            "required": ["x1", "y1", "x2", "y2"]
-                                        }
-                                    },
-                                    "text_frames": {
-                                        "type": "array",
-                                        "description": "Text frame definitions (RECORD=28): a bordered multi-line text box, distinct from labels/text (frame rectangle, word-wrap, alignment, clip-to-rect).",
-                                        "items": {
-                                            "type": "object",
-                                            "properties": {
-                                                "x1": { "type": "number", "description": "First corner X (Location.X)" },
-                                                "y1": { "type": "number", "description": "First corner Y (Location.Y)" },
-                                                "x2": { "type": "number", "description": "Second corner X (Corner.X)" },
-                                                "y2": { "type": "number", "description": "Second corner Y (Corner.Y)" },
-                                                "text": { "type": "string", "description": "Text content of the frame" },
-                                                "color": { "type": "integer", "description": "Border BGR colour. Default: 0" },
-                                                "area_color": { "type": "integer", "description": "Fill BGR colour (AreaColor). Default: 16777215 (white)" },
-                                                "text_color": { "type": "integer", "description": "Text BGR colour. Default: 0" },
-                                                "text_margin": { "type": "number", "description": "Margin between the frame border and the text, in schematic units. Default: 0.00005 (Altium's from-scratch default)" },
-                                                "line_width": { "type": "integer", "description": "Border width. Default: 0" },
-                                                "line_style": { "type": "integer", "description": "Border style: 0=Solid, 1=Dashed, 2=Dotted. Default: 0" },
-                                                "transparent": { "type": "boolean", "description": "Whether the fill is transparent. Default: false" },
-                                                "font_id": { "type": "integer", "description": "Font ID (1-based index into library fonts). Default: 1" },
-                                                "orientation": { "type": "integer", "description": "Text orientation: 0/1/2/3 = 0/90/180/270 degrees. Default: 0" },
-                                                "alignment": { "type": "integer", "description": "Text alignment: 0=left, 1=centre, 2=right. Default: 1 (centre)" },
-                                                "is_solid": { "type": "boolean", "description": "Whether the frame is filled (IsSolid). Default: false" },
-                                                "show_border": { "type": "boolean", "description": "Whether the border is shown. Default: true" },
-                                                "word_wrap": { "type": "boolean", "description": "Whether the text word-wraps inside the frame. Default: true" },
-                                                "clip_to_rect": { "type": "boolean", "description": "Whether the text is clipped to the frame rectangle. Default: true" },
-                                                "is_not_accessible": { "type": "boolean", "description": "Whether the frame is marked not-accessible (Altium tags every shape; default true)" },
-                                                "owner_part_id": { "type": "integer", "description": "Part number (1-based). Default: 1" },
-                                                "graphically_locked": { "type": "boolean", "description": "Whether the shape is graphically locked. Default: false" },
-                                                "disabled": { "type": "boolean", "description": "Whether the shape is disabled. Default: false" },
-                                                "dimmed": { "type": "boolean", "description": "Whether the shape is dimmed. Default: false" },
-                                                "owner_part_display_mode": { "type": "integer", "description": "Display mode this shape belongs to (0=Normal, 1=first alternate/de-Morgan, ...). Default: 0" },
-                                                "unique_id": { "type": "string", "description": "8-char Altium unique ID; preserved on read-modify-write, auto-generated if omitted" }
-                                            },
-                                            "required": ["x1", "y1", "x2", "y2", "text"]
-                                        }
-                                    },
-                                    "beziers": {
-                                        "type": "array",
-                                        "description": "Cubic Bezier curve definitions (four control points)",
-                                        "items": {
-                                            "type": "object",
-                                            "properties": {
-                                                "x1": { "type": "number", "description": "First control point X" },
-                                                "y1": { "type": "number", "description": "First control point Y" },
-                                                "x2": { "type": "number", "description": "Second control point X" },
-                                                "y2": { "type": "number", "description": "Second control point Y" },
-                                                "x3": { "type": "number", "description": "Third control point X" },
-                                                "y3": { "type": "number", "description": "Third control point Y" },
-                                                "x4": { "type": "number", "description": "Fourth control point X" },
-                                                "y4": { "type": "number", "description": "Fourth control point Y" },
-                                                "line_width": { "type": "integer", "description": "Curve width. Default: 1" },
-                                                "color": { "type": "integer", "description": "Curve BGR colour. Default: 0x000080 (128, dark red)" },
-                                                "is_not_accessible": { "type": "boolean", "description": "Whether the curve is marked not-accessible (Altium tags every shape; default true)" },
-                                                "owner_part_id": { "type": "integer", "description": "Part number (1-based). Default: 1" },
-                                                "graphically_locked": { "type": "boolean", "description": "Whether the shape is graphically locked. Default: false" },
-                                                "unique_id": { "type": "string", "description": "8-char Altium unique ID; preserved on read-modify-write, auto-generated if omitted" }
-                                            },
-                                            "required": ["x1", "y1", "x2", "y2", "x3", "y3", "x4", "y4"]
-                                        }
-                                    },
-                                    "elliptical_arcs": {
-                                        "type": "array",
-                                        "description": "Elliptical arc definitions (arc with independent X/Y radii)",
-                                        "items": {
-                                            "type": "object",
-                                            "properties": {
-                                                "x": { "type": "number", "description": "Centre X coordinate" },
-                                                "y": { "type": "number", "description": "Centre Y coordinate" },
-                                                "radius": { "type": "number", "description": "Primary (X) radius in schematic units" },
-                                                "secondary_radius": { "type": "number", "description": "Secondary (Y) radius in schematic units" },
-                                                "start_angle": { "type": "number", "description": "Start angle in degrees (0 = right, CCW). Default: 0" },
-                                                "end_angle": { "type": "number", "description": "End angle in degrees. Default: 360" },
-                                                "line_width": { "type": "integer", "description": "Arc width. Default: 1" },
-                                                "color": { "type": "integer", "description": "Arc BGR colour. Default: 0x000080 (128, dark red)" },
-                                                "fill_color": { "type": "integer", "description": "Fill BGR colour (AreaColor). Default: 0" },
-                                                "owner_part_id": { "type": "integer", "description": "Part number (1-based). Default: 1" },
-                                                "unique_id": { "type": "string", "description": "8-char Altium unique ID; preserved on read-modify-write, auto-generated if omitted" }
-                                            },
-                                            "required": ["x", "y", "radius", "secondary_radius"]
-                                        }
-                                    },
-                                    "ellipses": {
-                                        "type": "array",
-                                        "description": "Ellipse definitions",
-                                        "items": {
-                                            "type": "object",
-                                            "properties": {
-                                                "x": { "type": "number", "description": "Centre X coordinate" },
-                                                "y": { "type": "number", "description": "Centre Y coordinate" },
-                                                "radius_x": { "type": "number", "description": "Horizontal radius" },
-                                                "radius_y": { "type": "number", "description": "Vertical radius" },
-                                                "line_width": { "type": "integer", "description": "Border width. Default: 1" },
-                                                "line_color": { "type": "integer", "description": "Border BGR colour. Default: 0x000080" },
-                                                "fill_color": { "type": "integer", "description": "Fill BGR colour. Default: 0xB0FFFF (Altium light yellow)" },
-                                                "filled": { "type": "boolean", "description": "Whether filled. Default: true" },
-                                                "transparent": { "type": "boolean", "description": "Whether the fill is transparent. Default: false" },
-                                                "is_not_accessible": { "type": "boolean", "description": "Whether the ellipse is marked not-accessible (Altium tags every ellipse; default true)" },
-                                                "owner_part_id": { "type": "integer", "description": "Part number (1-based). Default: 1" },
-                                                "graphically_locked": { "type": "boolean", "description": "Whether the shape is graphically locked. Default: false" },
-                                                "disabled": { "type": "boolean", "description": "Whether the shape is disabled. Default: false" },
-                                                "dimmed": { "type": "boolean", "description": "Whether the shape is dimmed. Default: false" },
-                                                "owner_part_display_mode": { "type": "integer", "description": "Display mode this shape belongs to (0=Normal, 1=first alternate/de-Morgan, ...). Default: 0" },
-                                                "unique_id": { "type": "string", "description": "8-char Altium unique ID; preserved on read-modify-write, auto-generated if omitted" }
-                                            },
-                                            "required": ["x", "y", "radius_x", "radius_y"]
-                                        }
-                                    },
-                                    "labels": {
-                                        "type": "array",
-                                        "description": "Text string definitions (RECORD=4) — Altium's only free text on a symbol.",
-                                        "items": {
-                                            "type": "object",
-                                            "properties": {
-                                                "x": { "type": "number", "description": "X position" },
-                                                "y": { "type": "number", "description": "Y position" },
-                                                "text": { "type": "string", "description": "Text content" },
-                                                "font_id": { "type": "integer", "description": "Font ID. Default: 1" },
-                                                "color": { "type": "integer", "description": "BGR colour. Default: 0x000080" },
-                                                "justification": { "type": "string", "enum": accepted::TEXT_JUSTIFICATIONS, "description": "Alignment. Default: bottom_left" },
-                                                "rotation": { "type": "number", "description": "Rotation in degrees. Default: 0" },
-                                                "is_mirrored": { "type": "boolean", "description": "Mirrored. Default: false" },
-                                                "is_hidden": { "type": "boolean", "description": "Hidden. Default: false" },
-                                                "owner_part_id": { "type": "integer", "description": "Part number (1-based). Default: 1" },
-                                                "graphically_locked": { "type": "boolean", "description": "Whether the shape is graphically locked. Default: false" },
-                                                "disabled": { "type": "boolean", "description": "Whether the shape is disabled. Default: false" },
-                                                "dimmed": { "type": "boolean", "description": "Whether the shape is dimmed. Default: false" },
-                                                "owner_part_display_mode": { "type": "integer", "description": "Display mode this shape belongs to (0=Normal, 1=first alternate/de-Morgan, ...). Default: 0" },
-                                                "unique_id": { "type": "string", "description": "8-char Altium unique ID; preserved on read-modify-write, auto-generated if omitted" }
-                                            },
-                                            "required": ["x", "y", "text"]
-                                        }
-                                    },
-                                    "ieee_symbols": {
-                                        "type": "array",
-                                        "description": "IEEE symbol glyphs (RECORD=3): a dot, a clock, an active-low input, ... placed at a point with a scale.",
-                                        "items": {
-                                            "type": "object",
-                                            "properties": {
-                                                "x": { "type": "number", "description": "Anchor X" },
-                                                "y": { "type": "number", "description": "Anchor Y" },
-                                                "symbol": { "type": "integer", "description": "Glyph, as Altium's TIeeeSymbol id: 1 Dot, 2 Right-Left Signal Flow, 3 Clock, 4 Active Low Input, 5 Analog Signal In, 6 Not Logic Connection, 7 Shift Right, 8 Postponed Output, 9 Open Collector, 10 Hi-Z, 11 High Current, 12 Pulse, 13 Schmitt, 14 Delay, 15 Group Line, 16 Group Binary, 17 Active Low Output, 18 Pi, 19 Greater Equal, 20 Less Equal, 21 Sigma, 22 Open Collector Pull Up, 23 Open Emitter, 24 Open Emitter Pull Up, 25 Digital Signal In, 26 And, 27 Invertor, 28 Or, 29 Xor, 30 Shift Left, 31 Input Output, 32 Open Circuit Output, 33 Left-Right Signal Flow, 34 Bidirectional Signal Flow" },
-                                                "scale_factor": { "type": "number", "description": "Glyph size in schematic units. Default: 10" },
-                                                "rotation": { "type": "number", "description": "Rotation in degrees (0/90/180/270). Default: 0" },
-                                                "is_mirrored": { "type": "boolean", "description": "Mirrored. Default: false" },
-                                                "line_width": { "type": "integer", "description": "Line width (0=smallest, 1=small, 2=medium, 3=large). Default: 1" },
-                                                "color": { "type": "integer", "description": "BGR colour. Default: 0" },
-                                                "owner_part_id": { "type": "integer", "description": "Part number (1-based). Default: 1" },
-                                                "graphically_locked": { "type": "boolean", "description": "Whether the shape is graphically locked. Default: false" },
-                                                "disabled": { "type": "boolean", "description": "Whether the shape is disabled. Default: false" },
-                                                "dimmed": { "type": "boolean", "description": "Whether the shape is dimmed. Default: false" },
-                                                "owner_part_display_mode": { "type": "integer", "description": "Display mode this shape belongs to (0=Normal, 1=first alternate/de-Morgan, ...). Default: 0" }
-                                            },
-                                            "required": ["x", "y", "symbol"]
-                                        }
-                                    },
-                                    "parameters": {
-                                        "type": "array",
-                                        "description": "Symbol parameters (e.g., Value, Part Number)",
-                                        "items": {
-                                            "type": "object",
-                                            "properties": {
-                                                "name": { "type": "string", "description": "Parameter name (e.g., 'Value')" },
-                                                "value": { "type": "string", "description": "Parameter value (e.g., '10k'). Default: '*'" },
-                                                "x": { "type": "number", "description": "X position. Default: 0" },
-                                                "y": { "type": "number", "description": "Y position. Default: 0" },
-                                                "font_id": { "type": "integer", "description": "Font ID. Default: 1" },
-                                                "color": { "type": "integer", "description": "BGR colour. Default: 0x800000 (dark blue)" },
-                                                "hidden": { "type": "boolean", "description": "Whether hidden. Default: false" },
-                                                "read_only_state": { "type": "integer", "description": "Read-only state (0=editable, 1=read-only). Default: 0" },
-                                                "param_type": { "type": "integer", "description": "Parameter type (0=String, 1=Boolean, 2=Integer, 3=Float). Default: 0" },
-                                                "unique_id": { "type": "string", "description": "8-char Altium unique ID. Default: auto-generated" },
-                                                "orientation": { "type": "integer", "description": "Text orientation (0/1/2/3 = 0/90/180/270 degrees). Default: 0" },
-                                                "justification": { "type": "integer", "description": "Text anchor id 0-8 (0=bottom-left, 4=middle-centre, 8=top-right). Default: 0" },
-                                                "show_name": { "type": "boolean", "description": "Whether the parameter name is shown alongside the value. Default: false" },
-                                                "hide_name": { "type": "boolean", "description": "Whether the parameter name is hidden (only the value shown). Default: false" },
-                                                "is_mirrored": { "type": "boolean", "description": "Whether the parameter text is mirrored. Default: false" },
-                                                "description": { "type": "string", "description": "Parameter description text. Default: empty" },
-                                                "is_configurable": { "type": "boolean", "description": "Whether the parameter is variant-configurable. Default: false" },
-                                                "auto_position": { "type": "boolean", "description": "Whether Altium auto-positions the parameter label relative to the component. Stored inverted on the wire (NotAutoPosition=T) and only when turned off. Default: true" },
-                                                "is_rule": { "type": "boolean", "description": "Whether the parameter carries a PCB design-rule directive. Default: false" },
-                                                "is_system_parameter": { "type": "boolean", "description": "Whether this is a system parameter rather than a user one. Default: false" },
-                                                "text_horz_anchor": { "type": "integer", "description": "Horizontal text-box anchor, distinct from justification. Default: 0" },
-                                                "text_vert_anchor": { "type": "integer", "description": "Vertical text-box anchor. Default: 0" },
-                                                "owner_part_id": { "type": "integer", "description": "Part number (1-based). Default: 1" },
-                                                "graphically_locked": { "type": "boolean", "description": "Whether the shape is graphically locked. Default: false" },
-                                                "disabled": { "type": "boolean", "description": "Whether the shape is disabled. Default: false" },
-                                                "dimmed": { "type": "boolean", "description": "Whether the shape is dimmed. Default: false" },
-                                                "owner_part_display_mode": { "type": "integer", "description": "Display mode this shape belongs to (0=Normal, 1=first alternate/de-Morgan, ...). Default: 0" }
-                                            },
-                                            "required": ["name"]
-                                        }
-                                    },
-                                    "footprints": {
-                                        "type": "array",
-                                        "description": "Footprint model references (links to PCB footprints)",
-                                        "items": {
-                                            "type": "object",
-                                            "properties": {
-                                                "name": { "type": "string", "description": "Footprint name (entity in the PcbLib)" },
-                                                "description": { "type": "string", "description": "Model description" },
-                                                "library_path": { "type": "string", "description": "Optional absolute path to the .PcbLib containing the footprint, written as ModelDatafile0 so Altium resolves/previews the model. Omit to link by name only (requires the library to be installed/in the project)." }
-                                            },
-                                            "required": ["name"]
-                                        }
-                                    }
-                                },
-                                "required": ["name", "pins"]
-                            }
+                            "items": Self::symbol_schema()
                         },
                         "append": {
                             "type": "boolean",
@@ -1642,14 +1740,14 @@ impl McpServer {
                             "type": "string",
                             "description": "Name of the component to update (must exist in library)"
                         },
-                        "footprint": {
-                            "type": "object",
-                            "description": "For PcbLib: footprint data (same format as write_pcblib)"
-                        },
-                        "symbol": {
-                            "type": "object",
-                            "description": "For SchLib: symbol data (same format as write_schlib)"
-                        },
+                        "footprint": Self::described(
+                            Self::footprint_schema(),
+                            "For PcbLib: the footprint to store, in the shape write_pcblib takes per footprints entry"
+                        ),
+                        "symbol": Self::described(
+                            Self::symbol_schema(),
+                            "For SchLib: the symbol to store, in the shape write_schlib takes per symbols entry"
+                        ),
                         "dry_run": {
                             "type": "boolean",
                             "description": "If true, show what would be updated without actually modifying the file",

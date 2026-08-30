@@ -717,8 +717,8 @@ component is matched by name. Use dry_run=true to preview changes without modify
 | `component_name` | string | yes | Name of the component to update (must exist in library) |
 | `dry_run` | boolean | no | If true, show what would be updated without actually modifying the file (default: `false`) |
 | `filepath` | string | yes | Path to the .PcbLib or .SchLib file |
-| `footprint` | object | no | For PcbLib: footprint data (same format as write_pcblib) |
-| `symbol` | object | no | For SchLib: symbol data (same format as write_schlib) |
+| `footprint` | object | no | For PcbLib: the footprint to store, in the shape write_pcblib takes per footprints entry |
+| `symbol` | object | no | For SchLib: the symbol to store, in the shape write_schlib takes per symbols entry |
 
 ## `search_components`
 

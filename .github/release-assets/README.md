@@ -98,6 +98,11 @@ examples.
 
 ### Claude Desktop
 
+Skip this archive entirely if you like: the release also ships a one-click extension,
+`altium-designer-mcp.mcpb` (identical twin: `altium-designer-mcp.dxt` for older builds).
+Settings → **Extensions** → **Advanced settings** → **Install Extension…**, pick the
+file, choose your library folders — done. To wire this archive's binary by hand instead:
+
 Edit `claude_desktop_config.json` — **Settings → Developer → Edit Config** opens it, or find it at
 `%APPDATA%\Claude\` (Windows) or `~/Library/Application Support/Claude/` (macOS):
 

@@ -11,6 +11,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Claude Desktop one-click extension.** Every release now ships
+  `altium-designer-mcp.mcpb` — and the identical bundle as
+  `altium-designer-mcp.dxt`, the format's old name, so older Claude Desktop
+  builds install it too (pattern from
+  [coffeenmusic/altium-mcp](https://github.com/coffeenmusic/altium-mcp)).
+  One bundle carries the binary for macOS, Windows and Linux; installing it
+  asks for your library folders and passes them to the server as `--allow`
+  grants, so no config file or JSON editing is needed. The bundle is packed
+  and schema-validated by the official MCPB CLI in the release workflow,
+  which also unpacks it again and speaks MCP to the bundled binary, and it
+  is checksummed and provenance-attested like every other artefact.
+- **`--allow <DIR>` grants on the command line.** Repeatable; adds to the
+  config file's `allowed_paths`, and works with no config file at all — the
+  other settings then take their defaults. A config file that is named but
+  missing, unreadable or invalid still fails loudly.
+
 - **Four more golden-fixture gaps closed with AD24-authored evidence.** The
   regenerated goldens now carry a pin in an alternate display mode
   (`DISPMODE` — the pin-record byte), a graphically locked pin (`LOCKFLAGS`

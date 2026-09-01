@@ -11,13 +11,14 @@ only after a human has looked at the artefacts**.
 
 ## What is automated
 
-`.github/workflows/release.yml` runs in three jobs:
+`.github/workflows/release.yml` runs in four jobs:
 
 | Job | What it does | Can it publish? |
 |-----|--------------|-----------------|
 | `validate` | Tag format, `Cargo.toml` version match, tagged commit is on `main`, CHANGELOG entry exists, no release already exists | no |
 | `build` | Builds and tests on Linux / macOS / Windows, packages each archive, **unpacks it again and runs the packaged binary** | no |
-| `release` | Verifies all three artefacts arrived, generates and re-checks `SHA256SUMS.txt`, attests SLSA build provenance, creates a **draft** release | draft only |
+| `bundle` | Assembles the Claude Desktop extension (`altium-designer-mcp.mcpb` + its identical `.dxt` twin) from the three binaries, packs it with the official MCPB CLI (which validates the manifest), **unpacks it again and speaks MCP to the bundled binary** | no |
+| `release` | Verifies all five artefacts arrived, generates and re-checks `SHA256SUMS.txt`, attests SLSA build provenance, creates a **draft** release | draft only |
 
 The final publish is a manual click. Nothing in CI makes a release public.
 

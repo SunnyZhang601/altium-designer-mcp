@@ -282,6 +282,11 @@ case (`TopOverlay`, `Mechanical13`), in any case; every tool accepts the same sp
 archive bundles a setup README plus [`docs/CLIENT_SETUP.md`](docs/CLIENT_SETUP.md), which
 wires the server into every MCP client we know of.
 
+**Claude Desktop users** need no archive at all: install the one-click extension
+`altium-designer-mcp.mcpb` from the same page (older builds: the identical
+`altium-designer-mcp.dxt`) via Settings → Extensions → Advanced settings →
+Install Extension… — see [CLIENT_SETUP.md § Claude Desktop](docs/CLIENT_SETUP.md#claude-desktop).
+
 To build from source instead, see
 [CONTRIBUTING.md § Development Setup](CONTRIBUTING.md#development-setup); an optimised
 binary comes from `cargo build --release` and lands at `target/release/altium-designer-mcp`.

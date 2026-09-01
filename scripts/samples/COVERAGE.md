@@ -39,6 +39,11 @@ field. The fix is always to enrich them (see the workflow below).
   negative in the `.pas` next to the helper so it is not retried blindly, and mark the row
   below 🚫. The evidence for each lives once, in
   [Verified negatives](#verified-negatives--do-not-retry) below.
+- **Cross-check from Altium's side:** `scripts/Verify-Libraries.ps1 -Files <goldens>
+  -Expect scripts/samples/golden_expectations.json` makes a real Altium assert the
+  component names and per-component primitive counts this reader finds in the goldens —
+  the inverse of the fixture direction, so a primitive Altium quietly drops cannot hide
+  behind "opened". `tests/golden_expectations.rs` keeps the expectations file current.
 
 ## Coverage map
 

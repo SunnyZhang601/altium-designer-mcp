@@ -7,11 +7,6 @@ record). The specialised worklists stay the single source of truth for their are
 |------|----------|
 | Golden-fixture enrichment and verified negatives | `scripts/samples/COVERAGE.md` |
 
-## A. On-site Altium tooling
-
-- [ ] *(Optional)* extend `Verify-Libraries.ps1` to assert primitive counts / specific
-      properties, not just "opened".
-
 ## B. Release & distribution
 
 - [ ] **v1.0.0 is the real release**, gated on ALL features built (the 99% production

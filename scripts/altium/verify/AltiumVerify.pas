@@ -137,6 +137,127 @@ begin
     Result := Result + ']';
 end;
 
+{ Counts one PcbLib component's primitives of one object id, through the
+  same group iterator AltiumMaskCache.pas uses. }
+function CountPcbKind(Comp : IPCB_LibComponent; ObjId : Integer) : Integer;
+var
+    GIter : IPCB_GroupIterator;
+    Prim  : IPCB_Primitive;
+begin
+    Result := 0;
+    GIter := Comp.GroupIterator_Create;
+    GIter.AddFilter_ObjectSet(MkSet(ObjId));
+    Prim := GIter.FirstPCBObject;
+    while Prim <> nil do
+    begin
+        Result := Result + 1;
+        Prim := GIter.NextPCBObject;
+    end;
+    Comp.GroupIterator_Destroy(GIter);
+end;
+
+{ Counts one SchLib component's records of one object id. }
+function CountSchKind(Comp : ISch_Component; ObjId : Integer) : Integer;
+var
+    SIter : ISch_Iterator;
+    Prim  : ISch_GraphicalObject;
+begin
+    Result := 0;
+    SIter := Comp.SchIterator_Create;
+    SIter.AddFilter_ObjectSet(MkSet(ObjId));
+    Prim := SIter.FirstSchObject;
+    while Prim <> nil do
+    begin
+        Result := Result + 1;
+        Prim := SIter.NextSchObject;
+    end;
+    Comp.SchIterator_Destroy(SIter);
+end;
+
+{ Per-component primitive counts, as Altium itself iterates them, in the same
+  component order as ComponentNames — so a caller can assert that every
+  primitive the file claims actually reached Altium, not just that the file
+  opened. Key names mirror the MCP tools' JSON lists. }
+function PrimitiveCounts(const Kind : String) : String;
+var
+    PcbLib  : IPCB_Library;
+    PcbComp : IPCB_LibComponent;
+    PcbIter : IPCB_LibraryIterator;
+    SchLib  : ISch_Lib;
+    SchIter : ISch_Iterator;
+    SchComp : ISch_Component;
+    First   : Boolean;
+begin
+    Result := '[';
+    First  := True;
+    try
+        if Kind = 'PCBLIB' then
+        begin
+            PcbLib := PCBServer.GetCurrentPCBLibrary;
+            if PcbLib <> nil then
+            begin
+                PcbIter := PcbLib.LibraryIterator_Create;
+                PcbIter.SetState_FilterAll;
+                PcbComp := PcbIter.FirstPCBObject;
+                while PcbComp <> nil do
+                begin
+                    if not First then Result := Result + ',';
+                    First := False;
+                    Result := Result + '{'
+                        + '"pads":'             + IntToStr(CountPcbKind(PcbComp, ePadObject))
+                        + ',"vias":'            + IntToStr(CountPcbKind(PcbComp, eViaObject))
+                        + ',"tracks":'          + IntToStr(CountPcbKind(PcbComp, eTrackObject))
+                        + ',"arcs":'            + IntToStr(CountPcbKind(PcbComp, eArcObject))
+                        + ',"text":'            + IntToStr(CountPcbKind(PcbComp, eTextObject))
+                        + ',"fills":'           + IntToStr(CountPcbKind(PcbComp, eFillObject))
+                        + ',"regions":'         + IntToStr(CountPcbKind(PcbComp, eRegionObject))
+                        + ',"component_bodies":' + IntToStr(CountPcbKind(PcbComp, eComponentBodyObject))
+                        + '}';
+                    PcbComp := PcbIter.NextPCBObject;
+                end;
+                PcbLib.LibraryIterator_Destroy(PcbIter);
+            end;
+        end
+        else if Kind = 'SCHLIB' then
+        begin
+            SchLib := SchServer.GetCurrentSchDocument;
+            if SchLib <> nil then
+            begin
+                SchIter := SchLib.SchLibIterator_Create;
+                SchIter.AddFilter_ObjectSet(MkSet(eSchComponent));
+                SchComp := SchIter.FirstSchObject;
+                while SchComp <> nil do
+                begin
+                    if not First then Result := Result + ',';
+                    First := False;
+                    Result := Result + '{'
+                        + '"pins":'             + IntToStr(CountSchKind(SchComp, ePin))
+                        + ',"rectangles":'      + IntToStr(CountSchKind(SchComp, eRectangle))
+                        + ',"round_rects":'     + IntToStr(CountSchKind(SchComp, eRoundRectangle))
+                        + ',"lines":'           + IntToStr(CountSchKind(SchComp, eLine))
+                        + ',"polylines":'       + IntToStr(CountSchKind(SchComp, ePolyline))
+                        + ',"polygons":'        + IntToStr(CountSchKind(SchComp, ePolygon))
+                        + ',"arcs":'            + IntToStr(CountSchKind(SchComp, eArc))
+                        + ',"elliptical_arcs":' + IntToStr(CountSchKind(SchComp, eEllipticalArc))
+                        + ',"pies":'            + IntToStr(CountSchKind(SchComp, ePie))
+                        + ',"ellipses":'        + IntToStr(CountSchKind(SchComp, eEllipse))
+                        + ',"beziers":'         + IntToStr(CountSchKind(SchComp, eBezier))
+                        + ',"images":'          + IntToStr(CountSchKind(SchComp, eImage))
+                        + ',"text_frames":'     + IntToStr(CountSchKind(SchComp, eTextFrame))
+                        + ',"labels":'          + IntToStr(CountSchKind(SchComp, eLabel))
+                        + ',"parameters":'      + IntToStr(CountSchKind(SchComp, eParameter))
+                        + ',"ieee_symbols":'    + IntToStr(CountSchKind(SchComp, eSymbol))
+                        + '}';
+                    SchComp := SchIter.NextSchObject;
+                end;
+                SchLib.SchIterator_Destroy(SchIter);
+            end;
+        end;
+    except
+    end;
+    Result := Result + ']';
+end;
+
 procedure Run;
 var
     RequestFile, ResponseFile : String;
@@ -210,7 +331,10 @@ begin
             // file parses; a name check proves the components are reachable and
             // their text survived, which is what a round-trip claim needs.
             Json := Json + ',"components":' + Names;
-            Json := Json + ',"description_lengths":' + DescriptionLengths(Kind) + '}';
+            Json := Json + ',"description_lengths":' + DescriptionLengths(Kind);
+            // Per-component primitive counts, aligned with `components`: the
+            // caller can assert what Altium resolved, not just that it opened.
+            Json := Json + ',"primitive_counts":' + PrimitiveCounts(Kind) + '}';
             Inc(Emitted);
         end;
         Json := Json + ']';

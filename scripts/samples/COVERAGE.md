@@ -147,7 +147,14 @@ not say which name was at fault.
 (`IntegratedModel=T|DatabaseModel=T`) is known from a hand-authored library and replayed
 verbatim, not from a golden.
 
-**PcbLib:** region net and the cavity/subpoly params.
+**PcbLib:** region net and the cavity/subpoly params. No scripted route to a region
+*hole* has been identified yet (2026-09-01 identifier sweep): the contour API itself is
+proven (`MainContour.Replicate`, 1-based `X[i]`/`Y[i]`, `SetOutlineContour`), and
+`PCBGeometricPolygonFactory` / `AddContour` / `SetState_GeometricPolygon` are all in the
+table, but no name for constructing a second (hole) contour resolved — the next probe
+should try a two-contour `TGeometricPolygon` through the factory. The region `NET` may
+be structurally absent like the net index (a `PcbLib` has no net table); one probe would
+settle whether its row becomes 🔒.
 A **text beyond U+00FF** (Ω, CJK) is 🚫 not scriptable: a source literal reaches Altium as
 its UTF-8 bytes widened through the machine's ANSI page and `Chr(N)` truncates modulo 256
 (`TEXT_WIDE_ONLY` pins the WideStrings-authoritative shape with a character the Data

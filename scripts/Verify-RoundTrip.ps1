@@ -209,19 +209,9 @@ function Get-AltiumResult([string]$Path) {
 # ---------------------------------------------------------------------------
 $failures = New-Object System.Collections.Generic.List[string]
 
-# Altium's PCB scripting API hands back a non-Latin footprint name in its on-wire
-# form: the UTF-8 bytes carried one char per byte. That is not a defect in the file
-# — asking Altium for the names in its OWN authored golden returns exactly the same
-# string — so the comparison accepts either the true name or that form. Decoding it
-# back is the inverse of what the writer does.
-function ConvertFrom-WireName([string]$Name) {
-    try {
-        # The system ANSI page, because that is the one Altium widened through.
-        $bytes = [System.Text.Encoding]::Default.GetBytes($Name)
-        $utf8  = New-Object System.Text.UTF8Encoding $false, $true
-        return $utf8.GetString($bytes)
-    } catch { return $Name }
-}
+# A non-Latin name comes back from Altium in its on-wire form; accept either
+# (see the shared helper).
+. (Join-Path $PSScriptRoot 'ConvertFrom-WireName.ps1')
 
 function Compare-Names([string]$Label, [string[]]$Expected, [string[]]$Actual) {
     $resolved = @($Actual | ForEach-Object {
@@ -256,6 +246,32 @@ foreach ($pair in @(@{ P = $SchLibPath; N = $SymbolNames; L = 'SchLib' },
         continue
     }
     Compare-Names "$($pair.L) as resolved by Altium" $pair.N @($res.components)
+}
+
+# Primitive counts as Altium resolved them: every symbol was authored with one
+# pin and one rectangle, every footprint with two pads. "Opened" and the names
+# alone would pass a file whose primitives Altium quietly dropped.
+function Compare-Counts([string]$Label, $Result, [string]$Kind, [int]$Expected) {
+    $counts = @($Result.primitive_counts)
+    for ($i = 0; $i -lt $counts.Count; $i++) {
+        $actual = [int]$counts[$i].$Kind
+        if ($actual -ne $Expected) {
+            $script:failures.Add("${Label}[$i]: $Kind expected $Expected, Altium resolved $actual")
+            Write-Host "  FAIL  ${Label}[$i]: $Kind $actual (wanted $Expected)" -ForegroundColor Red
+        }
+    }
+    if (-not ($counts | Where-Object { [int]$_.$Kind -ne $Expected })) {
+        Write-Host "  ok    $Label ($Kind = $Expected on all $($counts.Count))" -ForegroundColor Green
+    }
+}
+$schRes = Get-AltiumResult $SchLibPath
+$pcbRes = Get-AltiumResult $PcbLibPath
+if ($schRes.opened) {
+    Compare-Counts 'SchLib counts' $schRes 'pins' 1
+    Compare-Counts 'SchLib counts' $schRes 'rectangles' 1
+}
+if ($pcbRes.opened) {
+    Compare-Counts 'PcbLib counts' $pcbRes 'pads' 2
 }
 
 # Close Altium unless asked otherwise. Verify-Libraries.ps1 deliberately leaves

@@ -9,12 +9,13 @@ oracle in [`tests/integration/`](../tests/integration/).)
 
 | Path | What it is | Needs Altium? |
 |------|------------|---------------|
-| [`Verify-Libraries.ps1`](Verify-Libraries.ps1) | Launch Altium to confirm a `.PcbLib`/`.SchLib` opens cleanly | **Yes** |
+| [`Verify-Libraries.ps1`](Verify-Libraries.ps1) | Launch Altium to confirm a `.PcbLib`/`.SchLib` opens cleanly; `-Expect` asserts the components and per-component primitive counts Altium resolves | **Yes** |
 | [`Generate-Samples.ps1`](Generate-Samples.ps1) | Launch Altium to author the sample libraries | **Yes** |
 | [`Watch-AltiumDialog.ps1`](Watch-AltiumDialog.ps1) | Run alongside `Generate-Samples.ps1`: catches the modal dialog a compile error or crash opens headlessly, prints the offending identifier and kills Altium | **Yes** |
 | [`Verify-RoundTrip.ps1`](Verify-RoundTrip.ps1) | Write libraries through the MCP server, then check Altium resolves every component name | **Yes** |
 | [`Verify-MaskCacheState.ps1`](Verify-MaskCacheState.ps1) | Write pads carrying each mask-expansion cache state, then show what Altium makes of them | **Yes** |
 | [`Resolve-AltiumExe.ps1`](Resolve-AltiumExe.ps1) | Shared helper: read `ALTIUM_EXE` from the repo-root `.env.local` | — |
+| [`ConvertFrom-WireName.ps1`](ConvertFrom-WireName.ps1) | Shared helper: decode a component name from Altium's on-wire form | — |
 | [`altium/`](altium/) | The DelphiScript automation the launchers run | **Yes** |
 | [`samples/`](samples/) | Altium-authored sample libraries (ground truth for the tests) | No |
 
@@ -38,7 +39,7 @@ through Altium's `RunScript` CLI. Because it needs the GUI application and a lic
 
 | Path | Role |
 |------|------|
-| [`altium/verify/`](altium/verify/) | `AltiumVerify.pas` — opens each library and reports PASS/FAIL plus the component names Altium resolved (run by `Verify-Libraries.ps1`) |
+| [`altium/verify/`](altium/verify/) | `AltiumVerify.pas` — opens each library and reports PASS/FAIL plus the component names and per-component primitive counts Altium resolved (run by `Verify-Libraries.ps1`) |
 | [`altium/verify/`](altium/verify/) | `AltiumMaskCache.pas` — reports every pad's mask-expansion cache state and re-saves the library (run by `Verify-MaskCacheState.ps1`) |
 | [`altium/generate/`](altium/generate/) | `GenerateSamples.pas` — authors the sample libraries (run by `Generate-Samples.ps1`) |
 
@@ -155,6 +156,22 @@ whatever ANSI page the machine runs, which on a non-Western install is not 1252.
 
 `ISch_Component.LibReference` does not share this; symbol names come back as the true
 string.
+
+### The library iterators impose Altium's own order and parameter set
+
+Verified against the two goldens (AD24, 2026-09-01), which is why
+`Verify-Libraries.ps1 -Expect` matches components by **name**, never by index:
+
+- `IPCB_Library.LibraryIterator_Create` returns components in **shortlex order**
+  (name length, then alphabetical), not file order; the SchLib iterator's order
+  differs from file order too.
+- A component's iterator (`GroupIterator_Create` with an object-set filter on
+  PCB, `ISch_Component.SchIterator_Create` on Sch) counts primitives exactly as
+  the file stores them — all 25 footprints' and 88 symbols' counts matched our
+  reader — with one exception: a **hidden `Comment` parameter is not yielded**
+  (the `PARAMS` golden carries 3 parameter records, Altium iterates 2), while a
+  hidden *user* parameter is (the `JUSTIFY` golden's hidden `Tol` comes back),
+  and so is a visible `Comment` (every i18n symbol's).
 
 ### Regenerating the samples changes values that tests assert
 

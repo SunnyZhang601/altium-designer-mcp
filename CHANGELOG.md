@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **The on-site Altium harness asserts what Altium resolves, not just that a
+  file opens.** `AltiumVerify.pas` now reports per-component primitive counts
+  (all 8 PcbLib primitive kinds, all 16 SchLib record kinds) through the
+  bridge; `Verify-Libraries.ps1 -Expect <json>` holds a library to an
+  expectations file (component names as a set, counts matched by name — Altium
+  iterates in its own shortlex order); and `Verify-RoundTrip.ps1` additionally
+  asserts every server-written footprint's pads and symbol's pin and rectangle
+  from Altium's side. `scripts/samples/golden_expectations.json` pins the two
+  goldens — validated against AD24, all 25 footprints and 88 symbols — and
+  `tests/golden_expectations.rs` keeps it in step with the reader. Verified in
+  passing: Altium's component iterator skips a hidden `Comment` parameter but
+  yields hidden user parameters.
+
 ### Fixed
 
 - **A pad or via stack the record cannot store is refused, not quietly

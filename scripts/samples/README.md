@@ -14,6 +14,17 @@ so CI can read them without Altium. Regenerate and re-commit whenever the author
 [`COVERAGE.md`](COVERAGE.md) is the map of what each fixture exercises, the enrichment
 backlog, and the Altium behaviours verified not to persist.
 
+[`golden_expectations.json`](golden_expectations.json) holds the component names and
+per-component primitive counts this repo's reader finds in the two generated goldens, in
+the shape `scripts\Verify-Libraries.ps1 -Expect` consumes — so an on-site Altium can
+assert it resolves exactly the same, not merely that the files open. It is generated,
+not hand-edited: `tests/golden_expectations.rs` fails when it drifts, and
+`UPDATE_GOLDEN_EXPECTATIONS=1 cargo test --test golden_expectations` refreshes it after
+a regeneration. Two Altium behaviours are baked in (evidence in
+[`../README.md`](../README.md) § library iterators): the five damaged i18n names are
+excused via `fixture_inconsistent` (Altium decodes those bytes differently by design),
+and the parameter counts predict Altium's iterator, which skips a hidden `Comment`.
+
 ## NEVER open-and-save a committed golden in Altium
 
 An AD load+save cycle silently damages fixtures (measured 2026-08-16 by resaving

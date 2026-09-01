@@ -842,12 +842,14 @@ fn encode_rectangle(rect: &Rectangle, index: usize) -> String {
         ""
     };
     // Rectangles store the line style in LineStyleExt (Altium omits LineStyle),
-    // and omit it when zero.
+    // omitted when zero and placed between Corner.Y and LineWidth — an
+    // AD24-authored dashed rectangle stores
+    // `Corner.Y|LineStyleExt|LineWidth|AreaColor`.
     let line_style = nonzero("LineStyleExt", u32::from(rect.line_style));
     format!(
         "|RECORD=14|IsNotAccesible=T{}|OwnerPartId={}{}\
          {}{}{}{}\
-         |LineWidth={}{}{}{}{}{}|UniqueID={}",
+         {}|LineWidth={}{}{}{}{}|UniqueID={}",
         index_in_sheet(index),
         rect.owner_part_id,
         write_display_flags(rect.display_flags),
@@ -855,10 +857,10 @@ fn encode_rectangle(rect: &Rectangle, index: usize) -> String {
         coord_param("Location.Y", rect.y1),
         coord_param("Corner.X", rect.x2),
         coord_param("Corner.Y", rect.y2),
+        line_style,
         rect.line_width,
         nonzero("Color", rect.line_color),
         nonzero("AreaColor", rect.fill_color),
-        line_style,
         is_solid,
         transparent,
         rect.unique_id.clone().unwrap_or_else(generate_unique_id)

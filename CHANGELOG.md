@@ -11,6 +11,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Four more golden-fixture gaps closed with AD24-authored evidence.** The
+  regenerated goldens now carry a pin in an alternate display mode
+  (`DISPMODE` — the pin-record byte), a graphically locked pin (`LOCKFLAGS`
+  — flag bit 0x40), a dashed rectangle (`SHAPESTYLE` — persists as
+  `LineStyleExt` between `Corner.Y` and `LineWidth`, and the writer now
+  places it there), and an extruded body whose outline is off-grid by raw
+  internal units (`BODYPREC` — AD24 keeps the exact units, and so does the
+  reader). The `TEXT_SPECIAL` inverted rectangle is now authored at an
+  explicit 120×70 mil: AD computes the size lazily from the rendered extent,
+  and a headless save caught it at 0. All validated from Altium's side via
+  `Verify-Libraries.ps1 -Expect`.
+
 - **The on-site Altium harness asserts what Altium resolves, not just that a
   file opens.** `AltiumVerify.pas` now reports per-component primitive counts
   (all 8 PcbLib primitive kinds, all 16 SchLib record kinds) through the

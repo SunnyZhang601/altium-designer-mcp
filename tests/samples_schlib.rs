@@ -721,12 +721,43 @@ fn samples_schlib_shapestyle() {
         "SHAPESTYLE must carry a dashed (1) and a dotted (2) line, got {styles:?}"
     );
 
-    // Two rectangles: one solid-opaque, one transparent.
-    assert_eq!(sym.rectangles.len(), 2, "SHAPESTYLE has two rectangles");
+    // Three rectangles: one solid-opaque, one transparent, one dashed.
+    assert_eq!(sym.rectangles.len(), 3, "SHAPESTYLE has three rectangles");
     assert_eq!(
         sym.rectangles.iter().filter(|r| r.transparent).count(),
         1,
         "exactly one SHAPESTYLE rectangle is transparent"
+    );
+
+    // The dashed rectangle: a rectangle's line style persists as `LineStyleExt`
+    // (between Corner.Y and LineWidth), unlike the round-rect, which accepts
+    // the property and drops it. This is the first real-Altium golden for a
+    // styled rectangle — the key placement is byte-pinned by the fidelity
+    // replay suite.
+    let dashed = sym
+        .rectangles
+        .iter()
+        .find(|r| r.line_style != 0)
+        .expect("SHAPESTYLE has a styled rectangle");
+    assert_eq!(dashed.line_style, 1, "the styled rectangle is dashed");
+    assert!(
+        dashed.raw_params.iter().any(|(k, _)| k == "LineStyleExt"),
+        "the dashed rectangle's record carries LineStyleExt, not LineStyle"
+    );
+    assert!(
+        !dashed.raw_params.iter().any(|(k, _)| k == "LineStyle"),
+        "Altium omits the LineStyle key on a rectangle"
+    );
+    assert!(
+        approx_eq(dashed.x1, 15.0)
+            && approx_eq(dashed.y1, -10.0)
+            && approx_eq(dashed.x2, 25.0)
+            && approx_eq(dashed.y2, -5.0),
+        "dashed rectangle corners, got ({}, {})..({}, {})",
+        dashed.x1,
+        dashed.y1,
+        dashed.x2,
+        dashed.y2
     );
 
     // One transparent polygon (ISch_Polygon.Transparent round-trips from Altium).
@@ -980,6 +1011,17 @@ fn samples_schlib_lockflags() {
     assert!(
         sym.rectangles[0].display_flags.graphically_locked,
         "the LOCKFLAGS rectangle must be graphically locked"
+    );
+
+    // A pin stores the same flag as bit 0x40 of its binary record — golden
+    // evidence for the pin-record byte, which was self-round-trip only until
+    // this fixture.
+    assert_eq!(sym.pins.len(), 1, "LOCKFLAGS has one pin");
+    assert_eq!(sym.pins[0].designator, "1");
+    assert_eq!(sym.pins[0].name, "LK");
+    assert!(
+        sym.pins[0].graphically_locked,
+        "the LOCKFLAGS pin must be graphically locked"
     );
 }
 
@@ -1377,6 +1419,25 @@ fn samples_schlib_dispmode() {
     // Both rectangles belong to part 1 — display modes are orthogonal to parts.
     assert_eq!(mode0.owner_part_id, 1, "mode-0 owner part");
     assert_eq!(mode1.owner_part_id, 1, "mode-1 owner part");
+
+    // A pin stores its display mode as a byte of the binary pin record —
+    // golden evidence for the non-default value, which was self-round-trip
+    // only until this fixture.
+    assert_eq!(sym.pins.len(), 2, "DISPMODE has a pin per display mode");
+    let pin_mode0 = sym
+        .pins
+        .iter()
+        .find(|p| p.designator == "1")
+        .expect("DISPMODE has pin 1");
+    assert_eq!(pin_mode0.name, "M0");
+    assert_eq!(pin_mode0.owner_part_display_mode, 0, "pin 1 is mode 0");
+    let pin_mode1 = sym
+        .pins
+        .iter()
+        .find(|p| p.designator == "2")
+        .expect("DISPMODE has pin 2");
+    assert_eq!(pin_mode1.name, "M1");
+    assert_eq!(pin_mode1.owner_part_display_mode, 1, "pin 2 is mode 1");
 }
 
 // ---------------------------------------------------------------------------
@@ -1454,6 +1515,8 @@ fn samples_schlib_rmw_dispmode_matches_golden_records() {
         [
             "|RECORD=14|IsNotAccesible=T|OwnerPartId=1|Location.X=-5|Location.Y=-2|Location.Y_Frac=-50000|Corner.X=5|Corner.Y=2|Corner.Y_Frac=50000|LineWidth=1|AreaColor=11599871|IsSolid=T|UniqueID=<UID>",
             "|RECORD=14|IsNotAccesible=T|IndexInSheet=1|OwnerPartId=1|OwnerPartDisplayMode=1|Location.X=-6|Location.Y=-3|Corner.X=6|Corner.Y=3|LineWidth=1|AreaColor=11599871|IsSolid=T|UniqueID=<UID>",
+            "<PIN>",
+            "<PIN>",
             "|RECORD=34|IndexInSheet=-1|OwnerPartId=-1|Location.X=-5|Location.Y=5|Color=8388608|FontID=1|Text=U?|Name=Designator|ReadOnlyState=1|UniqueID=<UID>",
             "|RECORD=41|IndexInSheet=-1|OwnerPartId=-1|Location.X=-5|Location.Y=-15|Color=8388608|FontID=1|Text=*|Name=Comment|UniqueID=<UID>",
             "|RECORD=44",
@@ -1612,6 +1675,7 @@ fn samples_schlib_rmw_shapestyle_records_match_golden_ignoring_stream_order() {
         "|RECORD=14|IsNotAccesible=T|IndexInSheet=3|OwnerPartId=1|Location.X=-10|Location.Y=5|Corner.X=10|Corner.Y=10|LineWidth=1|AreaColor=11599871|IsSolid=T|Transparent=T|UniqueID=<UID>",
         "|RECORD=7|IsNotAccesible=T|IndexInSheet=4|OwnerPartId=1|LineWidth=1|AreaColor=65280|IsSolid=T|Transparent=T|LocationCount=3|X1=-5|Y1=12|X2=5|Y2=12|X3=5|Y3=17|UniqueID=<UID>",
         "|RECORD=8|IsNotAccesible=T|IndexInSheet=5|OwnerPartId=1|Location.X=15|Location.Y=10|Radius=3|SecondaryRadius=2|LineWidth=1|AreaColor=11599871|IsSolid=T|Transparent=T|UniqueID=<UID>",
+        "|RECORD=14|IsNotAccesible=T|IndexInSheet=6|OwnerPartId=1|Location.X=15|Location.Y=-10|Corner.X=25|Corner.Y=-5|LineStyleExt=1|LineWidth=1|AreaColor=11599871|UniqueID=<UID>",
         "|RECORD=34|IndexInSheet=-1|OwnerPartId=-1|Location.X=-5|Location.Y=5|Color=8388608|FontID=1|Text=U?|Name=Designator|ReadOnlyState=1|UniqueID=<UID>",
         "|RECORD=41|IndexInSheet=-1|OwnerPartId=-1|Location.X=-5|Location.Y=-15|Color=8388608|FontID=1|Text=*|Name=Comment|UniqueID=<UID>",
         "|RECORD=44",
@@ -1639,7 +1703,7 @@ fn samples_schlib_rmw_shapestyle_records_match_golden_ignoring_stream_order() {
         1,
         "exactly one content record sits at slot 0 (token omitted)"
     );
-    assert_eq!(numbered, vec![1, 2, 3, 4, 5], "content slots 1..5");
+    assert_eq!(numbered, vec![1, 2, 3, 4, 5, 6], "content slots 1..6");
 }
 
 #[test]

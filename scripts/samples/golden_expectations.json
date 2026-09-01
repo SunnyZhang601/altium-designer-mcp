@@ -1,7 +1,7 @@
 [
     {
         "file": "footprints.PcbLib",
-        "components": ["PAD_SHAPES", "PAD_HOLES", "VIAS", "PAD_STACK", "TRACKS", "ARCS", "REGIONS", "FILLS", "BODY3D", "TEXT_STROKE", "TEXT_WIN1252", "TEXT_LONG", "PADMASK", "LOCKFLAGS_PCB", "EDGE", "TEXT_STYLE", "REGION_CUTOUT", "MULTILAYER", "EMBSTEP", "STEP_REF", "MECH20", "TEXT_WIDE_ONLY", "PRIMPROPS", "TEXT_SPECIAL", "Резистор_0402"],
+        "components": ["PAD_SHAPES", "PAD_HOLES", "VIAS", "PAD_STACK", "TRACKS", "ARCS", "REGIONS", "FILLS", "BODY3D", "TEXT_STROKE", "TEXT_WIN1252", "TEXT_LONG", "PADMASK", "LOCKFLAGS_PCB", "EDGE", "TEXT_STYLE", "REGION_CUTOUT", "MULTILAYER", "EMBSTEP", "STEP_REF", "MECH20", "TEXT_WIDE_ONLY", "PRIMPROPS", "TEXT_SPECIAL", "BODYPREC", "Резистор_0402"],
         "primitive_counts": [
             {"pads": 4, "vias": 0, "tracks": 0, "arcs": 0, "text": 0, "fills": 0, "regions": 0, "component_bodies": 0},
             {"pads": 3, "vias": 0, "tracks": 0, "arcs": 0, "text": 0, "fills": 0, "regions": 0, "component_bodies": 0},
@@ -27,6 +27,7 @@
             {"pads": 0, "vias": 0, "tracks": 0, "arcs": 0, "text": 2, "fills": 0, "regions": 0, "component_bodies": 0},
             {"pads": 1, "vias": 1, "tracks": 0, "arcs": 0, "text": 2, "fills": 0, "regions": 4, "component_bodies": 1},
             {"pads": 0, "vias": 0, "tracks": 0, "arcs": 0, "text": 5, "fills": 0, "regions": 0, "component_bodies": 0},
+            {"pads": 0, "vias": 0, "tracks": 0, "arcs": 0, "text": 0, "fills": 0, "regions": 0, "component_bodies": 1},
             {"pads": 2, "vias": 0, "tracks": 0, "arcs": 0, "text": 0, "fills": 0, "regions": 0, "component_bodies": 0}
         ]
     },
@@ -45,7 +46,7 @@
             {"pins": 0, "rectangles": 0, "round_rects": 0, "lines": 0, "polylines": 0, "polygons": 0, "arcs": 0, "elliptical_arcs": 2, "pies": 0, "ellipses": 0, "beziers": 0, "images": 0, "text_frames": 0, "labels": 0, "parameters": 1, "ieee_symbols": 0},
             {"pins": 0, "rectangles": 0, "round_rects": 1, "lines": 0, "polylines": 2, "polygons": 0, "arcs": 0, "elliptical_arcs": 0, "pies": 0, "ellipses": 0, "beziers": 0, "images": 0, "text_frames": 1, "labels": 1, "parameters": 2, "ieee_symbols": 0},
             {"pins": 0, "rectangles": 1, "round_rects": 1, "lines": 1, "polylines": 1, "polygons": 1, "arcs": 1, "elliptical_arcs": 0, "pies": 1, "ellipses": 1, "beziers": 1, "images": 0, "text_frames": 0, "labels": 1, "parameters": 1, "ieee_symbols": 0},
-            {"pins": 0, "rectangles": 2, "round_rects": 0, "lines": 0, "polylines": 0, "polygons": 0, "arcs": 0, "elliptical_arcs": 0, "pies": 0, "ellipses": 0, "beziers": 0, "images": 0, "text_frames": 0, "labels": 0, "parameters": 1, "ieee_symbols": 0},
+            {"pins": 2, "rectangles": 2, "round_rects": 0, "lines": 0, "polylines": 0, "polygons": 0, "arcs": 0, "elliptical_arcs": 0, "pies": 0, "ellipses": 0, "beziers": 0, "images": 0, "text_frames": 0, "labels": 0, "parameters": 1, "ieee_symbols": 0},
             {"pins": 0, "rectangles": 1, "round_rects": 0, "lines": 0, "polylines": 0, "polygons": 0, "arcs": 1, "elliptical_arcs": 0, "pies": 0, "ellipses": 0, "beziers": 0, "images": 0, "text_frames": 0, "labels": 0, "parameters": 1, "ieee_symbols": 0},
             {"pins": 1, "rectangles": 0, "round_rects": 0, "lines": 0, "polylines": 0, "polygons": 0, "arcs": 0, "elliptical_arcs": 0, "pies": 0, "ellipses": 0, "beziers": 0, "images": 0, "text_frames": 0, "labels": 0, "parameters": 1, "ieee_symbols": 0},
             {"pins": 0, "rectangles": 0, "round_rects": 0, "lines": 0, "polylines": 0, "polygons": 0, "arcs": 0, "elliptical_arcs": 0, "pies": 0, "ellipses": 0, "beziers": 0, "images": 1, "text_frames": 0, "labels": 0, "parameters": 1, "ieee_symbols": 0},
@@ -56,8 +57,8 @@
             {"pins": 3, "rectangles": 0, "round_rects": 0, "lines": 0, "polylines": 0, "polygons": 0, "arcs": 0, "elliptical_arcs": 0, "pies": 0, "ellipses": 0, "beziers": 0, "images": 0, "text_frames": 0, "labels": 0, "parameters": 1, "ieee_symbols": 0},
             {"pins": 0, "rectangles": 0, "round_rects": 0, "lines": 0, "polylines": 0, "polygons": 0, "arcs": 0, "elliptical_arcs": 0, "pies": 0, "ellipses": 0, "beziers": 0, "images": 0, "text_frames": 0, "labels": 4, "parameters": 3, "ieee_symbols": 0},
             {"pins": 0, "rectangles": 0, "round_rects": 1, "lines": 1, "polylines": 1, "polygons": 1, "arcs": 1, "elliptical_arcs": 0, "pies": 1, "ellipses": 1, "beziers": 1, "images": 0, "text_frames": 0, "labels": 1, "parameters": 1, "ieee_symbols": 0},
-            {"pins": 0, "rectangles": 1, "round_rects": 0, "lines": 0, "polylines": 0, "polygons": 0, "arcs": 0, "elliptical_arcs": 0, "pies": 0, "ellipses": 0, "beziers": 0, "images": 0, "text_frames": 0, "labels": 0, "parameters": 1, "ieee_symbols": 0},
-            {"pins": 0, "rectangles": 2, "round_rects": 0, "lines": 2, "polylines": 0, "polygons": 1, "arcs": 0, "elliptical_arcs": 0, "pies": 0, "ellipses": 1, "beziers": 0, "images": 0, "text_frames": 0, "labels": 0, "parameters": 1, "ieee_symbols": 0},
+            {"pins": 1, "rectangles": 1, "round_rects": 0, "lines": 0, "polylines": 0, "polygons": 0, "arcs": 0, "elliptical_arcs": 0, "pies": 0, "ellipses": 0, "beziers": 0, "images": 0, "text_frames": 0, "labels": 0, "parameters": 1, "ieee_symbols": 0},
+            {"pins": 0, "rectangles": 3, "round_rects": 0, "lines": 2, "polylines": 0, "polygons": 1, "arcs": 0, "elliptical_arcs": 0, "pies": 0, "ellipses": 1, "beziers": 0, "images": 0, "text_frames": 0, "labels": 0, "parameters": 1, "ieee_symbols": 0},
             {"pins": 3, "rectangles": 0, "round_rects": 0, "lines": 0, "polylines": 0, "polygons": 0, "arcs": 0, "elliptical_arcs": 0, "pies": 0, "ellipses": 0, "beziers": 0, "images": 0, "text_frames": 0, "labels": 0, "parameters": 1, "ieee_symbols": 0},
             {"pins": 4, "rectangles": 0, "round_rects": 0, "lines": 0, "polylines": 0, "polygons": 0, "arcs": 0, "elliptical_arcs": 0, "pies": 0, "ellipses": 0, "beziers": 0, "images": 0, "text_frames": 0, "labels": 0, "parameters": 1, "ieee_symbols": 0},
             {"pins": 0, "rectangles": 0, "round_rects": 0, "lines": 0, "polylines": 0, "polygons": 0, "arcs": 0, "elliptical_arcs": 0, "pies": 0, "ellipses": 0, "beziers": 0, "images": 0, "text_frames": 0, "labels": 0, "parameters": 2, "ieee_symbols": 0},

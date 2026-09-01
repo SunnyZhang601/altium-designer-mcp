@@ -42,11 +42,11 @@ fn samples_pcblib_pad_shapes() {
 
     // Twelve per-primitive-family footprints plus the coverage-enrichment ones
     // (TEXT_STYLE, REGION_CUTOUT, TEXT_SPECIAL, MULTILAYER, EMBSTEP, PRIMPROPS,
-    // and batch 5's STEP_REF, MECH20, TEXT_WIDE_ONLY).
+    // batch 5's STEP_REF, MECH20, TEXT_WIDE_ONLY, and BODYPREC).
     // Note: PAD_THERMAL remains a documented negative — the thermal-relief /
     // power-plane setters crash AD24's scripting engine on a fresh library pad in
     // every sequence tried (batch 4b final bisect); see GenerateSamples.pas.
-    assert_eq!(lib.len(), 25, "expected exactly twenty-five footprints");
+    assert_eq!(lib.len(), 26, "expected exactly twenty-six footprints");
     let names = lib.names();
     for expected in [
         "PAD_SHAPES",
@@ -1396,10 +1396,10 @@ fn samples_pcblib_text_special() {
     );
 
     // Inverted TrueType: authored Inverted + UseInvertedRectangle +
-    // InvertedTTTextBorder = 10 mil. The rectangle dimensions themselves were
-    // auto-computed by Altium on save (not authored), so only the border is
-    // asserted exactly; the width/height must simply be present (Some) since
-    // UseInvertedRectangle is set.
+    // InvertedTTTextBorder = 10 mil, with an EXPLICIT 120 x 70 mil rectangle.
+    // The size used to be left to Altium, but AD computes it lazily from the
+    // rendered text extent and a headless save can catch it at 0 (the
+    // 2026-09-01 regeneration did) — so the generator authors it.
     let inv = by_content("INV");
     assert_eq!(inv.kind, TextKind::TrueType, "INV kind is TrueType");
     assert!(inv.is_inverted, "INV is inverted (knockout)");
@@ -1410,25 +1410,22 @@ fn samples_pcblib_text_special() {
         "INV inverted_border: expected 10 mil = 0.254 mm, got {:?}",
         inv.inverted_border,
     );
-    // The auto-computed on-disk values (fixture ground truth): width 1,040,750
-    // internal units = 104.075 mil = 2.643505 mm; height 584,375 units =
-    // 58.4375 mil = 1.4843125 mm.
     assert!(
         approx_eq(
             inv.inverted_rect_width.expect("INV has a rect width"),
-            2.643_505,
-            1e-5
+            3.048,
+            1e-6
         ),
-        "INV inverted_rect_width: got {:?}",
+        "INV inverted_rect_width: expected 120 mil = 3.048 mm, got {:?}",
         inv.inverted_rect_width,
     );
     assert!(
         approx_eq(
             inv.inverted_rect_height.expect("INV has a rect height"),
-            1.484_312_5,
-            1e-5
+            1.778,
+            1e-6
         ),
-        "INV inverted_rect_height: got {:?}",
+        "INV inverted_rect_height: expected 70 mil = 1.778 mm, got {:?}",
         inv.inverted_rect_height,
     );
     assert_eq!(
@@ -2281,4 +2278,54 @@ fn manual_pipe_fixture_shows_altium_cuts_pcb_text_at_the_pipe() {
     let fp = lib.get("PIPEFP").expect("footprint PIPEFP not found");
     assert_eq!(fp.description, "A");
     assert_eq!(fp.regions[0].name, "R");
+}
+
+/// BODYPREC: an extruded body whose outline was authored OFF-GRID by raw
+/// internal units (1 unit = 0.0001 mil) — `MilsToCoord(-50) + 1` and friends.
+/// AD24 keeps the exact units through its save, so this golden pins the
+/// reader's full outline precision: each coordinate converts back to the
+/// authored unit count exactly, with no rounding to a coarser grid.
+#[test]
+fn samples_pcblib_bodyprec() {
+    let lib = PcbLib::open(sample("footprints.PcbLib")).expect("failed to open footprints.PcbLib");
+    let footprint = lib.get("BODYPREC").expect("footprint BODYPREC not found");
+    assert_eq!(footprint.component_bodies.len(), 1, "BODYPREC has one body");
+
+    let body = &footprint.component_bodies[0];
+    assert_eq!(body.outline.len(), 4, "outline is a 4-vertex box");
+
+    // The authored vertices in internal units (10_000 units = 1 mil; one unit
+    // is 2.54e-6 mm). Altium re-anchors the contour cycle, so match as a set.
+    let authored: [(i64, i64); 4] = [
+        (-499_999, -249_997),
+        (500_007, -250_001),
+        (499_997, 250_009),
+        (-500_009, 249_993),
+    ];
+    // A rounded ±0.5 mm coordinate is far inside i64 range.
+    #[allow(clippy::cast_possible_truncation)]
+    let mut read_units: Vec<(i64, i64)> = body
+        .outline
+        .iter()
+        .map(|&(x, y)| ((x / 2.54e-6).round() as i64, (y / 2.54e-6).round() as i64))
+        .collect();
+    read_units.sort_unstable();
+    let mut expected = authored.to_vec();
+    expected.sort_unstable();
+    assert_eq!(
+        read_units, expected,
+        "every off-grid outline unit survives exactly (got {:?})",
+        body.outline
+    );
+
+    // And the conversion itself is sub-unit accurate: no coordinate is off by
+    // more than a billionth of a millimetre from its unit-exact position.
+    for &(x, y) in &body.outline {
+        let xu = (x / 2.54e-6).round() * 2.54e-6;
+        let yu = (y / 2.54e-6).round() * 2.54e-6;
+        assert!(
+            (x - xu).abs() < 1e-9 && (y - yu).abs() < 1e-9,
+            "outline point ({x}, {y}) sits on an exact unit"
+        );
+    }
 }

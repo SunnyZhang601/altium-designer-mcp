@@ -306,6 +306,33 @@ begin
                                   PCBM_BoardRegisteration, Body.I_ObjectAddress);
 end;
 
+{ Extruded body whose outline is OFF-GRID by raw internal units (1 unit =
+  0.0001 mil): AD24 keeps the exact units through save (2026-09-01 enrich
+  probe), so the golden pins the reader's full outline precision. Same proven
+  contour route as AddExtrudedBox. }
+procedure AddExtrudedBoxOffGrid(Comp : IPCB_LibComponent);
+var
+    Body : IPCB_ComponentBody;
+    Cont : IPCB_Contour;
+begin
+    Body := PCBServer.PCBObjectFactory(eComponentBodyObject, eNoDimension, eCreate_Default);
+    if Body = nil then Exit;
+    Body.BodyProjection := eBoardSide_Top;
+    Body.Layer          := LayerUtils.MechanicalLayer(13);
+    Body.StandoffHeight := 0;
+    Body.OverallHeight  := MilsToCoord(40);
+    Cont := Body.MainContour.Replicate;
+    Cont.Count := 4;
+    Cont.X[1] := MilsToCoord(-50) + 1;   Cont.Y[1] := MilsToCoord(-25) + 3;
+    Cont.X[2] := MilsToCoord(50) + 7;    Cont.Y[2] := MilsToCoord(-25) - 1;
+    Cont.X[3] := MilsToCoord(50) - 3;    Cont.Y[3] := MilsToCoord(25) + 9;
+    Cont.X[4] := MilsToCoord(-50) - 9;   Cont.Y[4] := MilsToCoord(25) - 7;
+    Body.SetOutlineContour(Cont);
+    Comp.AddPCBObject(Body);
+    PCBServer.SendMessageToRobots(Comp.I_ObjectAddress, c_Broadcast,
+                                  PCBM_BoardRegisteration, Body.I_ObjectAddress);
+end;
+
 { ==== PcbLib COVERAGE-ENRICHMENT HELPERS (verified AD24 names) ============== }
 
 { SMD pad on an explicit layer (batch 5): the only pad helper whose layer is a
@@ -636,6 +663,11 @@ begin
     Txt.Inverted   := True;
     Txt.UseInvertedRectangle := True;
     Txt.InvertedTTTextBorder := MilsToCoord(10);
+    { Explicit inverted-rect size. AD computes it lazily from the rendered
+      text extent, so a headless save can catch it at 0 (the 2026-09-01
+      regeneration did) — author it deterministically instead. }
+    Txt.InvRectWidth  := MilsToCoord(120);
+    Txt.InvRectHeight := MilsToCoord(70);
     Comp.AddPCBObject(Txt);
     PCBServer.SendMessageToRobots(Comp.I_ObjectAddress, c_Broadcast,
                                   PCBM_BoardRegisteration, Txt.I_ObjectAddress);
@@ -1536,6 +1568,19 @@ begin
     except
     end;
 
+    // BODYPREC: an extruded body whose outline is off-grid by raw internal
+    // units, pinning the reader's full outline precision against AD24's own
+    // save (enrich probe, 2026-09-01).
+    try
+        Comp := PCBServer.CreatePCBLibComp;
+        Comp.Name := 'BODYPREC';
+        Lib.RegisterComponent(Comp);
+        PCBServer.PreProcess;
+        AddExtrudedBoxOffGrid(Comp);
+        PCBServer.PostProcess;
+    except
+    end;
+
     // NOTE: a PAD_ROUNDED footprint using CRPercentage[eTopLayer] was tried but the
     // indexed corner-radius setter on a freshly-created Simple pad causes a native
     // ACCESS VIOLATION in ScriptingSystem.DLL (runtime, not compile — escapes
@@ -2002,6 +2047,82 @@ begin
     R.IsSolid              := True;
     R.OwnerPartId          := 1;
     R.OwnerPartDisplayMode := Mode;
+    Comp.AddSchObject(R);
+    SchServer.RobotManager.SendMessage(Comp.I_ObjectAddress, c_BroadCast,
+                                       SCHM_PrimitiveRegistration, R.I_ObjectAddress);
+end;
+
+{ Pin assigned to an EXPLICIT display mode (for the DisplayModeCount=2
+  symbol): the pin RECORD's own alternate-view byte, which stayed
+  self-round-trip only until authored here. ISch_Pin.OwnerPartDisplayMode is
+  the same proven member AddPin sets on every pin; the non-default VALUE is
+  what the 2026-09-01 enrich probe settled (persists as byte 1 in the saved
+  pin record). }
+procedure AddPinMode(Comp : ISch_Component; Y : Integer; Desig : String;
+                     Nm : String; Mode : Integer);
+var
+    Pin : ISch_Pin;
+begin
+    Pin := SchServer.SchObjectFactory(ePin, eCreate_Default);
+    if Pin = nil then Exit;
+    Pin.Location             := Point(MilsToCoord(0), MilsToCoord(Y));
+    Pin.Orientation          := eRotate180;
+    Pin.PinLength            := MilsToCoord(200);
+    Pin.Electrical           := eElectricPassive;
+    Pin.Designator           := Desig;
+    Pin.Name                 := Nm;
+    Pin.ShowDesignator       := True;
+    Pin.ShowName             := True;
+    Pin.OwnerPartId          := 1;
+    Pin.OwnerPartDisplayMode := Mode;
+    Comp.AddSchObject(Pin);
+    SchServer.RobotManager.SendMessage(Comp.I_ObjectAddress, c_BroadCast,
+                                       SCHM_PrimitiveRegistration, Pin.I_ObjectAddress);
+end;
+
+{ Graphically locked pin. ISch_Pin.GraphicallyLocked proven by the 2026-09-01
+  enrich probe; persists as flag bit 0x40 in the saved pin record. }
+procedure AddPinLocked(Comp : ISch_Component; Y : Integer; Desig : String;
+                       Nm : String);
+var
+    Pin : ISch_Pin;
+begin
+    Pin := SchServer.SchObjectFactory(ePin, eCreate_Default);
+    if Pin = nil then Exit;
+    Pin.Location             := Point(MilsToCoord(0), MilsToCoord(Y));
+    Pin.Orientation          := eRotate180;
+    Pin.PinLength            := MilsToCoord(200);
+    Pin.Electrical           := eElectricPassive;
+    Pin.Designator           := Desig;
+    Pin.Name                 := Nm;
+    Pin.ShowDesignator       := True;
+    Pin.ShowName             := True;
+    Pin.OwnerPartId          := 1;
+    Pin.OwnerPartDisplayMode := Comp.DisplayMode;
+    Pin.GraphicallyLocked    := True;
+    Comp.AddSchObject(Pin);
+    SchServer.RobotManager.SendMessage(Comp.I_ObjectAddress, c_BroadCast,
+                                       SCHM_PrimitiveRegistration, Pin.I_ObjectAddress);
+end;
+
+{ Rectangle with an explicit LineStyle. Persists as `LineStyleExt` placed
+  between Corner.Y and LineWidth (2026-09-01 enrich probe) — unlike the
+  round-rect, which accepts the property and drops the key. }
+procedure AddRectStyled(Comp : ISch_Component; X1 : Integer; Y1 : Integer;
+                        X2 : Integer; Y2 : Integer; Style : TLineStyle);
+var R : ISch_Rectangle;
+begin
+    R := SchServer.SchObjectFactory(eRectangle, eCreate_Default);
+    if R = nil then Exit;
+    R.Location             := Point(MilsToCoord(X1), MilsToCoord(Y1));
+    R.Corner               := Point(MilsToCoord(X2), MilsToCoord(Y2));
+    R.LineWidth            := eSmall;
+    R.LineStyle            := Style;
+    R.Color                := $000000;
+    R.AreaColor            := $B0FFFF;
+    R.IsSolid              := False;
+    R.OwnerPartId          := 1;
+    R.OwnerPartDisplayMode := Comp.DisplayMode;
     Comp.AddSchObject(R);
     SchServer.RobotManager.SendMessage(Comp.I_ObjectAddress, c_BroadCast,
                                        SCHM_PrimitiveRegistration, R.I_ObjectAddress);
@@ -3245,6 +3366,7 @@ begin
             AddRectTransparent(Comp, -100, 50, 100, 100);            { transparent rect }
             AddPolygonTransparent(Comp, -50, 120, 50, 170);          { transparent polygon }
             AddEllipseTransparent(Comp, 150, 100, 30, 20);           { transparent ellipse }
+            AddRectStyled(Comp, 150, -100, 250, -50, eLineStyleDashed); { dashed rectangle - LineStyleExt }
             { RoundRect Transparent is NOT persisted by Altium on a lib round-rect
               (reads back False), so it is not authored here — honest coverage only. }
         end;
@@ -3256,7 +3378,10 @@ begin
     try
         Comp := NewSymbol(Lib, 'LOCKFLAGS', 'Graphically locked / disabled / dimmed shape', 1);
         if Comp <> nil then
+        begin
             AddRectFlagged(Comp, -100, -50, 100, 50);
+            AddPinLocked(Comp, -150, '1', 'LK');
+        end;
     except
     end;
 
@@ -3364,6 +3489,8 @@ begin
             Comp.DisplayModeCount := 2;
             AddRectMode(Comp, -50, -25, 50, 25, 0);   { normal mode }
             AddRectMode(Comp, -60, -30, 60, 30, 1);   { first alternate (de-Morgan) mode }
+            AddPinMode(Comp, -100, '1', 'M0', 0);     { normal-mode pin }
+            AddPinMode(Comp, -200, '2', 'M1', 1);     { alternate-mode pin: the pin-record byte }
         end;
     except
     end;

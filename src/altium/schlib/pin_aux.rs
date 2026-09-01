@@ -508,4 +508,13 @@ mod tests {
         assert_eq!(pins[0].frac, None);
         assert_eq!(pins[0].symbol_line_width, 0);
     }
+    /// A wide-text entry whose index names no pin is ignored: a damaged
+    /// aux stream must not touch the pins it cannot address.
+    #[test]
+    fn a_wide_text_entry_with_an_out_of_range_index_is_ignored() {
+        let mut pins = vec![pin()];
+        let raw = aux_stream(&[(7, encode_unicode_param_block("|NAME=GHOST"))]);
+        apply_pin_wide_text(&mut pins, &raw);
+        assert_eq!(pins[0].name, "A", "the one real pin stays untouched");
+    }
 }

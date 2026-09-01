@@ -348,6 +348,48 @@ pub fn encode_data_stream(footprint: &Footprint) -> crate::altium::error::Altium
         "footprint.name",
     )?;
 
+    // A font face name past 31 UTF-16 units cannot fit the text record's
+    // 64-byte field beside its terminator; refuse it here rather than write
+    // it cut short. (The MCP layer refuses earlier with its own wording —
+    // this covers direct library-API callers.)
+    for (index, text) in footprint.text.iter().enumerate() {
+        for (field, name) in [
+            ("font_name", &text.font_name),
+            ("barcode_font_name", &text.barcode_font_name),
+        ] {
+            let units = name.encode_utf16().count();
+            if units > 31 {
+                return Err(crate::altium::error::AltiumError::InvalidParameter {
+                    name: format!("text[{index}].{field}"),
+                    message: format!(
+                        "'{name}' is {units} UTF-16 units long; a font face name has at most 31"
+                    ),
+                });
+            }
+        }
+    }
+
+    // A rounded rectangle's rounding lives in per-layer corner-radius bytes,
+    // which only a full stack's size/shape block stores. A top_middle_bottom
+    // slot would be written as shape id 1 and read back plain round, so it is
+    // refused rather than degraded in silence.
+    for (index, pad) in footprint.pads.iter().enumerate() {
+        if pad.stack_mode == PadStackMode::TopMiddleBottom {
+            if let Some(shapes) = &pad.per_layer_shapes {
+                if shapes.contains(&PadShape::RoundedRectangle) {
+                    return Err(crate::altium::error::AltiumError::InvalidParameter {
+                        name: format!("pads[{index}].per_layer_shapes"),
+                        message: format!(
+                            "pad '{}': rounded_rectangle needs a per-layer corner radius, \
+                             which only a full_stack pad stores",
+                            pad.designator
+                        ),
+                    });
+                }
+            }
+        }
+    }
+
     // Primitives go out in the footprint's own order, which is Altium's
     // authoring order for anything read from a file (see
     // `Footprint::primitive_order`) and the canonical kind order otherwise.
@@ -4394,5 +4436,52 @@ mod tests {
         let text = err.to_string();
         assert!(text.contains("footprint.name"), "{text}");
         assert!(text.contains("exceeds maximum of 255 bytes"), "{text}");
+    }
+    /// A font face name past 31 UTF-16 units is refused by the writer — the
+    /// record's 64-byte field holds no more beside its terminator — rather
+    /// than written cut short.
+    #[test]
+    fn encode_data_stream_refuses_a_font_face_name_past_31_units() {
+        let with = |field: fn(&mut Text, String), name: String| {
+            let mut footprint = Footprint::new("F");
+            let mut text = Text::new(0.0, 0.0, "T", 1.0, Layer::TopOverlay);
+            field(&mut text, name);
+            footprint.add_text(text);
+            encode_data_stream(&footprint)
+        };
+        let longest = "F".repeat(31);
+        assert!(with(|t, n| t.font_name = n, longest.clone()).is_ok());
+        assert!(with(|t, n| t.barcode_font_name = n, longest).is_ok());
+
+        let err = with(|t, n| t.font_name = n, "F".repeat(32)).unwrap_err();
+        let text = err.to_string();
+        assert!(text.contains("text[0].font_name"), "{text}");
+        assert!(text.contains("32 UTF-16 units"), "{text}");
+        let err = with(|t, n| t.barcode_font_name = n, "\u{1F600}".repeat(16)).unwrap_err();
+        assert!(
+            err.to_string().contains("text[0].barcode_font_name"),
+            "{err}"
+        );
+    }
+
+    /// A `top_middle_bottom` stack cannot hold a per-layer rounded
+    /// rectangle — the main block has no per-layer radius bytes — so the
+    /// writer refuses it rather than storing plain round.
+    #[test]
+    fn encode_data_stream_refuses_rounded_rectangle_in_a_tmb_stack() {
+        let mut footprint = Footprint::new("TMB");
+        let mut pad = Pad::through_hole("7", 0.0, 0.0, 1.6, 1.6, 0.8);
+        pad.stack_mode = PadStackMode::TopMiddleBottom;
+        pad.per_layer_shapes = Some(vec![
+            PadShape::Round,
+            PadShape::RoundedRectangle,
+            PadShape::Rectangle,
+        ]);
+        footprint.add_pad(pad);
+        let err = encode_data_stream(&footprint).expect_err("TMB rounded_rectangle");
+        let text = err.to_string();
+        assert!(text.contains("pads[0].per_layer_shapes"), "{text}");
+        assert!(text.contains("pad '7'"), "{text}");
+        assert!(text.contains("full_stack"), "{text}");
     }
 }

@@ -27,8 +27,10 @@ file is** — and differs only in where that pair is written down.
    altium-designer-mcp --version
    ```
 
-The server speaks MCP over **stdio** and takes the config path as its **single argument**.
-Throughout this page:
+The server speaks MCP over **stdio**. Point it at your config file with its single
+positional argument — or skip the file entirely and grant folders directly with
+`--allow <DIR>` (repeatable; every other setting then takes its default). Throughout
+this page:
 
 | Placeholder | Linux / macOS example | Windows example (as written in JSON) |
 |-------------|-----------------------|--------------------------------------|
@@ -106,6 +108,19 @@ its 34 tools. See [`USAGE.md`](USAGE.md) for worked examples.
 ## Claude Desktop
 
 macOS and Windows only (there is no Linux build of Claude Desktop).
+
+**One-click extension (recommended):** download `altium-designer-mcp.mcpb` from the
+[latest release](https://github.com/embedded-society/altium-designer-mcp/releases/latest)
+— on an older Claude Desktop build that does not accept it, take the identical bundle
+under the format's old name, `altium-designer-mcp.dxt`. Then Settings → **Extensions** →
+**Advanced settings** → **Install Extension…**, pick the file, and choose your library
+folders when prompted. That folder list is the `allowed_paths` security boundary, so
+keep it narrow. No binary to place, no config file, no JSON: one bundle carries the
+server for macOS, Windows and Linux, and the picked folders reach it as `--allow`
+grants. (The extension route follows the pattern of
+[coffeenmusic/altium-mcp](https://github.com/coffeenmusic/altium-mcp).)
+
+**Manual config** — wiring the binary by hand instead:
 
 1. Claude menu → **Settings…** → **Developer** → **Edit Config**. This opens (or creates)
    - macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`

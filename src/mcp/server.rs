@@ -109,11 +109,12 @@ pub struct InitializeParams {
 }
 
 /// The MCP tool annotations: hints a client shows and reasons with before it
-/// runs a tool. `read_only_hint` and `destructive_hint` follow the same
-/// classification the rate limiter and the audit log use (`is_mutating_tool`),
-/// so a client is told exactly which tools change files; `open_world_hint` is
-/// `false` for every tool, since each one touches only the library files it is
-/// given.
+/// runs a tool.
+///
+/// `read_only_hint` and `destructive_hint` follow the same classification the
+/// rate limiter and the audit log use (`is_mutating_tool`), so a client is told
+/// exactly which tools change files; `open_world_hint` is `false` for every
+/// tool, since each one touches only the library files it is given.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct ToolAnnotations {

@@ -20,9 +20,10 @@ We take security seriously — particularly around file system access and input 
 
 | Version | Supported              |
 | ------- | ---------------------- |
-| 0.x.x   | Yes (development) |
+| 1.x.x   | Yes                    |
+| 0.x.x   | No — upgrade to 1.x    |
 
-Once we reach v1.0, we will maintain security updates for the current major version and one previous major version.
+We maintain security updates for the current major version and, once there is one, the previous major version. The 0.x pre-releases are not supported.
 
 ## Reporting a Vulnerability
 
@@ -104,4 +105,4 @@ We thank the security researchers and community members who help keep this proje
 
 ---
 
-*This security policy was last updated on 2026-01-17.*
+*This security policy was last updated on 2026-09-02.*

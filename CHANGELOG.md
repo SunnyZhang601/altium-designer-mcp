@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-09-02
+
+The first stable release. `altium-designer-mcp` reads and writes Altium Designer
+`.PcbLib` and `.SchLib` libraries the way Altium does: every record layout is
+verified against libraries authored by Altium Designer 24 and opened there again,
+and a library read and written back comes out byte-identical. It exposes 34 tools
+over MCP, wires into every MCP client we know of, and installs into Claude Desktop
+with one click. From here on the tool interface — argument names, accepted values
+and result shapes — follows semantic versioning: a change that breaks a caller
+means a new major version.
+
 ### Added
 
 - **Claude Desktop one-click extension.** Every release now ships

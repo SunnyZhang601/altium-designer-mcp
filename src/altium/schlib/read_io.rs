@@ -487,4 +487,100 @@ mod tests {
         let err = SchLib::open(&path).expect_err("a headerless library must be refused");
         assert!(err.to_string().contains("FileHeader"), "{err}");
     }
+    /// A component whose Data stream is missing is skipped with a warning;
+    /// the rest of the library still reads.
+    #[test]
+    fn a_component_without_a_data_stream_is_skipped_and_the_rest_kept() {
+        let dir = temp_dir();
+        let path = dir.path().join("Damaged.SchLib");
+        library_with(
+            &path,
+            &header_block(
+                "|HEADER=Protel for Windows - Schematic Library Editor Binary File Version 5.0",
+            ),
+            &["GOOD", "BROKEN"],
+        );
+        {
+            let mut compound = cfb::open_rw(&path).expect("reopen compound");
+            compound
+                .remove_stream("/BROKEN/Data")
+                .expect("remove the component's Data stream");
+        }
+        let lib = SchLib::open(&path).expect("the library still opens");
+        assert!(lib.get("GOOD").is_some(), "the intact symbol is kept");
+        assert!(lib.get("BROKEN").is_none(), "the damaged one is skipped");
+    }
+
+    /// When /Storage holds fewer payloads than the symbols have embedded
+    /// images, attachment stops at the shortage instead of failing the read:
+    /// the images past it simply carry no bytes.
+    #[test]
+    fn embedded_images_past_the_storage_payloads_carry_no_bytes() {
+        use crate::altium::schlib::primitives::Image;
+        use crate::altium::schlib::{SchLib as Lib, Symbol};
+        use std::io::{Cursor, Read as _};
+
+        let write_lib = |image_count: usize| -> Vec<u8> {
+            let mut symbol = Symbol::new("IMGS");
+            for i in 0..image_count {
+                let mut image = Image::new(
+                    0,
+                    i32::try_from(i).unwrap() * 20,
+                    10,
+                    10,
+                    format!("i{i}.bmp"),
+                );
+                image.embed_image = true;
+                image.image_data = Some(vec![0x42; 8]);
+                symbol.add_image(image);
+            }
+            let mut lib = Lib::new();
+            lib.add(symbol);
+            let mut buffer = Cursor::new(Vec::new());
+            lib.write(&mut buffer).expect("write");
+            buffer.into_inner()
+        };
+
+        let two_images = write_lib(2);
+        let one_image = write_lib(1);
+
+        // Swap the two-image library's /Storage for the one-image library's,
+        // so the payload count falls short of the image count.
+        let short_storage = {
+            let mut donor = cfb::CompoundFile::open(Cursor::new(one_image)).expect("open donor");
+            let mut bytes = Vec::new();
+            donor
+                .open_stream("/Storage")
+                .expect("donor /Storage")
+                .read_to_end(&mut bytes)
+                .expect("read donor /Storage");
+            bytes
+        };
+        let doctored = {
+            let mut compound =
+                cfb::CompoundFile::open(Cursor::new(two_images)).expect("open target");
+            compound.remove_stream("/Storage").expect("drop /Storage");
+            {
+                let mut stream = compound
+                    .create_stream("/Storage")
+                    .expect("recreate /Storage");
+                std::io::Write::write_all(&mut stream, &short_storage)
+                    .expect("write short /Storage");
+            }
+            compound.flush().expect("flush");
+            compound.into_inner().into_inner()
+        };
+
+        let lib = SchLib::read(Cursor::new(doctored)).expect("the library still reads");
+        let symbol = lib.get("IMGS").expect("symbol");
+        assert_eq!(symbol.images.len(), 2, "both image records survive");
+        assert!(
+            symbol.images[0].image_data.is_some(),
+            "the available payload attaches"
+        );
+        assert!(
+            symbol.images[1].image_data.is_none(),
+            "the image past the shortage carries no bytes"
+        );
+    }
 }

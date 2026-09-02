@@ -2530,4 +2530,39 @@ mod tests {
         assert!(symbol.parameters.is_empty());
         assert!(symbol.primitive_order.is_empty());
     }
+    /// A storage entry's 3-byte length field caps an embedded image at
+    /// 16 MB compressed; a bigger one is refused with the entry named, not
+    /// written wrapped.
+    #[test]
+    fn an_embedded_image_too_large_for_a_storage_entry_is_refused() {
+        // Incompressible pseudo-random bytes, so the compressed block stays
+        // over the cap.
+        let mut state = 0x9E37_79B9_7F4A_7C15_u64;
+        let payload: Vec<u8> = (0..17 * 1024 * 1024)
+            .map(|_| {
+                state = state
+                    .wrapping_mul(6_364_136_223_846_793_005)
+                    .wrapping_add(1);
+                #[allow(clippy::cast_possible_truncation)] // deliberate byte take
+                {
+                    (state >> 33) as u8
+                }
+            })
+            .collect();
+
+        let mut symbol = Symbol::new("HUGE_IMAGE");
+        let mut image = Image::new(0, 0, 10, 10, "huge.bmp");
+        image.embed_image = true;
+        image.image_data = Some(payload);
+        symbol.add_image(image);
+        let mut lib = SchLib::new();
+        lib.add(symbol);
+
+        let err = lib
+            .write(&mut Cursor::new(Vec::new()))
+            .expect_err("a 17 MB incompressible entry must be refused");
+        let text = err.to_string();
+        assert!(text.contains("too large"), "{text}");
+        assert!(text.contains("huge.bmp"), "{text}");
+    }
 }

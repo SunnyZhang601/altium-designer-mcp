@@ -1175,4 +1175,51 @@ mod tests {
         .unwrap();
         assert_eq!(label.color, 0, "absent label Color must read as black");
     }
+    /// A binary pin record shorter than its 20-byte fixed head is no pin.
+    #[test]
+    fn a_binary_pin_record_shorter_than_its_fixed_head_is_refused() {
+        assert!(parse_binary_pin(&[0u8; 19]).is_none());
+    }
+
+    /// A polygon needs at least three vertices; fewer is no polygon.
+    #[test]
+    fn a_polygon_with_fewer_than_three_vertices_is_refused() {
+        let props = HashMap::from([
+            ("locationcount".to_string(), "2".to_string()),
+            ("x1".to_string(), "0".to_string()),
+            ("y1".to_string(), "0".to_string()),
+            ("x2".to_string(), "5".to_string()),
+            ("y2".to_string(), "5".to_string()),
+        ]);
+        assert!(parse_polygon(&props).is_none());
+    }
+
+    /// An ellipse without `SecondaryRadius` is a circle: the secondary radius
+    /// defaults to the primary, as Altium omits the key for circles.
+    #[test]
+    fn an_ellipse_without_a_secondary_radius_reads_as_a_circle() {
+        let props = HashMap::from([("radius".to_string(), "5".to_string())]);
+        let ellipse = parse_ellipse(&props).expect("a radius-only ellipse parses");
+        assert!((ellipse.radius_x - 5.0).abs() < f64::EPSILON);
+        assert!((ellipse.radius_y - 5.0).abs() < f64::EPSILON);
+    }
+
+    /// An elliptical arc without `SecondaryRadius` is circular: the secondary
+    /// radius defaults to the primary.
+    #[test]
+    fn an_elliptical_arc_without_a_secondary_radius_reads_as_circular() {
+        let props = HashMap::from([("radius".to_string(), "4".to_string())]);
+        let arc = parse_elliptical_arc(&props).expect("a radius-only arc parses");
+        assert!((arc.radius - 4.0).abs() < f64::EPSILON);
+        assert!((arc.secondary_radius - 4.0).abs() < f64::EPSILON);
+    }
+
+    /// An IEEE symbol without `ScaleFactor` takes Altium's 10-unit default.
+    #[test]
+    fn an_ieee_symbol_without_a_scale_factor_takes_the_default() {
+        let props = HashMap::from([("symbol".to_string(), "3".to_string())]);
+        let symbol = parse_ieee_symbol(&props).expect("a minimal IEEE symbol parses");
+        assert_eq!(symbol.symbol, 3);
+        assert!((symbol.scale_factor - 10.0).abs() < f64::EPSILON);
+    }
 }

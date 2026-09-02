@@ -3960,4 +3960,99 @@ mod tests {
             "rotated pads span 2.0mm in y and must collide"
         );
     }
+    /// A full-stack per-layer rounded rectangle survives the roundtrip: the
+    /// block stores shape id 1 with the layer's corner-radius byte carrying
+    /// the rounding, and the reader reconstructs the shape from the pair.
+    #[test]
+    fn per_layer_rounded_rectangle_shape_survives_a_full_stack_roundtrip() {
+        let mut lib = PcbLib::new();
+        let mut footprint = Footprint::new("RRECT_STACK");
+        let mut pad = Pad::through_hole("1", 0.0, 0.0, 1.6, 1.6, 0.8);
+        pad.stack_mode = PadStackMode::FullStack;
+        pad.per_layer_sizes = Some(vec![(1.6, 1.6); 32]);
+        let mut shapes = vec![PadShape::Round; 32];
+        shapes[5] = PadShape::RoundedRectangle;
+        pad.per_layer_shapes = Some(shapes);
+        let mut radii = vec![0u8; 32];
+        radii[5] = 40;
+        pad.per_layer_corner_radii = Some(radii);
+        footprint.add_pad(pad);
+        lib.add(footprint);
+
+        let mut buffer = std::io::Cursor::new(Vec::new());
+        lib.write(&mut buffer).expect("write");
+        buffer.set_position(0);
+        let read_lib = PcbLib::read(buffer).expect("read");
+        let pad = &read_lib.get("RRECT_STACK").expect("footprint").pads[0];
+        let shapes = pad.per_layer_shapes.as_deref().expect("shapes survive");
+        assert_eq!(shapes[5], PadShape::RoundedRectangle);
+        assert_eq!(shapes[4], PadShape::Round);
+        let radii = pad
+            .per_layer_corner_radii
+            .as_deref()
+            .expect("radii survive");
+        assert_eq!(radii[5], 40);
+    }
+
+    /// A unique id on a region, fill or component body travels through the
+    /// `UniqueIdPrimitiveInformation` streams and is re-attached on read.
+    #[test]
+    fn unique_ids_on_region_fill_and_body_survive_the_roundtrip() {
+        let mut lib = PcbLib::new();
+        let mut footprint = Footprint::new("UIDS");
+        let mut region = Region::rectangle(0.0, 0.0, 2.0, 1.0, Layer::TopLayer);
+        region.unique_id = Some("REGIONID".to_string());
+        footprint.add_region(region);
+        let mut fill = Fill::new(0.0, 0.0, 1.0, 1.0, Layer::TopLayer);
+        fill.unique_id = Some("FILLIDAA".to_string());
+        footprint.add_fill(fill);
+        let mut body = ComponentBody::new("", "");
+        body.unique_id = Some("BODYIDAA".to_string());
+        footprint.add_component_body(body);
+        lib.add(footprint);
+
+        let mut buffer = std::io::Cursor::new(Vec::new());
+        lib.write(&mut buffer).expect("write");
+        buffer.set_position(0);
+        let read_lib = PcbLib::read(buffer).expect("read");
+        let footprint = read_lib.get("UIDS").expect("footprint");
+        assert_eq!(footprint.regions[0].unique_id.as_deref(), Some("REGIONID"));
+        assert_eq!(footprint.fills[0].unique_id.as_deref(), Some("FILLIDAA"));
+        assert_eq!(
+            footprint.component_bodies[0].unique_id.as_deref(),
+            Some("BODYIDAA")
+        );
+    }
+
+    /// Coincident pads on a non-copper layer never short: copper merging is a
+    /// copper-layer phenomenon, so mechanical-layer overlap is not reported.
+    #[test]
+    fn overlapping_pads_on_a_non_copper_layer_do_not_short() {
+        let mut footprint = Footprint::new("MECH_OVERLAP");
+        for designator in ["1", "2"] {
+            let mut pad = Pad::smd(designator, 0.0, 0.0, 2.0, 2.0);
+            pad.layer = Layer::Mechanical13;
+            footprint.add_pad(pad);
+        }
+        assert!(
+            footprint.overlapping_pad_pairs().is_empty(),
+            "non-copper pads cannot short"
+        );
+    }
+
+    /// `reset_identities` on a via whose raw block is shorter than the
+    /// identity region leaves the block alone instead of slicing past it.
+    #[test]
+    fn reset_identities_tolerates_a_via_raw_block_shorter_than_291_bytes() {
+        let mut footprint = Footprint::new("SHORT_VIA");
+        let mut via = Via::new(0.0, 0.0, 0.6, 0.3);
+        via.raw_block = Some(vec![0xAA; 100]);
+        footprint.add_via(via);
+        footprint.reset_identities();
+        assert_eq!(
+            footprint.vias[0].raw_block.as_deref(),
+            Some(vec![0xAA; 100].as_slice()),
+            "a short raw block stays untouched"
+        );
+    }
 }

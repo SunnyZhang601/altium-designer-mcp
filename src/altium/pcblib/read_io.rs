@@ -1030,4 +1030,115 @@ mod tests {
             "a model whose stream is absent must not be invented"
         );
     }
+    /// A footprint whose Data stream is garbage still reads, keyed by its
+    /// storage name and carrying no primitives: the reader is deliberately
+    /// lenient with a damaged component so the rest of the library survives.
+    #[test]
+    fn a_footprint_with_garbage_data_is_kept_by_its_storage_name() {
+        use crate::altium::pcblib::{Footprint, PcbLib as Lib};
+        use std::io::{Cursor, Write as _};
+
+        let mut lib = Lib::new();
+        lib.add(Footprint::new("GOOD"));
+        lib.add(Footprint::new("BROKEN"));
+        let mut buffer = Cursor::new(Vec::new());
+        lib.write(&mut buffer).expect("write");
+
+        let doctored = {
+            let mut compound =
+                cfb::CompoundFile::open(Cursor::new(buffer.into_inner())).expect("open");
+            compound.remove_stream("/BROKEN/Data").expect("drop Data");
+            {
+                let mut stream = compound
+                    .create_stream("/BROKEN/Data")
+                    .expect("recreate Data");
+                // A name block whose length runs past the stream's end.
+                stream.write_all(&[0xFF, 0xFF, 0xFF, 0x00]).expect("write");
+            }
+            compound.flush().expect("flush");
+            compound.into_inner().into_inner()
+        };
+
+        let lib =
+            with_tracing(|| PcbLib::read(Cursor::new(doctored)).expect("the library still reads"));
+        assert!(lib.get("GOOD").is_some(), "the intact footprint is kept");
+        let broken = lib.get("BROKEN").expect("kept under its storage name");
+        assert!(
+            broken.pads.is_empty(),
+            "garbage yields no primitives, never phantom ones"
+        );
+    }
+
+    /// A component storage without a Data stream is not a footprint at all:
+    /// the library walk recognises components by that stream, so the husk is
+    /// passed over and the read still succeeds.
+    #[test]
+    fn a_storage_without_a_data_stream_is_not_read_as_a_footprint() {
+        use crate::altium::pcblib::{Footprint, PcbLib as Lib};
+        use std::io::Cursor;
+
+        let mut lib = Lib::new();
+        let mut footprint = Footprint::new("NODATA");
+        footprint.add_pad(crate::altium::pcblib::Pad::smd("1", 0.0, 0.0, 1.0, 1.0));
+        lib.add(footprint);
+        let mut buffer = Cursor::new(Vec::new());
+        lib.write(&mut buffer).expect("write");
+
+        let doctored = {
+            let mut compound =
+                cfb::CompoundFile::open(Cursor::new(buffer.into_inner())).expect("open");
+            compound.remove_stream("/NODATA/Data").expect("drop Data");
+            compound.flush().expect("flush");
+            compound.into_inner().into_inner()
+        };
+
+        let lib = PcbLib::read(Cursor::new(doctored)).expect("the library still reads");
+        assert!(
+            lib.get("NODATA").is_none(),
+            "a storage with no Data stream is not a component"
+        );
+    }
+
+    /// A `FileHeader` whose `UniqueId` length byte says zero yields no library
+    /// unique id — an empty id is absence, not an empty string.
+    #[test]
+    fn a_file_header_with_a_zero_length_unique_id_reads_as_none() {
+        use crate::altium::pcblib::{Footprint, PcbLib as Lib};
+        use std::io::{Cursor, Read as _, Seek as _, Write as _};
+
+        let mut lib = Lib::new();
+        lib.add(Footprint::new("F"));
+        let mut buffer = Cursor::new(Vec::new());
+        lib.write(&mut buffer).expect("write");
+
+        let doctored = {
+            let mut compound =
+                cfb::CompoundFile::open(Cursor::new(buffer.into_inner())).expect("open");
+            let mut header = Vec::new();
+            {
+                let mut stream = compound.open_stream("/FileHeader").expect("open header");
+                stream.read_to_end(&mut header).expect("read header");
+            }
+            // Layout: [block_len:4][str_len:1][version][f64:8][uid_len4:4?]
+            // — the unique-id block sits at 5 + str_len + 8 and starts with a
+            // 4-byte length, then its own 1-byte string length. Zero that.
+            let str_len = usize::from(header[4]);
+            let uid_len_at = 5 + str_len + 8 + 4;
+            assert_ne!(header[uid_len_at], 0, "the writer stamped a unique id");
+            header[uid_len_at] = 0;
+            {
+                let mut stream = compound.open_stream("/FileHeader").expect("reopen header");
+                stream.rewind().expect("rewind");
+                stream.write_all(&header).expect("write doctored header");
+            }
+            compound.flush().expect("flush");
+            compound.into_inner().into_inner()
+        };
+
+        let lib = PcbLib::read(Cursor::new(doctored)).expect("the library still reads");
+        assert!(
+            lib.metadata.unique_id.is_none(),
+            "a zero-length unique id reads as None"
+        );
+    }
 }

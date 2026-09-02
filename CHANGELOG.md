@@ -54,6 +54,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A `rounded_rectangle` in a `top_middle_bottom` stack's `per_layer_shapes`
+  is refused, not degraded.** The rounding lives in per-layer corner-radius
+  bytes that only a `full_stack` pad's block stores, so a TMB slot was
+  written as plain round and read back changed without a word. Both the
+  tool layer and the writer now refuse it, naming the pad, the entry and
+  the rule.
 - **A pad or via stack the record cannot store is refused, not quietly
   mended.** A `per_layer_shapes` entry that was not a shape became round; a
   corner radius outside 0-100 — the pad's own or a per-layer one — became

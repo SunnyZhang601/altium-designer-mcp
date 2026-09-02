@@ -3559,4 +3559,18 @@ mod tests {
             "|RECORD=45|OwnerIndex=1|IndexInSheet=-1|ModelName=MOUNTING_HOLE|ModelType=PCBLIB|DatafileCount=1|ModelDatafileEntity0=MOUNTING_HOLE|ModelDatafileKind0=PCBLib|IntegratedModel=T|DatabaseModel=T|UniqueID=ABCDEFGH|Description=M3"
         );
     }
+    /// A replayed header that names only some keys still writes every
+    /// canonical key: the ones the replay list omits are appended, never
+    /// dropped.
+    #[test]
+    fn a_partial_header_replay_still_writes_every_canonical_key() {
+        let mut symbol = Symbol::new("PARTIAL_HEADER");
+        symbol.header_params = vec![("LibReference".to_string(), "PARTIAL_HEADER".to_string())];
+        let data = encode_data_stream(&symbol).expect("encode");
+        let text = String::from_utf8_lossy(&data);
+        assert!(
+            text.contains("PartCount="),
+            "canonical keys the replay omits are appended: {text}"
+        );
+    }
 }

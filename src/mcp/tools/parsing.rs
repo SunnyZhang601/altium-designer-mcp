@@ -1668,9 +1668,22 @@ impl McpServer {
                         let name = v.as_str().ok_or_else(|| {
                             format!("{field} must be a string, got {v}. {PAD_SHAPE_HELP}")
                         })?;
-                        Self::parse_pad_shape(name).ok_or_else(|| {
+                        let shape = Self::parse_pad_shape(name).ok_or_else(|| {
                             format!("{field} '{name}' is not a shape. {PAD_SHAPE_HELP}")
-                        })
+                        })?;
+                        // The rounding lives in the per-layer corner-radius
+                        // bytes, which only a full stack's block stores — a
+                        // top_middle_bottom slot would come back plain round.
+                        if shape == crate::altium::pcblib::PadShape::RoundedRectangle
+                            && stack_mode == crate::altium::pcblib::PadStackMode::TopMiddleBottom
+                        {
+                            return Err(format!(
+                                "{field}: rounded_rectangle needs a per-layer corner \
+                                 radius, which only a full_stack pad stores; a \
+                                 top_middle_bottom stack cannot hold it"
+                            ));
+                        }
+                        Ok(shape)
                     })
                     .collect::<Result<Vec<_>, String>>()
             })
@@ -5373,5 +5386,24 @@ mod tests {
         let body = McpServer::parse_component_body_json(&json!({ "overall_height": 1.0 }))
             .expect("no layer given");
         assert_eq!(body.layer, crate::altium::pcblib::Layer::Top3DBody);
+    }
+    /// A `top_middle_bottom` stack has no per-layer corner-radius bytes,
+    /// so a `rounded_rectangle` slot cannot be stored: it is refused by
+    /// rule rather than written and read back as plain round.
+    #[test]
+    fn parse_pad_refuses_rounded_rectangle_in_a_top_middle_bottom_stack() {
+        let json = json!({
+            "designator": "1", "x": 0.0, "y": 0.0, "width": 1.6, "height": 1.6,
+            "hole_size": 0.8,
+            "stack_mode": "top_middle_bottom",
+            "per_layer_sizes": [[1.6, 1.6], [1.4, 1.4], [1.6, 1.6]],
+            "per_layer_shapes": ["round", "rounded_rectangle", "rectangle"],
+        });
+        let err = McpServer::parse_pad(&json).unwrap_err();
+        assert!(
+            err.contains("per_layer_shapes[1]: rounded_rectangle needs a per-layer corner radius"),
+            "{err}"
+        );
+        assert!(err.contains("full_stack"), "{err}");
     }
 }

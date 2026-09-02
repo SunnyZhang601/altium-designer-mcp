@@ -137,7 +137,8 @@ stderr, and `mcp.log` beside them the connection attempts.
 
 ## Google Antigravity
 
-Settings (bottom left) → **Customizations** → **Add MCP**, or edit the file directly:
+Settings (bottom left) → **Customizations** → **Installed MCP Servers** → **Add MCP**, or
+edit the file directly:
 
 - Linux / macOS: `~/.gemini/config/mcp_config.json`
 - Windows: `%USERPROFILE%\.gemini\config\mcp_config.json`
@@ -151,8 +152,20 @@ list must show `altium` enabled. The official
 ## Cursor
 
 Global: `~/.cursor/mcp.json` (every project). Project: `.cursor/mcp.json` in the project
-root. Both take the standard block; `"type": "stdio"` is the default for a `command`
-entry.
+root. Both take the standard block with one addition — Cursor's docs mark
+`"type": "stdio"` as required for a local server:
+
+```json
+{
+    "mcpServers": {
+        "altium": {
+            "type": "stdio",
+            "command": "<binary>",
+            "args": ["<config>"]
+        }
+    }
+}
+```
 
 Check: Cursor Settings → **MCP** shows `altium` with a green dot and its tool list.
 
@@ -180,7 +193,8 @@ appear in Copilot Chat's **Agent** mode under the tools picker.
 
 Start `copilot`, enter `/mcp add`, and fill in the form: name `altium`, type
 **Local/STDIO**, the command *including its argument* (`<binary> <config>`), no
-environment variables, tools `*`. Or edit `~/.copilot/mcp-config.json`:
+environment variables, tools `*` — or `copilot mcp add` from a terminal does the same.
+Or edit `~/.copilot/mcp-config.json`:
 
 ```json
 {
@@ -240,9 +254,10 @@ Q Developer CLI — migrated automatically in November 2025) reads the same file
 
 ## JetBrains AI Assistant
 
-**Settings → Tools → AI Assistant → Model Context Protocol (MCP)** → **+** → choose
-**As JSON** and paste the standard block. Pick *Global* or *Project* level. (IntelliJ,
-PyCharm, CLion, Rider and the rest share this dialog.)
+**Settings → Tools → AI Assistant → Model Context Protocol (MCP)** → **+** → either fill
+in the stdio form (command `<binary>`, argument `<config>`) or choose **As JSON** and paste
+the standard block. Pick *Global* or *Project* as the server level. (IntelliJ, PyCharm,
+CLion, Rider and the rest share this dialog.)
 
 ## Zed
 
@@ -322,7 +337,8 @@ extensions:
     timeout: 300
 ```
 
-Restart Goose after editing; `goose configure` offers the same through a menu.
+Restart Goose after editing; `goose configure` → **Add Extension** → **Command-line
+Extension** offers the same through a menu.
 
 ## OpenCode
 

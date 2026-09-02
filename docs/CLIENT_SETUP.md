@@ -351,8 +351,8 @@ is the de-facto interchange format — many clients import it directly.
 ### Web-only assistants
 
 claude.ai in the browser and ChatGPT connect only to *remote* MCP servers over HTTP.
-This server currently speaks stdio, so it pairs with the desktop, CLI and IDE clients
-above; an HTTP transport is on the roadmap for v1.0.0.
+This server speaks stdio, so it pairs with the desktop, CLI and IDE clients above; a
+Streamable HTTP transport is planned for v1.1.0, after the 1.0 release.
 
 ## Troubleshooting
 
@@ -362,5 +362,5 @@ above; an HTTP transport is on the roadmap for v1.0.0.
 | "Failed to connect" / spawn error | Run `<binary> <config>` in a terminal: it should sit silently waiting for input (press Ctrl+C to stop). If it prints an error, fix that first — a typo in `allowed_paths`, or a missing config file. |
 | Windows: path errors | Every `\` in JSON must be `\\`; or use forward slashes. `%APPDATA%`-style variables are not expanded inside JSON — write the real path. |
 | Windows SmartScreen / macOS Gatekeeper blocks the first run | The binaries are not code-signed. Windows: **More info → Run anyway**. macOS: right-click → **Open** once, or `xattr -d com.apple.quarantine <binary>`. The release's signed provenance attestation is the stronger check — see the release notes. |
-| Tools are listed but every call fails with a path error | The library file is outside `allowed_paths`. Add its folder to the config and restart the client. |
+| Tools are listed but every call fails with a path error | The library file is outside `allowed_paths`. Add its folder to the config (or, for the Claude Desktop extension, to its **Library folders** setting) and restart the client. |
 | Claude Desktop shows nothing | Read `mcp-server-altium.log` (locations above) — it holds the server's own error output. |

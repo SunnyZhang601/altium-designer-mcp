@@ -197,7 +197,14 @@ via stack is held to what the record stores — the entry count its stack mode t
 (3 for `top_middle_bottom`, 32 for `full_stack`; 32 diameters for a stacked via), a shape
 per entry, a whole-number 0-100 corner radius —
 `Pad '1' per_layer_shapes[2] 'oblongish' is not a shape` — rather than filling a
-missing layer from the main size or ignoring an extra one.
+missing layer from the main size or ignoring an extra one. A `rounded_rectangle` slot is
+`full_stack`-only, because the rounding lives in per-layer corner-radius bytes that a
+`top_middle_bottom` stack has nowhere to store —
+`Pad '1' per_layer_shapes[1]: rounded_rectangle needs a per-layer corner radius, which
+only a full_stack pad stores; a top_middle_bottom stack cannot hold it`. A text's
+`font_name` or `barcode_font_name` is held to the 31 UTF-16 units its field carries —
+`Text font_name '…' is 32 UTF-16 units long; a Windows font face name has at most 31` —
+rather than written cut short.
 
 `write_pcblib`, `write_schlib`, `update_component`, `update_pad`, `update_primitive` and
 `batch_update` refuse any JSON object key they do not know —

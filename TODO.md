@@ -16,7 +16,10 @@ record). The specialised worklists stay the single source of truth for their are
 - [ ] **Release dry run** (`workflow_dispatch` on `release.yml`) proving the full
       pipeline, including the new extension `bundle` job, before any tag —
       [`docs/RELEASING.md`](docs/RELEASING.md) is the proven runbook.
-- [ ] **v1.0.0**: stamp `CHANGELOG.md`, bump `Cargo.toml`, tag, review the draft, publish.
+- [ ] **v1.0.0**: stamp `CHANGELOG.md` (with a short lead paragraph on what 1.0 means),
+      bump the version in `Cargo.toml` / `Cargo.lock` / `package.json` / `package-lock.json`,
+      refresh the supported-versions table and date in `SECURITY.md`, dry-run once more,
+      tag, review the draft (install the `.mcpb` once), publish.
 
 ## After v1.0.0 (v1.1.0)
 
@@ -29,7 +32,3 @@ record). The specialised worklists stay the single source of truth for their are
 - [ ] **Drop the `cfb` git pin** (`[patch.crates-io]`, rev `8c1ec76`) as soon as rust-cfb
       publishes a release newer than v0.14.0 — check
       [rust-cfb releases](https://github.com/mdsteele/rust-cfb/releases) at session start.
-- [ ] **Dismiss the recurring GitHub "AI findings"** (maintainer-only, in the repo's
-      Security → Quality UI): the same three findings keep regenerating autofix PRs
-      (#415/#416, #469/#470 all closed as verified non-bugs) until they are dismissed
-      there — the API cannot do it.

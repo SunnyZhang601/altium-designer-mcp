@@ -34,6 +34,16 @@ server into Claude Code, Claude Desktop, Antigravity, Cursor and VS Code — not
 the repository's own contributor-facing README. Edit it when the setup steps
 change; the `build` job fails if any expected file is missing from an archive.
 
+### What ships as the extension
+
+`altium-designer-mcp.mcpb` and its byte-identical `.dxt` twin: one bundle holding
+the three platform binaries under `server/{win32,darwin,linux}/` and a
+`manifest.json` stamped from
+[`.github/release-assets/mcpb-manifest.json`](../.github/release-assets/mcpb-manifest.json)
+(`@VERSION@` substituted, like the README). `tests/mcpb_manifest.rs` holds the
+template to the crate's name, licence and CLI shape; the `bundle` job fails if
+a binary or the manifest is missing from the packed file.
+
 ## Dry run — do this first
 
 The whole pipeline can be exercised without a tag:
@@ -43,9 +53,10 @@ gh workflow run release.yml --ref main
 gh run watch
 ```
 
-This builds, packages, smoke-tests and checksums all three platforms, then stops
-before the `release` job. Artefacts are kept for 7 days on the workflow run page,
-so you can download the real archives and try them on a real machine.
+This builds, packages and smoke-tests all three platforms and the extension
+bundle, then stops before the `release` job. Artefacts are kept for 7 days on
+the workflow run page, so you can download the real archives — and the `.mcpb`
+— and try them on a real machine.
 
 Do this **before** stamping the changelog or tagging. It is the only way to find a
 packaging problem that costs nothing to fix.
@@ -72,8 +83,11 @@ Two notes on dry runs:
    stranger would. Add a fresh empty `## [Unreleased]` above it for the next
    cycle.
 
-3. **Set the version in `Cargo.toml`** if it is not already `X.Y.Z`. The tag and
-   the `[package]` version must agree or `validate` fails.
+3. **Set the version** to `X.Y.Z` in `Cargo.toml` and `Cargo.lock` (`cargo update
+   -p altium-designer-mcp` refreshes the lockfile entry) and in `package.json` /
+   `package-lock.json`, which carry the same number. The tag and the `[package]`
+   version must agree or `validate` fails. For a major release, also refresh the
+   supported-versions table and date in the root `SECURITY.md`.
 
 4. **Merge those to main** through a PR, and let CI go green.
 
@@ -88,8 +102,8 @@ Two notes on dry runs:
 
    ```bash
    git switch main && git pull
-   git tag -s v0.1.0 -m "v0.1.0"
-   git push origin v0.1.0
+   git tag -s vX.Y.Z -m "vX.Y.Z"
+   git push origin vX.Y.Z
    ```
 
 7. **Watch the workflow.**
@@ -98,18 +112,20 @@ Two notes on dry runs:
    gh run watch
    ```
 
-8. **Review the draft.** Download the three archives from the draft release page,
-   check `SHA256SUMS.txt`, and run at least one binary on a real machine:
+8. **Review the draft.** Download the three archives and the extension bundle
+   from the draft release page, check `SHA256SUMS.txt`, run at least one binary
+   on a real machine, and install the `.mcpb` in Claude Desktop once:
 
    ```bash
-   gh release view v0.1.0
+   gh release view vX.Y.Z
    sha256sum -c SHA256SUMS.txt
    ```
 
-9. **Publish.**
+9. **Publish.** A tag without a pre-release suffix is published as the latest
+   release; add `--prerelease --latest=false` for a pre-release that has none.
 
    ```bash
-   gh release edit v0.1.0 --draft=false
+   gh release edit vX.Y.Z --draft=false
    ```
 
 10. **Announce** — including a note on the tracking issue if one is open.
@@ -155,12 +171,13 @@ draft than after the release is public.
   ruleset; if the delete is refused, that is the ruleset working as intended.
 
   ```bash
-  gh release delete v0.1.0 --yes
-  git push --delete origin v0.1.0
-  git tag -d v0.1.0
+  gh release delete vX.Y.Z --yes
+  git push --delete origin vX.Y.Z
+  git tag -d vX.Y.Z
   ```
 
-- **After publishing** — do not delete or move the tag. Ship `v0.1.1`. A version
+- **After publishing** — do not delete or move the tag. Ship the next patch
+  version. A version
   someone already downloaded should keep meaning what it meant.
 
 ## Reproducible dependencies

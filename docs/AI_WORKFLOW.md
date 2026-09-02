@@ -380,11 +380,11 @@ When calculating footprints, the AI should apply these IPC standards:
 
 **Density Levels:**
 
-| Level | Code | Application |
-|-------|------|-------------|
-| Most (M) | N/A | High-density designs, fine-pitch |
-| Nominal (N) | N | Standard manufacturing |
-| Least (L) | N/A | Wave soldering, hand assembly |
+| Level | Name suffix | Application |
+|-------|-------------|-------------|
+| Most | `M` | High-density designs, fine-pitch |
+| Nominal | `N` | Standard manufacturing |
+| Least | `L` | Wave soldering, hand assembly |
 
 **Naming Convention:**
 

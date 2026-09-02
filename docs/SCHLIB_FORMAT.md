@@ -850,8 +850,8 @@ A parameter-record variant selected by `Name=Designator`. As written by this cra
 > **Note:** `DatafileCount=1` plus the `ModelDatafileEntity0` link is what lets Altium *resolve*
 > the model to an actual footprint in a `PcbLib`; a name-only record with `DatafileCount=0` shows
 > in the list but reports "model not found". AltiumSharp indexes the datafile keys 1-based
-> (`MODELDATAFILEKIND1`); this crate writes 0-based, matching observed files — the index base is
-> still under golden verification (TODO §B).
+> (`MODELDATAFILEKIND1`); this crate writes 0-based — the `IMPLCHAIN` golden, authored by AD24,
+> stores `ModelDatafile0` / `ModelDatafileEntity0` / `ModelDatafileKind0`.
 
 ## Default Values
 

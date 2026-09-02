@@ -108,15 +108,42 @@ pub struct InitializeParams {
     pub client_info: Option<ClientInfo>,
 }
 
+/// The MCP tool annotations: hints a client shows and reasons with before it
+/// runs a tool. `read_only_hint` and `destructive_hint` follow the same
+/// classification the rate limiter and the audit log use (`is_mutating_tool`),
+/// so a client is told exactly which tools change files; `open_world_hint` is
+/// `false` for every tool, since each one touches only the library files it is
+/// given.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolAnnotations {
+    /// Human-readable display name.
+    pub title: String,
+    /// Whether the tool changes nothing on disk.
+    pub read_only_hint: bool,
+    /// Whether the tool may overwrite or delete what is there (every mutating
+    /// tool takes a backup first, but the file still changes).
+    pub destructive_hint: bool,
+    /// Whether the tool reaches beyond the local files it is given: never.
+    pub open_world_hint: bool,
+}
+
 /// A tool definition for tools/list response.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ToolDefinition {
     /// Unique tool name.
     pub name: String,
+    /// Human-readable display name (the MCP `title`, also carried in
+    /// `annotations`); filled in by `annotate`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
     /// Human-readable description.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    /// Behavioural hints for clients; filled in by `annotate`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub annotations: Option<ToolAnnotations>,
     /// JSON Schema for the tool's input parameters.
     pub input_schema: Value,
     /// Representative `tools/call` example, rendered into `docs/TOOLS.md` by the
@@ -599,7 +626,7 @@ impl McpServer {
     ///
     /// Only these destructive operations are rate limited; read-only tools
     /// (reads, listings, diffs, renders, validation) are never throttled.
-    fn is_mutating_tool(name: &str) -> bool {
+    pub(crate) fn is_mutating_tool(name: &str) -> bool {
         matches!(
             name,
             "write_pcblib"

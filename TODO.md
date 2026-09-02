@@ -27,7 +27,20 @@ record). The specialised worklists stay the single source of truth for their are
       justify it — 3 of the 81 v0.2.0 downloads today. Until then the docs' right-click →
       Open note stands.
 
-## C. Maintenance & waiting
+## C. Outreach
+
+- [ ] **Claude Connectors Directory** — submit the `.mcpb` through Anthropic's
+      [desktop extension form](https://clau.de/desktop-extention-submission) once a
+      release carries the annotations, icon and privacy policy (a `1.0.1`). Needs a
+      human with the account: documentation URL, privacy policy URL, icon.
+- [ ] **Official MCP Registry, automated** — `io.github.embedded-society/altium-designer-mcp`
+      is published by hand from a `server.json` (mcpb package = the release asset + its
+      SHA-256); add a `release: published` workflow that runs `mcp-publisher login
+      github-oidc` + `publish` so every release updates the listing.
+- [ ] **OpenAI / ChatGPT** — its directory takes remote (HTTPS) servers only, so it waits
+      for the v1.1.0 Streamable HTTP transport; Codex CLI users are covered already.
+
+## D. Maintenance & waiting
 
 - [ ] **Drop the `cfb` git pin** (`[patch.crates-io]`, rev `8c1ec76`) as soon as rust-cfb
       publishes a release newer than v0.14.0 — check

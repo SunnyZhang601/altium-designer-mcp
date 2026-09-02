@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Every tool carries MCP annotations.** `tools/list` now gives each tool a
+  `title` and `annotations` (`readOnlyHint`, `destructiveHint`,
+  `openWorldHint`), derived from the same mutating-tool classification the
+  rate limiter and audit log use — so a client knows before calling which of
+  the 34 tools change files. `docs/TOOLS.md` shows the same marker per tool.
+- **A privacy policy, and an icon on the Claude Desktop extension.** README
+  gains a Privacy Policy section (the server collects nothing and never
+  touches the network); the extension manifest links to it and carries the
+  Embedded Society crest as its icon — both prerequisites for directory
+  listings.
+
 ## [1.0.0] - 2026-09-02
 
 The first stable release. `altium-designer-mcp` reads and writes Altium Designer

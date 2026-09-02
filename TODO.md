@@ -33,10 +33,6 @@ record). The specialised worklists stay the single source of truth for their are
       [desktop extension form](https://clau.de/desktop-extention-submission) once a
       release carries the annotations, icon and privacy policy (a `1.0.1`). Needs a
       human with the account: documentation URL, privacy policy URL, icon.
-- [ ] **Official MCP Registry, automated** — `io.github.embedded-society/altium-designer-mcp`
-      is published by hand from a `server.json` (mcpb package = the release asset + its
-      SHA-256); add a `release: published` workflow that runs `mcp-publisher login
-      github-oidc` + `publish` so every release updates the listing.
 - [ ] **OpenAI / ChatGPT** — its directory takes remote (HTTPS) servers only, so it waits
       for the v1.1.0 Streamable HTTP transport; Codex CLI users are covered already.
 

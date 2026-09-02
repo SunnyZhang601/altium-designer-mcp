@@ -130,6 +130,16 @@ Two notes on dry runs:
 
 10. **Announce** — including a note on the tracking issue if one is open.
 
+Publishing the release also triggers `.github/workflows/registry-publish.yml`,
+which lists the `.mcpb` in the official MCP Registry as
+`io.github.embedded-society/altium-designer-mcp` (version and bundle SHA-256
+stamped into `.github/release-assets/server.json`, authenticated with the
+workflow's OIDC token). Re-run it by hand for any tag:
+
+```bash
+gh workflow run registry-publish.yml -f tag=vX.Y.Z
+```
+
 ## Who can release
 
 A repository ruleset (`tags`, active, covering `~ALL` tags) restricts tag

@@ -21,6 +21,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   touches the network); the extension manifest links to it and carries the
   Embedded Society crest as its icon — both prerequisites for directory
   listings.
+- **Every published release is listed in the official MCP Registry.** A
+  workflow runs when a release goes public (or by hand for a tag), stamps
+  `server.json` with the version and the bundle's SHA-256 re-derived from the
+  release asset, and publishes it as
+  `io.github.embedded-society/altium-designer-mcp` over GitHub's OIDC token —
+  the registry the MCP clients' server browsers read.
 
 ## [1.0.0] - 2026-09-02
 

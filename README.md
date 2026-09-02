@@ -490,6 +490,25 @@ use any length component name and it will be preserved on read/write roundtrips.
 
 ---
 
+## Privacy Policy
+
+`altium-designer-mcp` is a local tool and collects nothing.
+
+- **Data collection**: none. The server has no network access, no telemetry and no
+  analytics; it never contacts any service, including this project's.
+- **Usage and storage**: it reads and writes only the library files inside the folders
+  you grant (`allowed_paths` or `--allow`), plus the timestamped `.bak` copies it makes
+  beside them before a change. The optional audit log (`logging.audit_log_path`) is a
+  local file you choose, holding tool names, file names and outcomes — never library
+  contents.
+- **Third-party sharing**: none. Nothing leaves your machine.
+- **Data retention**: the files and backups stay until you delete them; backups are
+  capped at the five most recent per library.
+- **Contact**: <matejg03@gmail.com>, or a [GitHub issue](https://github.com/embedded-society/altium-designer-mcp/issues)
+  for anything that need not be private.
+
+---
+
 ## Documentation
 
 | For… | Read |

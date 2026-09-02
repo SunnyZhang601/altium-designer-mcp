@@ -18,6 +18,8 @@
     "documentation": "https://github.com/embedded-society/altium-designer-mcp/blob/main/docs/USAGE.md",
     "support": "https://github.com/embedded-society/altium-designer-mcp/issues",
     "license": "GPL-3.0-or-later",
+    "icon": "icon.png",
+    "privacy_policies": ["https://github.com/embedded-society/altium-designer-mcp/blob/main/README.md#privacy-policy"],
     "keywords": ["altium", "pcb", "eda", "footprint", "schematic", "library"],
     "server": {
         "type": "binary",

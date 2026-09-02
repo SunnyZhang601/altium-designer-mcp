@@ -396,6 +396,7 @@ jobs:
                 # @VERSION@ convention the release README uses.
                 sed "s/@VERSION@/${{ needs.validate.outputs.version }}/g" \
                     .github/release-assets/mcpb-manifest.json > bundle/manifest.json
+                cp .github/release-assets/icon.png bundle/icon.png
 
             # The official packer validates the manifest against the MCPB
             # schema while zipping. Version-pinned like every action here.
@@ -417,7 +418,7 @@ jobs:
                 cmp altium-designer-mcp.mcpb altium-designer-mcp.dxt
 
                 mkdir -p verify-mcpb && unzip -q altium-designer-mcp.mcpb -d verify-mcpb
-                for f in manifest.json \
+                for f in manifest.json icon.png \
                          server/win32/altium-designer-mcp.exe \
                          server/darwin/altium-designer-mcp \
                          server/linux/altium-designer-mcp; do

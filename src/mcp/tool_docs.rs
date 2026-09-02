@@ -43,6 +43,18 @@ pub fn render_tools_markdown() -> String {
 
     for tool in &tools {
         let _ = writeln!(out, "\n## `{}`", tool.name);
+        if let Some(annotations) = &tool.annotations {
+            let _ = writeln!(
+                out,
+                "\n**{}** — {}",
+                annotations.title,
+                if annotations.read_only_hint {
+                    "read-only"
+                } else {
+                    "writes files (a backup is taken first)"
+                }
+            );
+        }
         if let Some(desc) = &tool.description {
             let _ = writeln!(out, "\n{}", wrap_prose(desc.trim()));
         }

@@ -69,3 +69,37 @@ fn manifest_server_block_matches_the_cli_contract() {
     assert_eq!(picker["multiple"], true);
     assert_eq!(picker["required"], true);
 }
+
+/// The manifest's icon is a real square PNG shipped beside it, and its privacy
+/// policy link is an HTTPS URL to a README section that exists — what a
+/// directory listing requires of a local connector.
+#[test]
+fn manifest_icon_and_privacy_policy_are_real() {
+    let m = manifest();
+    assert_eq!(m["icon"], "icon.png");
+    let icon = std::fs::read(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/.github/release-assets/icon.png"
+    ))
+    .expect("icon.png ships beside the manifest");
+    assert_eq!(&icon[..8], b"\x89PNG\r\n\x1a\n", "icon.png is a PNG");
+    let (width, height) = (
+        u32::from_be_bytes([icon[16], icon[17], icon[18], icon[19]]),
+        u32::from_be_bytes([icon[20], icon[21], icon[22], icon[23]]),
+    );
+    assert_eq!(width, height, "the icon is square");
+    assert!(width >= 256, "the icon is at least 256 px, got {width}");
+
+    let policies = m["privacy_policies"].as_array().expect("privacy_policies");
+    assert_eq!(policies.len(), 1);
+    let url = policies[0].as_str().expect("a URL");
+    assert!(url.starts_with("https://"), "{url}");
+    assert!(url.ends_with("README.md#privacy-policy"), "{url}");
+    let readme = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/README.md"))
+        .expect("README")
+        .replace("\r\n", "\n");
+    assert!(
+        readme.contains("\n## Privacy Policy\n"),
+        "README carries the Privacy Policy section the manifest links to"
+    );
+}

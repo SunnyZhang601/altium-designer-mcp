@@ -190,8 +190,10 @@ deliberate commits (`cargo update`, run the full suite, commit the lockfile).
 
 ## Known gaps
 
-- **No code signing.** Windows SmartScreen and macOS Gatekeeper will warn on
+- **No code signing yet.** Windows SmartScreen and macOS Gatekeeper will warn on
   first run; macOS users need right-click → Open. The generated release notes say
-  so, and point at the provenance attestation as the stronger check. Proper
-  signing needs a paid Apple Developer account and a Windows certificate, so it
-  is a cost decision rather than a technical one.
+  so, and point at the provenance attestation as the stronger check. The plan
+  (`TODO.md` § After v1.0.0) is Windows signing through SignPath Foundation's
+  free open-source programme, wired into the `build` job so the attestation
+  covers the signed binary; macOS notarisation waits until macOS downloads
+  justify the Apple Developer Program fee.

@@ -21,11 +21,25 @@ record). The specialised worklists stay the single source of truth for their are
       refresh the supported-versions table and date in `SECURITY.md`, dry-run once more,
       tag, review the draft (install the `.mcpb` once), publish.
 
-## After v1.0.0 (v1.1.0)
+## After v1.0.0
 
-- [ ] **Streamable HTTP transport** alongside stdio, so web-only assistants (claude.ai in
-      the browser, ChatGPT) can connect as a remote server — today they cannot
-      (`docs/CLIENT_SETUP.md` § Web-only assistants). Deliberately after 1.0.
+- [ ] **Streamable HTTP transport** (v1.1.0) alongside stdio, so web-only assistants
+      (claude.ai in the browser, ChatGPT) can connect as a remote server — today they
+      cannot (`docs/CLIENT_SETUP.md` § Web-only assistants). Deliberately after 1.0.
+- [ ] **Windows code signing through SignPath Foundation** — free for open-source
+      projects, HSM-held key, signs from GitHub Actions. Decided 2026-09-02 over the paid
+      routes (Azure Artifact Signing ~$10/month on a paid subscription, commercial OV/EV
+      $200–700/year): the publisher line reads "SignPath Foundation", which is fine, and
+      SmartScreen reputation then builds under an established identity. Steps: write the
+      short code-signing policy page their terms require (roles, MFA, credit), apply, add
+      their action to the repository's action allow-list, sign in the `build` job before
+      packaging so the attestation covers the signed binary, and drop the SmartScreen
+      caveat from the docs and release notes.
+- [ ] **Sign the `.mcpb` bundle too** (`mcpb sign` / `mcpb verify`) once a certificate
+      exists — after checking what Claude Desktop shows for a signed side-loaded bundle.
+- [ ] **macOS notarisation** (Apple Developer Program, $99/year) only when macOS downloads
+      justify it — 3 of the 81 v0.2.0 downloads today. Until then the docs' right-click →
+      Open note stands.
 
 ## C. Maintenance & waiting
 

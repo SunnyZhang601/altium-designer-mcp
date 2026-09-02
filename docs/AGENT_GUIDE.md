@@ -65,8 +65,9 @@ not the description field.
 
 ## Filesystem sandbox
 
-Only paths inside the configured `allowed_paths` (see `config.json`) can be read
-or written. Requests outside the sandbox are rejected. Writes create a timestamped
+Only paths inside the configured `allowed_paths` (`config.json`, or the folders
+granted with `--allow`) can be read or written. Requests outside the sandbox are
+rejected. Writes create a timestamped
 `.bak` of any existing file first.
 
 ## Typical build flow

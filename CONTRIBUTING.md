@@ -259,8 +259,10 @@ The project holds **99% line coverage on production code** (`main.rs` excluded �
 exercised end-to-end across a process boundary instrumentation cannot see; measured with
 `cargo llvm-cov --all-features --workspace --ignore-filename-regex '(^|[/\\])main\.rs$'`).
 Two facts worth knowing when reading figures near the gate: the measured total flaps by a
-few lines between identical runs, so treat small movements as noise; and the cheapest
-remaining headroom sits in `mcp/server.rs` and `mcp/tools/library_ops.rs`.
+few lines between identical runs, so treat small movements as noise; and the remaining
+uncovered lines are, on inspection, ones a passing test cannot reach — assertion-failure
+formatting, `cfg(unix)` signal handling, manual-tooling branches and defence-in-depth
+behind the writers' own guarantees — so a new test should target a seam, not the number.
 
 ---
 

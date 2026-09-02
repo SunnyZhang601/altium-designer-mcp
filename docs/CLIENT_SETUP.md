@@ -137,7 +137,8 @@ stderr, and `mcp.log` beside them the connection attempts.
 
 ## Google Antigravity
 
-Settings (bottom left) → **Customizations** → **Add MCP**, or edit the file directly:
+Settings (bottom left) → **Customizations** → **Installed MCP Servers** → **Add MCP**, or
+edit the file directly:
 
 - Linux / macOS: `~/.gemini/config/mcp_config.json`
 - Windows: `%USERPROFILE%\.gemini\config\mcp_config.json`
@@ -151,8 +152,20 @@ list must show `altium` enabled. The official
 ## Cursor
 
 Global: `~/.cursor/mcp.json` (every project). Project: `.cursor/mcp.json` in the project
-root. Both take the standard block; `"type": "stdio"` is the default for a `command`
-entry.
+root. Both take the standard block with one addition — Cursor's docs mark
+`"type": "stdio"` as required for a local server:
+
+```json
+{
+    "mcpServers": {
+        "altium": {
+            "type": "stdio",
+            "command": "<binary>",
+            "args": ["<config>"]
+        }
+    }
+}
+```
 
 Check: Cursor Settings → **MCP** shows `altium` with a green dot and its tool list.
 
@@ -180,7 +193,8 @@ appear in Copilot Chat's **Agent** mode under the tools picker.
 
 Start `copilot`, enter `/mcp add`, and fill in the form: name `altium`, type
 **Local/STDIO**, the command *including its argument* (`<binary> <config>`), no
-environment variables, tools `*`. Or edit `~/.copilot/mcp-config.json`:
+environment variables, tools `*` — or `copilot mcp add` from a terminal does the same.
+Or edit `~/.copilot/mcp-config.json`:
 
 ```json
 {
@@ -240,9 +254,10 @@ Q Developer CLI — migrated automatically in November 2025) reads the same file
 
 ## JetBrains AI Assistant
 
-**Settings → Tools → AI Assistant → Model Context Protocol (MCP)** → **+** → choose
-**As JSON** and paste the standard block. Pick *Global* or *Project* level. (IntelliJ,
-PyCharm, CLion, Rider and the rest share this dialog.)
+**Settings → Tools → AI Assistant → Model Context Protocol (MCP)** → **+** → either fill
+in the stdio form (command `<binary>`, argument `<config>`) or choose **As JSON** and paste
+the standard block. Pick *Global* or *Project* as the server level. (IntelliJ, PyCharm,
+CLion, Rider and the rest share this dialog.)
 
 ## Zed
 
@@ -322,7 +337,8 @@ extensions:
     timeout: 300
 ```
 
-Restart Goose after editing; `goose configure` offers the same through a menu.
+Restart Goose after editing; `goose configure` → **Add Extension** → **Command-line
+Extension** offers the same through a menu.
 
 ## OpenCode
 
@@ -351,8 +367,8 @@ is the de-facto interchange format — many clients import it directly.
 ### Web-only assistants
 
 claude.ai in the browser and ChatGPT connect only to *remote* MCP servers over HTTP.
-This server currently speaks stdio, so it pairs with the desktop, CLI and IDE clients
-above; an HTTP transport is on the roadmap for v1.0.0.
+This server speaks stdio, so it pairs with the desktop, CLI and IDE clients above; a
+Streamable HTTP transport is planned for v1.1.0, after the 1.0 release.
 
 ## Troubleshooting
 
@@ -362,5 +378,5 @@ above; an HTTP transport is on the roadmap for v1.0.0.
 | "Failed to connect" / spawn error | Run `<binary> <config>` in a terminal: it should sit silently waiting for input (press Ctrl+C to stop). If it prints an error, fix that first — a typo in `allowed_paths`, or a missing config file. |
 | Windows: path errors | Every `\` in JSON must be `\\`; or use forward slashes. `%APPDATA%`-style variables are not expanded inside JSON — write the real path. |
 | Windows SmartScreen / macOS Gatekeeper blocks the first run | The binaries are not code-signed. Windows: **More info → Run anyway**. macOS: right-click → **Open** once, or `xattr -d com.apple.quarantine <binary>`. The release's signed provenance attestation is the stronger check — see the release notes. |
-| Tools are listed but every call fails with a path error | The library file is outside `allowed_paths`. Add its folder to the config and restart the client. |
+| Tools are listed but every call fails with a path error | The library file is outside `allowed_paths`. Add its folder to the config (or, for the Claude Desktop extension, to its **Library folders** setting) and restart the client. |
 | Claude Desktop shows nothing | Read `mcp-server-altium.log` (locations above) — it holds the server's own error output. |

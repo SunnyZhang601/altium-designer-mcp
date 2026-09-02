@@ -76,6 +76,9 @@ The server refuses to read or write anything outside those folders. That confine
 safety property, so keep the list as narrow as the work allows — a single project's library folder
 rather than your whole home directory.
 
+No file at all is also fine: `altium-designer-mcp --allow <folder>` (repeatable) grants folders on
+the command line and takes defaults for everything else.
+
 ## Step 3 — Connect your AI assistant
 
 Every client below speaks the same protocol; they differ only in where the configuration lives.
@@ -142,8 +145,9 @@ snippet — plus a troubleshooting table.
 ### Any other MCP client
 
 The `mcpServers` block above is the de-facto standard schema. If your client supports MCP over
-stdio, give it the binary path as the command and the config-file path as the single argument; check
-its documentation for where its configuration file lives.
+stdio, give it the binary path as the command and the config-file path as the single argument (or
+`--allow` followed by your library folders instead); check its documentation for where its
+configuration file lives.
 
 ## Step 4 — Try it
 

@@ -26,7 +26,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   config file's `allowed_paths`, and works with no config file at all — the
   other settings then take their defaults. A config file that is named but
   missing, unreadable or invalid still fails loudly.
-
 - **Four more golden-fixture gaps closed with AD24-authored evidence.** The
   regenerated goldens now carry a pin in an alternate display mode
   (`DISPMODE` — the pin-record byte), a graphically locked pin (`LOCKFLAGS`
@@ -38,7 +37,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   explicit 120×70 mil: AD computes the size lazily from the rendered extent,
   and a headless save caught it at 0. All validated from Altium's side via
   `Verify-Libraries.ps1 -Expect`.
-
 - **The on-site Altium harness asserts what Altium resolves, not just that a
   file opens.** `AltiumVerify.pas` now reports per-component primitive counts
   (all 8 PcbLib primitive kinds, all 16 SchLib record kinds) through the
@@ -166,7 +164,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Unsupported file type: .csv`, `File has no extension`, …); all now say
   `Unsupported file type '.csv' for 'Parts.csv': expected .PcbLib or
   .SchLib`, and a path without an extension says so.
-
 - **A solid symbol body no longer paints over the pin names inside it.**
   `write_schlib` recorded the order it happened to parse its input in — pins
   before rectangles — and replayed that as if it were an authoring order, so a

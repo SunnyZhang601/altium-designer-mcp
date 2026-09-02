@@ -193,8 +193,8 @@ appear in the client at all, or will not start, is a wiring problem —
 ### "Access denied" error
 
 The target path is outside the server's `allowed_paths`. Add the directory to your
-`config.json` (see [README.md § Configuration](../README.md#configuration)) and restart the
-client.
+`config.json` (see [README.md § Configuration](../README.md#configuration)) — or, for the
+Claude Desktop extension, to its **Library folders** setting — and restart the client.
 
 ### Library won't open in Altium
 

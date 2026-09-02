@@ -315,6 +315,7 @@ altium-designer-mcp [OPTIONS] [CONFIG_FILE]
 | Option | Description |
 |--------|-------------|
 | `CONFIG_FILE` | Path to configuration file (optional, uses default location if omitted) |
+| `--allow <DIR>...` | Grant access to library folders directly (repeatable). Adds to the config file's `allowed_paths`, and works with no config file at all — the other settings then take their defaults |
 | `-v`, `--verbose` | Increase logging verbosity (`-v` info, `-vv` debug, `-vvv` trace) |
 | `-q`, `--quiet` | Decrease logging verbosity (only show errors) |
 | `-h`, `--help` | Print help information |
@@ -345,7 +346,9 @@ search `PATH` or expand `~` for you.
 
 ## Configuration
 
-Configuration file location:
+The server reads one JSON file — or none: `altium-designer-mcp --allow <DIR>` grants
+folders on the command line and runs on defaults for everything else, which is how the
+Claude Desktop extension starts it. Configuration file location:
 
 - **Linux/macOS:** `~/.altium-designer-mcp/config.json`
 - **Windows:** `%USERPROFILE%\.altium-designer-mcp\config.json`
@@ -366,7 +369,7 @@ Configuration file location:
 
 | Option | Description |
 |--------|-------------|
-| `allowed_paths` | Array of directory paths where library files can be accessed (default: current directory) |
+| `allowed_paths` | Array of directory paths where library files can be accessed; `--allow` adds to it (default when neither grants anything: the current working directory) |
 | `logging.level` | Log level: trace, debug, info, warn, error (default: warn) |
 | `logging.audit_log_path` | Path to an append-only JSON-lines audit log of destructive operations (default: null — no audit log is written) |
 | `rate_limit.max_burst` | Maximum burst of mutating operations before throttling; read-only tools are never rate limited (default: 120) |

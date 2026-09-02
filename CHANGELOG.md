@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-09-02
+
 ### Added
 
 - **Every tool carries MCP annotations.** `tools/list` now gives each tool a

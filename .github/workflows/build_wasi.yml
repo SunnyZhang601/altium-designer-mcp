@@ -23,7 +23,7 @@ jobs:
       - name: Install pinned Rust toolchain
         uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # v1.95.0
         with:
-          toolchain: 1.95.0
+          target: 1.95.0
           targets: wasm32-wasip1
 
       - name: Build WASI module

@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Dependabot can evaluate the repository's Python dependency files again.**
+  A placeholder `requirements.txt` in the Altium generator directory (whose
+  scripts need only the standard library) read `TODO: fill out this`, which
+  Dependabot parsed as an invalid requirement and gave up on the whole
+  ecosystem. The file is removed; the readability oracle's pinned
+  requirements are the only Python dependencies.
+
 ## [1.0.1] - 2026-09-02
 
 ### Added

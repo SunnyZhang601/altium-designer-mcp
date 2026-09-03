@@ -55,6 +55,14 @@ pub struct Pad {
     #[serde(default)]
     pub shape: PadShape,
 
+    /// The header layer byte exactly as read, kept only when the layer table
+    /// does not map it — the primitive then sits on the `MultiLayer`
+    /// catch-all, and without the byte a rewrite would store `74` in its
+    /// place. Replayed while the primitive still sits there; moving it to a
+    /// layer the model can name discards the byte for that layer's own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub raw_layer_id: Option<u8>,
+
     /// Layer the pad is on.
     #[serde(default)]
     pub layer: Layer,
@@ -74,18 +82,24 @@ pub struct Pad {
     #[serde(default = "default_true")]
     pub is_plated: bool,
 
+    /// Whether solder-mask expansion is measured from the HOLE edge rather than
+    /// the pad edge — main-block bool @125. Only meaningful on a pad with a hole.
+    /// Default `false`, matching a factory Altium pad.
+    #[serde(default)]
+    pub solder_mask_expansion_from_hole_edge: bool,
+
     /// Hole shape for through-hole pads.
     #[serde(default, skip_serializing_if = "is_default_hole_shape")]
     pub hole_shape: HoleShape,
 
     /// Slot length in mm for a `Slot` hole — size/shape block i32 @263.
     /// Only meaningful when `hole_shape` is `Slot`. Default 0.0 (matches the
-    /// value the writer previously hard-coded).
+    /// value the writer emits by default).
     #[serde(default, serialize_with = "crate::altium::serde_round::serialize")]
     pub hole_slot_length: f64,
 
     /// Hole rotation in degrees — size/shape block f64 @267. Rotates a slot hole.
-    /// Default 0.0 (matches the value the writer previously hard-coded).
+    /// Default 0.0 (matches the value the writer emits by default).
     #[serde(default, serialize_with = "crate::altium::serde_round::serialize")]
     pub hole_rotation: f64,
 
@@ -127,6 +141,11 @@ pub struct Pad {
         with = "crate::altium::serde_round::option"
     )]
     pub solder_mask_expansion: Option<f64>,
+
+    /// Jumper group id — main-block i16 @110-111. Pads sharing a non-zero id are
+    /// linked as a jumper / 0-ohm net. `0` (no jumper) from scratch.
+    #[serde(default, skip_serializing_if = "is_zero_i16")]
+    pub jumper_id: i16,
 
     /// Paste-mask expansion mode (None/FromRule/Manual) — main-block tri-state byte @101.
     #[serde(default)]
@@ -196,7 +215,7 @@ pub struct Pad {
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
-        with = "crate::altium::serde_round::vec_tuple"
+        with = "crate::altium::serde_round::wh_pairs_opt"
     )]
     pub per_layer_sizes: Option<Vec<(f64, f64)>>,
 
@@ -218,7 +237,7 @@ pub struct Pad {
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
-        with = "crate::altium::serde_round::vec_tuple"
+        with = "crate::altium::serde_round::xy_points_opt"
     )]
     pub per_layer_offsets: Option<Vec<(f64, f64)>>,
 
@@ -244,6 +263,25 @@ pub struct Pad {
     /// Unique ID assigned by Altium (8-character alphanumeric string).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unique_id: Option<String>,
+    /// Altium's stable identity for this primitive, from the footprint's
+    /// `PrimitiveGuids` stream (`{XXXXXXXX-…}`), or `None` for a primitive
+    /// with no recorded identity (anything built from scratch). Riding on the
+    /// primitive itself, the identity follows it through structural edits —
+    /// deleting a neighbour cannot re-point it, which the old footprint-level
+    /// ordinal list could not guarantee.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub guid: Option<String>,
+    /// The pad's extended tail (main-block bytes 61..end) exactly as read
+    /// (base64 in JSON), used as the write-side base with the typed tail
+    /// fields overlaid. AD24 writes a 133-byte tail where the `AltiumSharp`
+    /// template is 141, with two bytes differing — only replay bridges every
+    /// AD version at once. `None` (from scratch) uses the template.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "crate::altium::base64_opt"
+    )]
+    pub raw_tail: Option<Vec<u8>>,
 
     /// Per-pad identity GUID — extended-tail bytes @126-141 ("GUID-A"), read
     /// back verbatim as a braced uppercase GUID string (Windows little-endian
@@ -293,6 +331,11 @@ const fn default_component_index() -> i32 {
 }
 
 /// Default pad thermal-relief conductor width (10 mil = 0.254mm; raw 100000).
+#[allow(clippy::trivially_copy_pass_by_ref)] // serde requires &T
+const fn is_zero_i16(v: &i16) -> bool {
+    *v == 0
+}
+
 const fn default_pad_relief_conductor_width() -> f64 {
     0.254
 }
@@ -322,6 +365,7 @@ impl Pad {
     #[must_use]
     pub fn smd(designator: impl Into<String>, x: f64, y: f64, width: f64, height: f64) -> Self {
         Self {
+            raw_layer_id: None,
             designator: designator.into(),
             x,
             y,
@@ -331,6 +375,8 @@ impl Pad {
             layer: Layer::TopLayer,
             hole_size: None,
             is_plated: true,
+            jumper_id: 0,
+            solder_mask_expansion_from_hole_edge: false,
             hole_shape: HoleShape::Round,
             hole_slot_length: 0.0,
             hole_rotation: 0.0,
@@ -339,8 +385,8 @@ impl Pad {
             rotation: 0.0,
             paste_mask_expansion: None,
             solder_mask_expansion: None,
-            paste_mask_expansion_mode: MaskExpansionMode::FromRule,
-            solder_mask_expansion_mode: MaskExpansionMode::FromRule,
+            paste_mask_expansion_mode: MaskExpansionMode::None,
+            solder_mask_expansion_mode: MaskExpansionMode::None,
             power_plane_connect_style: PowerPlaneConnectStyle::Relief,
             relief_conductor_width: default_pad_relief_conductor_width(),
             relief_entries: default_pad_relief_entries(),
@@ -358,6 +404,8 @@ impl Pad {
             polygon_index: default_polygon_index(),
             component_index: default_component_index(),
             unique_id: None,
+            guid: None,
+            raw_tail: None,
             identity_guid: None,
             identity_guid_b: None,
         }
@@ -374,6 +422,7 @@ impl Pad {
         hole_size: f64,
     ) -> Self {
         Self {
+            raw_layer_id: None,
             designator: designator.into(),
             x,
             y,
@@ -383,6 +432,8 @@ impl Pad {
             layer: Layer::MultiLayer,
             hole_size: Some(hole_size),
             is_plated: true,
+            jumper_id: 0,
+            solder_mask_expansion_from_hole_edge: false,
             hole_shape: HoleShape::Round,
             hole_slot_length: 0.0,
             hole_rotation: 0.0,
@@ -391,8 +442,8 @@ impl Pad {
             rotation: 0.0,
             paste_mask_expansion: None,
             solder_mask_expansion: None,
-            paste_mask_expansion_mode: MaskExpansionMode::FromRule,
-            solder_mask_expansion_mode: MaskExpansionMode::FromRule,
+            paste_mask_expansion_mode: MaskExpansionMode::None,
+            solder_mask_expansion_mode: MaskExpansionMode::None,
             power_plane_connect_style: PowerPlaneConnectStyle::Relief,
             relief_conductor_width: default_pad_relief_conductor_width(),
             relief_entries: default_pad_relief_entries(),
@@ -410,6 +461,8 @@ impl Pad {
             polygon_index: default_polygon_index(),
             component_index: default_component_index(),
             unique_id: None,
+            guid: None,
+            raw_tail: None,
             identity_guid: None,
             identity_guid_b: None,
         }
@@ -480,18 +533,33 @@ pub enum ViaStackMode {
     FullStack,
 }
 
-/// Solder / paste mask expansion mode.
+/// Solder / paste mask expansion mode. Shared by pads and vias.
 ///
-/// Altium stores this as a tri-state byte, not a boolean: the expansion can be
-/// off, taken from the design rule, or a manually-specified value. (Shared by
-/// vias and, later, pads.)
+/// This is Altium's `TCacheState = (eCacheInvalid, eCacheValid, eCacheManual)`
+/// (ordinals 0/1/2, from the `Advpcb.dll` RTTI), so it describes the state of a
+/// *cached* expansion rather than an on/off switch. The stored expansion value
+/// is only authoritative when the state says so:
+///
+/// - `None` (0, `eCacheInvalid`) — the cached value is stale. This is what a
+///   fresh Altium pad or via carries, so it is also our default.
+/// - `FromRule` (1, `eCacheValid`) — the stored value is a rule result Altium
+///   already computed. This is what Altium leaves behind once it has opened a
+///   library and resolved the expansion itself.
+/// - `Manual` (2, `eCacheManual`) — the stored value was specified by hand.
+///
+/// Only `Manual` survives a trip through Altium. `scripts/Verify-MaskCacheState.ps1`
+/// hands Altium a library carrying all three states and shows it recomputing the
+/// rule-driven ones on load: a pad written as `None`/0.0 and a pad written as
+/// `FromRule`/0.0 both come back as `FromRule` with the rule's 4 mil, while the
+/// `Manual` pad keeps its own number. So the state a rule-driven pad is written
+/// with is a fidelity question, not a fabrication-outcome one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MaskExpansionMode {
-    /// No mask expansion.
-    None,
-    /// Expansion taken from the design rule (Altium's default).
+    /// Cached expansion invalid — Altium recomputes it from the design rule.
     #[default]
+    None,
+    /// The stored expansion is a rule result Altium computed and will honour.
     FromRule,
     /// A manually-specified expansion value is used.
     Manual,
@@ -558,6 +626,50 @@ impl PowerPlaneConnectStyle {
     }
 }
 
+/// How a via's drill span is classified — `SubRecord-1` byte @312.
+///
+/// A through via spans the whole board; the blind/buried kinds mark which end of a
+/// drill-pair sequence the via belongs to. `from_layer` / `to_layer` describe the span
+/// but not this classification, which Altium stores separately.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DrillLayerPairType {
+    /// Spans the full board (Altium's default).
+    #[default]
+    Through,
+    /// First drill pair of a blind/buried sequence.
+    BlindBuriedStart,
+    /// An intermediate drill pair.
+    Mid,
+    /// Final drill pair of the sequence.
+    End,
+}
+
+impl DrillLayerPairType {
+    /// Creates from the Altium byte (`0` = `Through`, `1` = `BlindBuriedStart`,
+    /// `2` = `Mid`, `3` = `End`). An unknown value reads as `Through`.
+    #[must_use]
+    pub const fn from_id(id: u8) -> Self {
+        match id {
+            1 => Self::BlindBuriedStart,
+            2 => Self::Mid,
+            3 => Self::End,
+            _ => Self::Through,
+        }
+    }
+
+    /// Returns the Altium byte.
+    #[must_use]
+    pub const fn to_id(self) -> u8 {
+        match self {
+            Self::Through => 0,
+            Self::BlindBuriedStart => 1,
+            Self::Mid => 2,
+            Self::End => 3,
+        }
+    }
+}
+
 /// A PCB via (vertical interconnect access).
 ///
 /// Vias connect traces between different copper layers. They have a drill hole
@@ -592,8 +704,8 @@ pub struct Via {
     #[serde(default, serialize_with = "crate::altium::serde_round::serialize")]
     pub solder_mask_expansion: f64,
 
-    /// Solder mask expansion mode (`None` / `FromRule` / `Manual`). Altium stores this
-    /// as a tri-state byte; `FromRule` is the default for a fresh via.
+    /// Solder mask expansion mode (`None` / `FromRule` / `Manual`) — `SubRecord-1`
+    /// byte @66. A fresh Altium via carries `None`, deferring to the design rule.
     #[serde(default)]
     pub solder_mask_expansion_mode: MaskExpansionMode,
 
@@ -705,9 +817,40 @@ pub struct Via {
     #[serde(default, skip_serializing_if = "PcbFlags::is_empty")]
     pub flags: PcbFlags,
 
+    /// Whether solder-mask expansion is measured from the HOLE edge rather than the
+    /// pad edge — `SubRecord-1` bool @258. Default `false`, matching the template.
+    #[serde(default)]
+    pub solder_mask_expansion_from_hole_edge: bool,
+
+    /// Drill-pair classification — `SubRecord-1` byte @312. Default `Through`.
+    #[serde(default)]
+    pub drill_layer_pair_type: DrillLayerPairType,
+
     /// Unique ID assigned by Altium (8-character alphanumeric string).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unique_id: Option<String>,
+    /// Altium's stable identity for this primitive, from the footprint's
+    /// `PrimitiveGuids` stream (`{XXXXXXXX-…}`), or `None` for a primitive
+    /// with no recorded identity (anything built from scratch). Riding on the
+    /// primitive itself, the identity follows it through structural edits —
+    /// deleting a neighbour cannot re-point it, which the old footprint-level
+    /// ordinal list could not guarantee.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub guid: Option<String>,
+    /// The via's whole record block exactly as read (base64 in JSON), used as
+    /// the write-side base with every typed field overlaid — so unmodelled
+    /// bytes (the two in-record identity GUID slots, cache values, template
+    /// drift between AD versions, the thirty bytes an older library's
+    /// 351-byte vias carry past the 321-byte template) round-trip verbatim,
+    /// length included. `None` (from scratch) uses the template with the GUID
+    /// slots zeroed, which is what AD24 itself writes for library vias (the
+    /// golden's are all zeros).
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "crate::altium::base64_opt"
+    )]
+    pub raw_block: Option<Vec<u8>>,
 }
 
 /// Default thermal relief gap (10 mils = 0.254mm).
@@ -755,7 +898,7 @@ impl Via {
             from_layer: Layer::TopLayer,
             to_layer: Layer::BottomLayer,
             solder_mask_expansion: 0.0,
-            solder_mask_expansion_mode: MaskExpansionMode::FromRule,
+            solder_mask_expansion_mode: MaskExpansionMode::None,
             solder_mask_expansion_back: None,
             hole_positive_tolerance: None,
             hole_negative_tolerance: None,
@@ -772,7 +915,11 @@ impl Via {
             diameter_stack_mode: ViaStackMode::Simple,
             per_layer_diameters: None,
             flags: PcbFlags::empty(),
+            solder_mask_expansion_from_hole_edge: false,
+            drill_layer_pair_type: DrillLayerPairType::Through,
             unique_id: None,
+            guid: None,
+            raw_block: None,
         }
     }
 
@@ -794,7 +941,7 @@ impl Via {
             from_layer: from,
             to_layer: to,
             solder_mask_expansion: 0.0,
-            solder_mask_expansion_mode: MaskExpansionMode::FromRule,
+            solder_mask_expansion_mode: MaskExpansionMode::None,
             solder_mask_expansion_back: None,
             hole_positive_tolerance: None,
             hole_negative_tolerance: None,
@@ -811,14 +958,18 @@ impl Via {
             diameter_stack_mode: ViaStackMode::Simple,
             per_layer_diameters: None,
             flags: PcbFlags::empty(),
+            solder_mask_expansion_from_hole_edge: false,
+            drill_layer_pair_type: DrillLayerPairType::Through,
             unique_id: None,
+            guid: None,
+            raw_block: None,
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{MaskExpansionMode, PowerPlaneConnectStyle};
+    use super::{HoleShape, MaskExpansionMode, Pad, PowerPlaneConnectStyle, Via};
 
     #[test]
     fn mask_expansion_mode_round_trips_and_defaults() {
@@ -849,5 +1000,45 @@ mod tests {
             PowerPlaneConnectStyle::from_id(99),
             PowerPlaneConnectStyle::Relief
         );
+    }
+
+    // ==================== serde defaults =====================================
+    //
+    // These fire when a caller's JSON omits the field — the read-modify-write
+    // path, where `read_pcblib` skips anything at its default and the value has
+    // to come back on the way in. A wrong default here is silent: the primitive
+    // deserialises fine and writes different bytes than it was read with.
+
+    #[test]
+    fn an_omitted_pad_field_deserialises_to_altiums_own_default() {
+        let pad: Pad =
+            serde_json::from_str(r#"{"designator":"1","x":0.0,"y":0.0,"width":1.0,"height":1.0}"#)
+                .expect("a minimal pad should deserialise");
+
+        // Altium marks every pad plated, SMD included, so omitting the key must
+        // not read as "unplated" — that would turn a plated hole into an NPTH.
+        assert!(pad.is_plated);
+        assert_eq!(pad.hole_shape, HoleShape::default());
+    }
+
+    #[test]
+    fn an_omitted_via_field_deserialises_to_the_altium_template_value() {
+        let via: Via = serde_json::from_str(r#"{"x":0.0,"y":0.0,"diameter":0.6,"hole_size":0.3}"#)
+            .expect("a minimal via should deserialise");
+
+        // Thermal relief: a zero gap or zero conductor width would flood-connect
+        // the via straight into a plane, making the board an infinite heat sink
+        // and effectively unsolderable.
+        assert!((via.thermal_relief_gap - 0.254).abs() < 1e-9);
+        assert_eq!(via.thermal_relief_conductors, 4);
+        assert!((via.thermal_relief_width - 0.254).abs() < 1e-9);
+
+        // Power-plane clearances: zero here shorts the via to every plane it
+        // passes through.
+        assert!((via.power_plane_relief_expansion - 0.508).abs() < 1e-9);
+        assert!((via.power_plane_clearance - 0.508).abs() < 1e-9);
+
+        // 0xFFFF is the "no net" sentinel; 0 would claim net index zero.
+        assert_eq!(via.net_index, 0xFFFF);
     }
 }

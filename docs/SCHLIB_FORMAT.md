@@ -19,12 +19,17 @@ SchLib files are OLE Compound Documents (CFB format, OLE v3) containing:
 └── {ComponentName}/        # One storage per symbol
     ├── Data                # Symbol records stream
     ├── PinFrac             # OPTIONAL: fractional pin coordinates (compressed storage)
-    └── PinSymbolLineWidth  # OPTIONAL: per-pin symbol line widths (compressed storage)
+    ├── PinSymbolLineWidth  # OPTIONAL: per-pin symbol line widths (compressed storage)
+    ├── PinWideText         # OPTIONAL: wide form of non-ASCII pin names
+    └── PinFunctionData     # OPTIONAL: written by newer Altium; carried verbatim, not read
 ```
 
-The two pin auxiliary streams are emitted only when at least one pin needs them (see
-[Pin auxiliary streams](#pin-auxiliary-streams)); a symbol with on-grid, default-width pins has
-only its `Data` stream, byte-identical to Altium's own output.
+The pin auxiliary streams are emitted only when at least one pin needs them (see
+[Pin auxiliary streams](#pin-auxiliary-streams)); a symbol with on-grid, default-width,
+ASCII-named pins has only its `Data` stream, byte-identical to Altium's own output. Any other
+stream a symbol's storage holds — a `PinFunctionData` from a newer Altium — is carried as read
+(`Symbol::extra_streams`, base64 in JSON) and written back beside the ones this crate does
+read, so nothing Altium stored is dropped for being unknown.
 
 ## Cross-Cutting Conventions
 
@@ -46,13 +51,49 @@ instead of being repeated:
   below).
 - **`IndexInSheet`:** one shared sequential 0-based counter over all content records (see
   [IndexInSheet](#indexinsheet)).
-- **`%UTF8%` keys:** a text value that Windows-1252 cannot represent (Cyrillic, CJK, Greek `Ω`,
-  ...) is stored under a `%UTF8%<Key>` key (e.g. `%UTF8%Text`) holding the raw UTF-8 bytes,
-  INSTEAD of the lossy plain `<Key>` — only one of the two is ever written. Applies to `Text` on
-  Label, Text, Parameter, Designator and TextFrame records.
+- **`%UTF8%` keys:** any **non-ASCII** text value is written twice: the plain `<Key>` carrying
+  the value's raw UTF-8 bytes, plus a `%UTF8%<Key>` companion. The gate is ASCII, not
+  Windows-1252-representability — the golden stores `Résistance` this way even though `é` has a
+  single-byte form. The companion's on-disk content in an Altium-authored file is the UTF-8 bytes
+  re-decoded through the authoring machine's ANSI code page (a locale artefact; Windows-1250 for
+  the golden); this crate writes the same bytes under both keys, which every reader resolves to
+  the same value. Applies to every text field: `LibReference`, `ComponentDescription`, `Text` on
+  Label/Parameter/Designator/TextFrame, and the FileHeader's `LibRef{N}`/`CompDescr{N}`.
 - **`UniqueID`:** 8-character alphanumeric per-record id, emitted as the LAST key.
 - **Encoding:** records are Windows-1252, with a leading `|`, no trailing `|`, and a trailing
   `0x00` (the record length includes the null).
+
+## SectionKeys Stream
+
+A root stream, present only when at least one component's name does not fit the CFB 31-UTF-16-unit
+storage cap. Storage names for such components are the name's wire bytes **plain-truncated at the
+cap** (the golden's Sinhala symbol is cut mid-codepoint, so the cut is bytewise); this stream maps
+each real `LibRef` to its truncated `SectionKey` (storage name):
+
+```text
+[u32 len]["|KeyCount=N|%UTF8%LibRef0=…|||LibRef0=…|%UTF8%SectionKey0=…|||SectionKey0=…" + 0x00]
+```
+
+Values follow the `%UTF8%` twin convention above; the `|||` after each twin value is Altium's own
+separator, reproduced verbatim. The `FileHeader`'s `LibRef{N}` entries hold the **full untruncated
+name** — the golden stores a 33-byte Khmer name there against a 31-unit storage — so lookup for a
+long name goes `FileHeader` → `SectionKeys` → storage.
+
+## PinWideText Stream
+
+A non-ASCII pin **name** is stored in the binary pin record as its **UTF-8 bytes** (every one
+of the golden's 52 such pins, `Résistance` included although Windows-1252 could hold it), with
+this stream carrying the wide form beside it; the pin's other strings are Windows-1252.
+
+Per-component, alongside `PinFrac` / `PinSymbolLineWidth`, in the shared compressed-storage
+framing (see the `/Storage` section): one zlib entry per pin whose name leaves ASCII, keyed by pin
+ordinal, payload a Unicode parameter block `[u32 LE byte_len][UTF-16LE "|NAME=<text>"]`.
+
+This is the pin name's authoritative wide form — the binary pin record narrows the name through
+the writing machine's ANSI code page, so a name typed as real Unicode survives only here. In an
+Altium-authored file the value can itself be the ANSI-widened form of the name's UTF-8 bytes (the
+golden's 52 streams all are, courtesy of script authoring); a reader folds such a value back
+through the plausible code pages and applies it only when the binary record yielded a lossy husk.
 
 ## FileHeader Stream
 
@@ -139,8 +180,8 @@ Every record type this crate models:
 |----|------|-------------|
 | 1 | Component | Symbol header (name, description, part count) |
 | 2 | Pin | Pin in text form (rare — skipped on read; binary pins are used instead) |
-| 3 | Text | Text annotation (general-purpose text) |
-| 4 | Label | Text label |
+| 3 | IeeeSymbol | IEEE symbol glyph (a dot, a clock, an active-low input, …) |
+| 4 | Label | Text string — the only free text on a symbol |
 | 5 | Bezier | Cubic Bezier curve (4 control points) |
 | 6 | Polyline | Multiple connected line segments |
 | 7 | Polygon | Filled polygon |
@@ -289,7 +330,8 @@ Derived from the Rotated and Flipped flags:
 
 ### Pin auxiliary streams
 
-Two optional per-component OLE streams carry data the binary pin record cannot hold. Both use the
+Three optional per-component OLE streams carry data the binary pin record cannot hold
+(`PinWideText`, the third, is described above). All use the
 [compressed-storage framing](#compressed-storage-framing) with each entry keyed by the **pin
 ordinal** as an ASCII-decimal Pascal string:
 
@@ -299,7 +341,7 @@ ordinal** as an ASCII-decimal Pascal string:
 - **`PinSymbolLineWidth`** — a per-pin symbol line width. Payload: a Unicode parameter block
   `[u32 LE byte_len][UTF-16LE "|SYMBOL_LINEWIDTH=N"]`.
 
-A symbol whose pins are all on-grid with default line width emits **neither** stream.
+A symbol whose pins are all on-grid, default-width and ASCII-named emits **none** of them.
 
 ## Compressed-Storage Framing
 
@@ -409,7 +451,11 @@ the regenerated fixture and real Altium-authored libraries):
   (RECORD=41, `OwnerPartId=-1`) records carry the `IndexInSheet=-1` sentinel and do **not**
   consume a counter slot (the golden DISPMODE system Comment stores `IndexInSheet=-1` while the
   rectangles keep slots 0 and 1); RECORD=44/46/48 carry no token and RECORD=45 carries `-1`.
-- The value is purely positional, so this crate derives it on write rather than storing it.
+- The value is purely positional, so this crate derives it on write rather than storing it. That
+  makes the counter only as good as the record order: Altium stores the content records in
+  **authoring order**, interleaving the kinds (the golden's `LOCKFLAGS2` runs line, arc, ellipse,
+  round-rect, polyline, polygon, pie, bezier, label), so a symbol read from a file is written back
+  in the order it came in. See [Symbol Writing Order](#symbol-writing-order).
 
 ## Common Text Record Fields
 
@@ -445,27 +491,51 @@ The first record of each component's Data stream. Keys as written (in order):
 | `IndexInSheet` | int | -1 for the component root |
 | `OwnerPartId` | int | -1 for the component root |
 | `CurrentPartId` | int | Currently displayed part (default 1) |
-| `LibraryPath` | string | `*` sentinel |
+| `LibraryPath` | string | `*` sentinel — scripted headers carry it, UI-authored ones omit it |
 | `SourceLibraryName` | string | `*` sentinel |
-| `SheetPartFileName` | string | `*` sentinel |
+| `SheetPartFileName` | string | `*` sentinel — scripted headers carry it, UI-authored ones omit it |
 | `TargetFileName` | string | `*` sentinel |
-| `AllPinCount` | int | Total number of pins (calculated from the symbol) |
+| `AllPinCount` | int | A **stale** count Altium does not maintain (a UI-drawn 32-pin MCU stores `1`, a one-pin header `2`); carried verbatim on a read-modify-write, the pin count for a symbol built from scratch |
 | `AreaColor` | int | Fill colour (BGR, 11599871 = light yellow) |
 | `Color` | int | Border colour (BGR, 128 = dark red) |
 | `PartIDLocked` | bool | `T`/`F` |
 
 > **Note:** Altium-authored headers also carry a component `UniqueID` and may carry
-> `DesignItemId` / `ComponentKind`; these are currently unmodelled (dropped on read).
+> `DesignItemId` / `ComponentKind`; none of these is a typed field, but every key the model
+> does not name — those, or a UI-authored
+> `COMPONENTKINDVERSION2=5` — rides along verbatim: the whole header is carried as read
+> (`Symbol::header_params`, every segment in order) and replayed byte for byte unless the
+> field behind a segment was edited, so the two `%UTF8%` layouts Altium uses both survive.
+> A UI-typed Latin-1 description is stored as `%UTF8%ComponentDescription=<UTF-8 bytes>|||`
+> `ComponentDescription=<Windows-1252 bytes>` (twin first, two empty segments, code-page
+> plain key); a scripted one puts UTF-8 bytes in both keys.
+
+A record the file stores without a `UniqueID` (Altium writes a pie and an IEEE symbol that way) is not given one:
+a save is deterministic, so a version-controlled library shows no phantom diff. The library's
+own `UniqueID` in the `FileHeader` is kept for its lifetime as well.
+
+Every content record is carried the same way — `raw_params` on each record struct holds its
+segments as read — and replayed verbatim where the field behind a segment is unchanged: the
+UI omits `LineWidth=1` on a rectangle where a script writes it, stores a Latin-1 label as
+`%UTF8%Text=<UTF-8>|||Text=<Windows-1252>`, and may carry keys this crate does not model,
+all of which come back as stored; an edited field takes its canonical form, a cleared flag's
+key is dropped, and the positional `IndexInSheet` is always recomputed.
+
+The **system parameter** is Altium's own `Comment` record alone (with the Designator
+record): stored after the designator with `IndexInSheet=-1` and no counter slot. A user
+parameter is a content record with a counter slot in authoring order — the UI stores it
+with `OwnerPartId=-1` too (a script sets `1`), and before the graphics, so `OwnerPartId`
+does not mark a parameter as system.
 
 ## Primitive Records
 
 All shape records carry the [common fields](#common-text-record-fields) in addition to the tables
 below; every coordinate accepts a `_Frac` companion.
 
-### Text (RECORD=3) and Label (RECORD=4)
+### Label (RECORD=4)
 
-Two distinct record types sharing one field set. This crate reads/writes RECORD=3 as a
-general-purpose text annotation and RECORD=4 as a label.
+Altium's text string: the only free text a symbol carries (the `RECORD=3` this crate once
+read as a "text annotation" is the [IEEE symbol](#ieee-symbol-record3) below).
 
 | Property | Type | Description |
 |----------|------|-------------|
@@ -490,6 +560,38 @@ Keys in golden order: `Orientation` and `Justification` sit between the coordina
 | 0 | Bottom Left | 3 | Middle Left | 6 | Top Left |
 | 1 | Bottom Centre | 4 | Middle Centre | 7 | Top Centre |
 | 2 | Bottom Right | 5 | Middle Right | 8 | Top Right |
+
+### IEEE Symbol (RECORD=3)
+
+One of Altium's standard logic and signal glyphs placed at a point with a scale, a
+quarter-turn rotation and an optional mirror. Settled by the `IEEESYM` golden:
+the record carries exactly these keys, in this order, and **no `UniqueID`** — Altium never
+gives this record one, so none is written.
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `Symbol` | int | The glyph (`TIeeeSymbol`, table below); always written |
+| `Location.X` / `Location.Y` | coord | Anchor position; omit at 0 |
+| `ScaleFactor` | coord | Glyph size in schematic units (`10` for a 100 mil placement); always written |
+| `Orientation` | int | 0-3 = 0°/90°/180°/270°; omit at 0 |
+| `LineWidth` | int | Always written (`1` at the default) |
+| `Mirror` | bool | Emit only when `T` (note: `Mirror`, not a label's `IsMirrored`) |
+| `Color` | int | Line colour (BGR; omit at 0) |
+
+Golden records: `|RECORD=3|IsNotAccesible=T|OwnerPartId=1|Symbol=1|Location.X=-10|ScaleFactor=10|LineWidth=1`
+(a dot), `…|Symbol=3|ScaleFactor=10|Orientation=1|LineWidth=1|Mirror=T` (a mirrored, rotated
+clock) and `…|OwnerPartId=1|GraphicallyLocked=T|Symbol=4|Location.X=10|ScaleFactor=20|LineWidth=1|Color=16711680`
+(a locked, larger, coloured active-low input) — the display flags sit after `OwnerPartId` as
+on every graphic.
+
+**`TIeeeSymbol` values** (AD24): 0 none, 1 Dot, 2 Right-Left Signal Flow, 3 Clock,
+4 Active Low Input, 5 Analog Signal In, 6 Not Logic Connection, 7 Shift Right, 8 Postponed
+Output, 9 Open Collector, 10 Hi-Z, 11 High Current, 12 Pulse, 13 Schmitt, 14 Delay, 15 Group
+Line, 16 Group Binary, 17 Active Low Output, 18 Pi, 19 Greater Equal, 20 Less Equal, 21 Sigma,
+22 Open Collector Pull Up, 23 Open Emitter, 24 Open Emitter Pull Up, 25 Digital Signal In,
+26 And, 27 Invertor, 28 Or, 29 Xor, 30 Shift Left, 31 Input Output, 32 Open Circuit Output,
+33 Left-Right Signal Flow, 34 Bidirectional Signal Flow. The JSON `symbol` field carries the
+id as stored, so a value this table does not name round-trips unchanged.
 
 ### Bezier (RECORD=5)
 
@@ -729,7 +831,16 @@ A parameter-record variant selected by `Name=Designator`. As written by this cra
   | `ModelDatafile0` | string | Optional `.PcbLib` path — what lets Altium resolve the footprint directly |
   | `ModelDatafileEntity0` | string | Footprint entity (resolution key) |
   | `ModelDatafileKind0` | string | `PCBLib` |
-  | `IsCurrent` | bool | `T` on the default footprint |
+  | `IsCurrent` | bool | `T` on the default footprint; omitted on every other (never `F`) |
+
+  The record is carried and replayed like every content record (`raw_params`, see
+  [Component Header Record](#component-header-record1)): a UI-authored link also carries
+  `IntegratedModel=T|DatabaseModel=T`, which this crate does not model, and omits `Description`
+  while it is empty, all of which come back as stored. A link **without a datafile** omits
+  the whole datafile group — `DatafileCount`, `ModelDatafile0`, `ModelDatafileEntity0`,
+  `ModelDatafileKind0` (the `IMPLCHAIN` golden's name-only links); this crate writes the group
+  for a from-scratch link, which is what lets Altium resolve the footprint, and keeps a read
+  link as it was unless a path is given.
 
 - **RECORD=46 (MapDefinerList)** and **RECORD=48 (ImplementationParameters)** — written as empty
   children of each RECORD=45 (`|RECORD=46|OwnerIndex={45's index}` / `|RECORD=48|OwnerIndex=...`).
@@ -739,8 +850,8 @@ A parameter-record variant selected by `Name=Designator`. As written by this cra
 > **Note:** `DatafileCount=1` plus the `ModelDatafileEntity0` link is what lets Altium *resolve*
 > the model to an actual footprint in a `PcbLib`; a name-only record with `DatafileCount=0` shows
 > in the list but reports "model not found". AltiumSharp indexes the datafile keys 1-based
-> (`MODELDATAFILEKIND1`); this crate writes 0-based, matching observed files — the index base is
-> still under golden verification (TODO §B).
+> (`MODELDATAFILEKIND1`); this crate writes 0-based — the `IMPLCHAIN` golden, authored by AD24,
+> stores `ModelDatafile0` / `ModelDatafileEntity0` / `ModelDatafileKind0`.
 
 ## Default Values
 
@@ -761,9 +872,12 @@ Read-side defaults when properties are absent:
 
 ## Symbol Writing Order
 
-When writing symbol data, this crate encodes records in this specific order (the shared
-`IndexInSheet` counter runs across steps 2-17; the designator and system parameters keep the
-`-1` sentinel and consume no slot):
+A symbol read from a file is written back in **its own record order**, because that is the order
+the shared `IndexInSheet` counter numbers and Altium interleaves the kinds freely.
+
+A symbol with no record order of its own — one built in memory — is written kind by kind, in the
+order below (the shared `IndexInSheet` counter runs across steps 2-17; the designator and system
+parameters keep the `-1` sentinel and consume no slot):
 
 1. Component header (RECORD=1)
 2. Rectangles (RECORD=14) — before the pins so a solid body does not paint over pin names
@@ -780,13 +894,16 @@ When writing symbol data, this crate encodes records in this specific order (the
 13. Rounded rectangles (RECORD=10)
 14. Elliptical arcs (RECORD=11)
 15. Labels (RECORD=4)
-16. Text annotations (RECORD=3)
+16. IEEE symbols (RECORD=3)
 17. User parameters (RECORD=41, `OwnerPartId >= 1`) — after the graphic content, matching the
     golden stream order (JUSTIFY stores labels at slots 0-3, user parameters at 4-5)
 18. Designator (RECORD=34, when non-empty)
 19. System parameters (RECORD=41, `OwnerPartId = -1`) — after the designator, as the golden
     orders them
 20. Implementation list (RECORD=44), then per footprint model: RECORD=45 + RECORD=46 + RECORD=48
+
+Steps 18-20 keep their positions either way: the designator, the system parameters and the
+implementation list follow the content records regardless of how those were ordered.
 
 The stream ends with the last record's payload — there is **no** trailing end marker (see the Data
 Stream Format section and issue #68).
@@ -806,7 +923,8 @@ Some symbols have multiple parts (e.g. quad op-amp):
 - **Pin symbol decorations**: supported (22 symbol types at 4 positions)
 - **Display modes**: count in `DisplayModeCount`; primitives carry `OwnerPartDisplayMode`
 - **Font storage**: fonts defined in FileHeader (`FontName{N}`, `Size{N}`)
-- **Unique IDs**: all records carry an 8-char alphanumeric `UniqueID` (last key)
+- **Unique IDs**: text records carry an 8-char alphanumeric `UniqueID` as their last key —
+    except a pie and an IEEE symbol, which Altium writes without one (and are given none)
 - **Embedded images**: `RECORD=30` metadata + zlib payloads in `/Storage`, order-matched
 
 ## References
@@ -814,4 +932,3 @@ Some symbols have multiple parts (e.g. quad op-amp):
 - [AltiumSharp](https://github.com/issus/AltiumSharp) - C# library for Altium files (MIT)
 - [pyAltiumLib](https://github.com/ChrisHoyer/pyAltiumLib) - Python library for reading Altium files
 - [python-altium](https://github.com/vadmium/python-altium) - Altium format documentation
-- Sample analysis: `scripts/analyse/analyse_schlib.py`

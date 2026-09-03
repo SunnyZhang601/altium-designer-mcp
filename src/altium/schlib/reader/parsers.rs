@@ -156,6 +156,7 @@ pub(super) fn parse_rectangle(props: &HashMap<String, String>) -> Option<Rectang
     let transparent = props.get("transparent").is_some_and(|s| s == "T");
 
     Some(Rectangle {
+        raw_params: Vec::new(),
         x1,
         y1,
         x2,
@@ -203,6 +204,7 @@ pub(super) fn parse_line(props: &HashMap<String, String>) -> Option<Line> {
         .unwrap_or(1);
 
     Some(Line {
+        raw_params: Vec::new(),
         x1,
         y1,
         x2,
@@ -219,7 +221,7 @@ pub(super) fn parse_line(props: &HashMap<String, String>) -> Option<Line> {
 
 /// Parses a parameter from properties.
 pub(super) fn parse_parameter(props: &HashMap<String, String>) -> Option<Parameter> {
-    let name = props.get("name")?.clone();
+    let name = read_utf8_text_field(props, "name")?;
     let value = read_utf8_text_field(props, "text").unwrap_or_default();
 
     let x = crate::altium::schlib::coord::read(props, "location.x");
@@ -230,7 +232,7 @@ pub(super) fn parse_parameter(props: &HashMap<String, String>) -> Option<Paramet
         .unwrap_or(1);
     // Altium omits Color when 0 (the golden's user parameters carry no key), so
     // absent reads as 0 — matching every other shape parser and AltiumSharp's
-    // TryGetInt. The old fabricated 0x800000 default re-emitted a spurious
+    // TryGetInt. Fabricating a 0x800000 default would re-emit a spurious
     // `Color=8388608` on read-modify-write.
     let color = props.get("color").and_then(|s| s.parse().ok()).unwrap_or(0);
     let hidden = props.get("ishidden").is_some_and(|s| s == "T");
@@ -247,21 +249,36 @@ pub(super) fn parse_parameter(props: &HashMap<String, String>) -> Option<Paramet
         .and_then(|s| s.parse().ok())
         .unwrap_or(0);
     // The golden's user parameters carry `Justification=8`/`=4`; absent => 0
-    // (bottom-left). Previously dropped on read (silent data loss).
+    // (bottom-left). Dropping it on read is silent data loss.
     let justification = props
         .get("justification")
         .and_then(|s| s.parse().ok())
         .unwrap_or(0);
     let show_name = props.get("showname").is_some_and(|s| s == "T");
     let hide_name = props.get("hidename").is_some_and(|s| s == "T");
-    let description = props.get("description").cloned().unwrap_or_default();
+    let is_mirrored = props.get("ismirrored").is_some_and(|s| s == "T");
+    let description = read_utf8_text_field(props, "description").unwrap_or_default();
     let is_configurable = props.get("isconfigurable").is_some_and(|s| s == "T");
+    // Inverted on the wire: Altium writes NotAutoPosition=T only when the user turns
+    // auto-positioning OFF, and omits the key entirely while it is on.
+    let auto_position = props.get("notautoposition").map_or(true, |v| v != "T");
+    let is_rule = props.get("isrule").is_some_and(|s| s == "T");
+    let is_system_parameter = props.get("issystemparameter").is_some_and(|s| s == "T");
+    let text_horz_anchor = props
+        .get("texthorzanchor")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0);
+    let text_vert_anchor = props
+        .get("textvertanchor")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0);
     let owner_part_id = props
         .get("ownerpartid")
         .and_then(|s| s.parse().ok())
         .unwrap_or(1);
 
     Some(Parameter {
+        raw_params: Vec::new(),
         name,
         value,
         x,
@@ -275,8 +292,14 @@ pub(super) fn parse_parameter(props: &HashMap<String, String>) -> Option<Paramet
         justification,
         show_name,
         hide_name,
+        is_mirrored,
         description,
         is_configurable,
+        auto_position,
+        is_rule,
+        is_system_parameter,
+        text_horz_anchor,
+        text_vert_anchor,
         owner_part_id,
         display_flags: read_display_flags(props),
         unique_id: props.get("uniqueid").cloned(),
@@ -338,6 +361,7 @@ pub(super) fn parse_polyline(props: &HashMap<String, String>) -> Option<Polyline
         .unwrap_or(1);
 
     Some(Polyline {
+        raw_params: Vec::new(),
         points,
         line_width,
         color,
@@ -396,6 +420,7 @@ pub(super) fn parse_polygon(props: &HashMap<String, String>) -> Option<Polygon> 
         .unwrap_or(1);
 
     Some(Polygon {
+        raw_params: Vec::new(),
         points,
         line_width,
         line_color,
@@ -443,6 +468,7 @@ pub(super) fn parse_ellipse(props: &HashMap<String, String>) -> Option<Ellipse> 
         .unwrap_or(1);
 
     Some(Ellipse {
+        raw_params: Vec::new(),
         x,
         y,
         radius_x,
@@ -490,6 +516,7 @@ pub(super) fn parse_arc(props: &HashMap<String, String>) -> Option<Arc> {
         .unwrap_or(1);
 
     Some(Arc {
+        raw_params: Vec::new(),
         x,
         y,
         radius,
@@ -538,6 +565,7 @@ pub(super) fn parse_pie(props: &HashMap<String, String>) -> Option<Pie> {
         .unwrap_or(1);
 
     Some(Pie {
+        raw_params: Vec::new(),
         x,
         y,
         radius,
@@ -581,13 +609,14 @@ pub(super) fn parse_image(props: &HashMap<String, String>) -> Option<Image> {
     let show_border = props.get("showborder").is_some_and(|s| s == "T");
     let keep_aspect = props.get("keepaspect").is_some_and(|s| s == "T");
     let embed_image = props.get("embedimage").is_some_and(|s| s == "T");
-    let file_name = props.get("filename").cloned().unwrap_or_default();
+    let file_name = read_utf8_text_field(props, "filename").unwrap_or_default();
     let owner_part_id = props
         .get("ownerpartid")
         .and_then(|s| s.parse().ok())
         .unwrap_or(1);
 
     Some(Image {
+        raw_params: Vec::new(),
         x1,
         y1,
         x2,
@@ -666,6 +695,7 @@ pub(super) fn parse_text_frame(props: &HashMap<String, String>) -> Option<TextFr
         .unwrap_or(1);
 
     Some(TextFrame {
+        raw_params: Vec::new(),
         x1,
         y1,
         x2,
@@ -719,6 +749,7 @@ pub(super) fn parse_bezier(props: &HashMap<String, String>) -> Option<Bezier> {
         .unwrap_or(1);
 
     Some(Bezier {
+        raw_params: Vec::new(),
         x1,
         y1,
         x2,
@@ -731,6 +762,7 @@ pub(super) fn parse_bezier(props: &HashMap<String, String>) -> Option<Bezier> {
         color,
         is_not_accessible,
         owner_part_id,
+        display_flags: read_display_flags(props),
         unique_id: props.get("uniqueid").cloned(),
     })
 }
@@ -768,6 +800,7 @@ pub(super) fn parse_round_rect(props: &HashMap<String, String>) -> Option<RoundR
         .unwrap_or(1);
 
     Some(RoundRect {
+        raw_params: Vec::new(),
         x1,
         y1,
         x2,
@@ -827,6 +860,7 @@ pub(super) fn parse_elliptical_arc(props: &HashMap<String, String>) -> Option<El
         .unwrap_or(1);
 
     Some(EllipticalArc {
+        raw_params: Vec::new(),
         x,
         y,
         radius,
@@ -837,6 +871,7 @@ pub(super) fn parse_elliptical_arc(props: &HashMap<String, String>) -> Option<El
         color,
         fill_color,
         owner_part_id,
+        display_flags: read_display_flags(props),
         unique_id: props.get("uniqueid").cloned(),
     })
 }
@@ -869,6 +904,7 @@ pub(super) fn parse_label(props: &HashMap<String, String>) -> Option<Label> {
         .unwrap_or(1);
 
     Some(Label {
+        raw_params: Vec::new(),
         x,
         y,
         text,
@@ -884,45 +920,47 @@ pub(super) fn parse_label(props: &HashMap<String, String>) -> Option<Label> {
     })
 }
 
-/// Parses a text annotation from properties.
-#[allow(clippy::unnecessary_wraps)] // infallible (all coords default); Option kept for uniform parser dispatch
-pub(super) fn parse_text(props: &HashMap<String, String>) -> Option<Text> {
+/// Parses an IEEE symbol (RECORD=3) from properties.
+#[allow(clippy::unnecessary_wraps)] // infallible (all fields default); Option kept for uniform parser dispatch
+pub(super) fn parse_ieee_symbol(props: &HashMap<String, String>) -> Option<IeeeSymbol> {
     let x = crate::altium::schlib::coord::read(props, "location.x");
     let y = crate::altium::schlib::coord::read(props, "location.y");
-    let text = read_utf8_text_field(props, "text").unwrap_or_default();
-
-    let font_id = props
-        .get("fontid")
+    let symbol = props
+        .get("symbol")
         .and_then(|s| s.parse().ok())
-        .unwrap_or(1);
-    let color = props.get("color").and_then(|s| s.parse().ok()).unwrap_or(0);
+        .unwrap_or(0);
+    let scale_factor = if props.contains_key("scalefactor") {
+        crate::altium::schlib::coord::read(props, "scalefactor")
+    } else {
+        10.0
+    };
     let rotation = props
         .get("orientation")
         .and_then(|s| s.parse::<i32>().ok())
         .map_or(0.0, |o| f64::from(o) * 90.0);
-    let justification = props
-        .get("justification")
-        .and_then(|s| s.parse::<u8>().ok())
-        .map_or(TextJustification::BottomLeft, justification_from_id);
-    let is_mirrored = props.get("ismirrored").is_some_and(|s| s == "T");
-    let is_hidden = props.get("ishidden").is_some_and(|s| s == "T");
+    let is_mirrored = props.get("mirror").is_some_and(|s| s == "T");
+    let line_width = props
+        .get("linewidth")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(1);
+    let color = props.get("color").and_then(|s| s.parse().ok()).unwrap_or(0);
     let owner_part_id = props
         .get("ownerpartid")
         .and_then(|s| s.parse().ok())
         .unwrap_or(1);
 
-    Some(Text {
+    Some(IeeeSymbol {
+        raw_params: Vec::new(),
         x,
         y,
-        text,
-        font_id,
-        color,
-        justification,
+        symbol,
+        scale_factor,
         rotation,
         is_mirrored,
-        is_hidden,
+        line_width,
+        color,
         owner_part_id,
-        unique_id: props.get("uniqueid").cloned(),
+        display_flags: read_display_flags(props),
     })
 }
 
@@ -1064,8 +1102,8 @@ mod tests {
 
     #[test]
     fn parameter_justification_reads_and_defaults() {
-        // Golden JUSTIFY: `Justification=8` on Value, `=4` on Tol — previously
-        // dropped on read (silent data loss); absent defaults to 0.
+        // Golden JUSTIFY: `Justification=8` on Value, `=4` on Tol, both read
+        // rather than dropped; absent defaults to 0.
         let p = parse_parameter(&parse_properties(
             "|RECORD=41|Justification=8|FontID=1|Text=1k|Name=Value|",
         ))
@@ -1110,8 +1148,8 @@ mod tests {
     #[test]
     fn test_absent_colour_reads_black() {
         // Altium omits Color/AreaColor when 0; AltiumSharp defaults absent to 0
-        // (black). We previously fabricated navy / pale-yellow defaults, so reading
-        // an Altium shape that omits these surfaced the wrong colour.
+        // (black), so we must too: fabricating navy / pale-yellow defaults gives
+        // the wrong colour for an Altium shape that omits them.
         let arc = parse_arc(&parse_properties(
             "|RECORD=12|Location.X=5|Location.Y=5|Radius=10|",
         ))
@@ -1136,5 +1174,52 @@ mod tests {
         ))
         .unwrap();
         assert_eq!(label.color, 0, "absent label Color must read as black");
+    }
+    /// A binary pin record shorter than its 20-byte fixed head is no pin.
+    #[test]
+    fn a_binary_pin_record_shorter_than_its_fixed_head_is_refused() {
+        assert!(parse_binary_pin(&[0u8; 19]).is_none());
+    }
+
+    /// A polygon needs at least three vertices; fewer is no polygon.
+    #[test]
+    fn a_polygon_with_fewer_than_three_vertices_is_refused() {
+        let props = HashMap::from([
+            ("locationcount".to_string(), "2".to_string()),
+            ("x1".to_string(), "0".to_string()),
+            ("y1".to_string(), "0".to_string()),
+            ("x2".to_string(), "5".to_string()),
+            ("y2".to_string(), "5".to_string()),
+        ]);
+        assert!(parse_polygon(&props).is_none());
+    }
+
+    /// An ellipse without `SecondaryRadius` is a circle: the secondary radius
+    /// defaults to the primary, as Altium omits the key for circles.
+    #[test]
+    fn an_ellipse_without_a_secondary_radius_reads_as_a_circle() {
+        let props = HashMap::from([("radius".to_string(), "5".to_string())]);
+        let ellipse = parse_ellipse(&props).expect("a radius-only ellipse parses");
+        assert!((ellipse.radius_x - 5.0).abs() < f64::EPSILON);
+        assert!((ellipse.radius_y - 5.0).abs() < f64::EPSILON);
+    }
+
+    /// An elliptical arc without `SecondaryRadius` is circular: the secondary
+    /// radius defaults to the primary.
+    #[test]
+    fn an_elliptical_arc_without_a_secondary_radius_reads_as_circular() {
+        let props = HashMap::from([("radius".to_string(), "4".to_string())]);
+        let arc = parse_elliptical_arc(&props).expect("a radius-only arc parses");
+        assert!((arc.radius - 4.0).abs() < f64::EPSILON);
+        assert!((arc.secondary_radius - 4.0).abs() < f64::EPSILON);
+    }
+
+    /// An IEEE symbol without `ScaleFactor` takes Altium's 10-unit default.
+    #[test]
+    fn an_ieee_symbol_without_a_scale_factor_takes_the_default() {
+        let props = HashMap::from([("symbol".to_string(), "3".to_string())]);
+        let symbol = parse_ieee_symbol(&props).expect("a minimal IEEE symbol parses");
+        assert_eq!(symbol.symbol, 3);
+        assert!((symbol.scale_factor - 10.0).abs() < f64::EPSILON);
     }
 }

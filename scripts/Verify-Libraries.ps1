@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     On-site: verify that .PcbLib / .SchLib files open cleanly in a real Altium Designer.
 
@@ -22,13 +22,29 @@
 .PARAMETER TimeoutSeconds
     How long to wait for Altium to write the response (default 180).
 
+.PARAMETER Expect
+    Optional path to a JSON expectations file: an array of objects with a `file`
+    (matched by file name), and any of `components` (compared as a set — Altium
+    iterates a library in its own shortlex order, not file order) and
+    `primitive_counts` (array aligned with the entry's own `components`, which
+    it therefore requires; matched to Altium's view by component name, and
+    every key given must equal what Altium resolved — omit keys to leave them
+    unasserted). An entry may also carry `fixture_inconsistent`: name suffixes
+    of components whose stored name is documented as damaged (the golden's
+    FIXTURE_INCONSISTENT set — see tests/golden_fidelity.rs), so Altium's
+    decode of the name differs from ours by design; those names are excused
+    from the set comparison and their counts matched by suffix instead. The
+    run fails if Altium's view differs, so a verify run can assert primitive
+    counts and specific properties, not just "opened".
+
 .EXAMPLE
     .\Verify-Libraries.ps1 -Files C:\tmp\Verify.PcbLib, C:\tmp\Verify.SchLib
 #>
 param(
     [Parameter(Mandatory = $true)][string[]]$Files,
     [string]$AltiumExe,
-    [int]$TimeoutSeconds = 180
+    [int]$TimeoutSeconds = 180,
+    [string]$Expect
 )
 
 $ErrorActionPreference = 'Stop'
@@ -98,9 +114,90 @@ foreach ($r in @($results)) {
     }
 }
 
-if ($allOk) {
-    Write-Host "`nAll libraries opened in Altium." -ForegroundColor Green
-} else {
+# Emit the parsed results so a caller can assert on more than PASS/FAIL — the
+# per-file `components` array is what Verify-RoundTrip.ps1 compares against.
+# Progress above goes through Write-Host, so this is the only pipeline output.
+@($results)
+
+if (-not $allOk) {
     Write-Host "`nSome libraries FAILED to open." -ForegroundColor Red
     exit 1
+}
+Write-Host "`nAll libraries opened in Altium." -ForegroundColor Green
+
+# 7. Optional expectations: assert what Altium resolved, not just that it opened.
+if ($Expect) {
+    if (-not (Test-Path $Expect)) { throw "Expectations file not found: $Expect" }
+    . (Join-Path $ScriptDir 'ConvertFrom-WireName.ps1')
+    $mismatches = New-Object System.Collections.Generic.List[string]
+    # Explicit UTF-8: Windows PowerShell would read a BOM-less file as ANSI and
+    # mangle any non-Latin expected component name.
+    $expected = [System.IO.File]::ReadAllText((Resolve-Path $Expect).Path, [System.Text.Encoding]::UTF8) |
+        ConvertFrom-Json
+    foreach ($e in @($expected)) {
+        $leaf = Split-Path $e.file -Leaf
+        $r = @($results) | Where-Object { (Split-Path $_.file -Leaf) -eq $leaf } | Select-Object -First 1
+        if (-not $r) { $mismatches.Add("${leaf}: no verify result"); continue }
+        $wantNames = @($e.components)
+        # A non-Latin name comes back in Altium's on-wire form; accept either.
+        $gotNames = @(@($r.components) | ForEach-Object {
+            if ($wantNames -contains $_) { $_ } else { ConvertFrom-WireName $_ }
+        })
+        # A name ending in a documented-damaged suffix cannot be asserted:
+        # Altium's decode of the damaged bytes differs from ours by design.
+        $excusedSuffixes = @()
+        if ($e.PSObject.Properties.Name -contains 'fixture_inconsistent') {
+            $excusedSuffixes = @($e.fixture_inconsistent)
+        }
+        $excusedSuffix = {
+            param($n)
+            foreach ($s in $excusedSuffixes) { if ($n.EndsWith($s)) { return $s } }
+            return $null
+        }
+        if ($e.PSObject.Properties.Name -contains 'components') {
+            # A set comparison: Altium iterates a library in shortlex order
+            # (name length, then alphabetical), not file order.
+            $missing = @($wantNames | Where-Object { $gotNames -notcontains $_ -and -not (& $excusedSuffix $_) })
+            $extra   = @($gotNames  | Where-Object { $wantNames -notcontains $_ -and -not (& $excusedSuffix $_) })
+            if ($missing.Count -or $extra.Count) {
+                $mismatches.Add("${leaf}: components missing [$($missing -join ', ')] unexpected [$($extra -join ', ')]")
+            }
+        }
+        if ($e.PSObject.Properties.Name -contains 'primitive_counts') {
+            $want = @($e.primitive_counts); $got = @($r.primitive_counts)
+            if ($want.Count -ne $wantNames.Count) {
+                $mismatches.Add("${leaf}: $($want.Count) count entries for $($wantNames.Count) components - primitive_counts must align with the entry's components")
+                continue
+            }
+            # Matched by name (the two sides iterate in different orders); a
+            # damaged name is matched by its excused suffix instead.
+            for ($i = 0; $i -lt $want.Count; $i++) {
+                $name = $wantNames[$i]
+                $j = [Array]::IndexOf($gotNames, $name)
+                if ($j -lt 0) {
+                    $s = & $excusedSuffix $name
+                    if ($s) {
+                        for ($k = 0; $k -lt $gotNames.Count; $k++) {
+                            if ($gotNames[$k].EndsWith($s)) { $j = $k; break }
+                        }
+                    }
+                }
+                if ($j -lt 0) { continue }  # already reported as missing
+                foreach ($p in $want[$i].PSObject.Properties) {
+                    $actual = $got[$j].PSObject.Properties[$p.Name]
+                    if (-not $actual) {
+                        $mismatches.Add("${leaf} ${name}: Altium reported no '$($p.Name)' count")
+                    } elseif ([int]$actual.Value -ne [int]$p.Value) {
+                        $mismatches.Add("${leaf} ${name}: $($p.Name) expected $($p.Value), Altium resolved $($actual.Value)")
+                    }
+                }
+            }
+        }
+    }
+    if ($mismatches.Count) {
+        Write-Host "`nEXPECTATIONS FAILED ($($mismatches.Count)):" -ForegroundColor Red
+        $mismatches | ForEach-Object { Write-Host "  - $_" -ForegroundColor Red }
+        exit 1
+    }
+    Write-Host "Expectations met: Altium resolved the asserted components and primitive counts." -ForegroundColor Green
 }

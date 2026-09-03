@@ -146,6 +146,15 @@ fn pcblib_file_roundtrip_all_primitives() {
 
     // Text
     let text = Text {
+        raw_layer_id: None,
+        barcode_full_width: None,
+        barcode_full_height: None,
+        barcode_x_margin: None,
+        barcode_y_margin: None,
+        barcode_kind: 0,
+        barcode_font_name: String::new(),
+        barcode_inverted: false,
+        barcode_show_text: false,
         x: 0.0,
         y: -2.0,
         text: ".Designator".to_string(),
@@ -173,6 +182,8 @@ fn pcblib_file_roundtrip_all_primitives() {
         polygon_index: 0xFFFF,
         component_index: -1,
         unique_id: None,
+        guid: None,
+        raw_geometry: None,
     };
     fp.add_text(text);
 
@@ -425,11 +436,14 @@ fn pcblib_non_ascii_description_is_windows1252() {
     );
 }
 
-/// The `SchLib` `FileHeader` (component description) must likewise be Windows-1252.
+/// A non-ASCII `SchLib` description is stored as its raw UTF-8 bytes with a
+/// `%UTF8%` twin — the same promotion every text field gets. The golden's
+/// `Résistance_L1` record settled the rule: AD promotes any non-ASCII value,
+/// even one (like `é` or `µ`) that Windows-1252 could hold in a single byte.
 #[test]
-fn schlib_non_ascii_description_is_windows1252() {
+fn schlib_non_ascii_description_promotes_to_utf8() {
     let temp_dir = test_temp_dir();
-    let file_path = temp_dir.path().join("test_win1252.SchLib");
+    let file_path = temp_dir.path().join("test_desc_utf8.SchLib");
 
     let mut lib = SchLib::new();
     let mut sym = Symbol::new("RES");
@@ -444,12 +458,16 @@ fn schlib_non_ascii_description_is_windows1252() {
 
     let raw = std::fs::read(&file_path).expect("read raw file");
     assert!(
-        contains_bytes(&raw, b"10\xb5F"),
-        "description should be Windows-1252 (0xB5 for µ)"
+        contains_bytes(&raw, b"10\xc2\xb5F"),
+        "description travels as raw UTF-8 bytes (0xC2 0xB5 for \u{00B5})"
     );
     assert!(
-        !contains_bytes(&raw, b"10\xc2\xb5F"),
-        "description must NOT be UTF-8 (0xC2 0xB5 for µ)"
+        contains_bytes(&raw, b"%UTF8%CompDescr0="),
+        "the FileHeader entry carries the %UTF8% twin"
+    );
+    assert!(
+        contains_bytes(&raw, b"%UTF8%ComponentDescription="),
+        "the RECORD=1 entry carries the %UTF8% twin"
     );
 }
 
@@ -485,8 +503,149 @@ fn schlib_preserves_unique_id_and_pin_accessibility() {
     );
 }
 
+#[test]
+fn a_region_with_a_partial_key_order_still_writes_every_canonical_key() {
+    // A replayed `param_key_order` naming only some keys places those first;
+    // the canonical keys it leaves out are appended, never dropped.
+    use altium_designer_mcp::altium::pcblib::Region;
+
+    let temp_dir = test_temp_dir();
+    let path = temp_dir.path().join("PartialOrder.PcbLib");
+    let mut lib = PcbLib::new();
+    let mut fp = Footprint::new("ORDER");
+    fp.add_pad(Pad::smd("1", 0.0, 0.0, 1.0, 1.0));
+    let mut region = Region::rectangle(0.0, 0.0, 2.0, 1.0, Layer::TopLayer);
+    region.name = "R".to_string();
+    region.param_key_order = vec!["NAME".to_string()];
+    fp.add_region(region);
+    lib.add(fp);
+    lib.save(&path).expect("save");
+
+    let back = PcbLib::open(&path).expect("open");
+    let region = &back.get("ORDER").expect("footprint").regions[0];
+    assert_eq!(region.name, "R");
+    assert_eq!(region.layer, Layer::TopLayer);
+    assert!(
+        region.param_key_order.iter().any(|k| k == "KIND"),
+        "the canonical keys were written: {:?}",
+        region.param_key_order
+    );
+    assert_eq!(
+        region.param_key_order[..3],
+        ["NAME", "V7_LAYER", "KIND"],
+        "the named key first, the rest in canonical order: {:?}",
+        region.param_key_order
+    );
+}
+
+#[test]
+fn a_pipe_in_record_text_is_refused_by_both_writers() {
+    // Altium's records are pipe-delimited with no escape, so a '|' in any
+    // text the writer places between separators would come back cut. Both
+    // writers refuse it by field; strings kept in binary fields may carry one.
+    use altium_designer_mcp::altium::schlib::{Label, Parameter};
+
+    let temp_dir = test_temp_dir();
+
+    let mut lib = SchLib::new();
+    let mut sym = Symbol::new("PIPES");
+    sym.add_pin(Pin::new("a|b", "1|2", -20, 0, 10, PinOrientation::Left));
+    sym.add_label(Label::new(0.0, 0.0, "x|y"));
+    lib.add(sym);
+    let err = lib
+        .save(temp_dir.path().join("Pipes.SchLib"))
+        .expect_err("a label with a '|' must be refused");
+    let text = err.to_string();
+    assert!(
+        text.contains("Symbol 'PIPES' labels[].text contains '|'"),
+        "{text}"
+    );
+    assert!(text.contains("U+00A6"), "{text}");
+
+    let mut lib = SchLib::new();
+    let mut sym = Symbol::new("PIPEPIN");
+    sym.add_pin(Pin::new("a|b", "1|2", -20, 0, 10, PinOrientation::Left));
+    let mut param = Parameter::new("Value", "1|2");
+    param.x = 0.0;
+    sym.add_parameter(param);
+    lib.add(sym);
+    let err = lib
+        .save(temp_dir.path().join("PipeParam.SchLib"))
+        .expect_err("a parameter value with a '|' must be refused");
+    assert!(
+        err.to_string()
+            .contains("Symbol 'PIPEPIN' parameters[].value contains '|'"),
+        "{err}"
+    );
+
+    let mut lib = SchLib::new();
+    let mut sym = Symbol::new("PINONLY");
+    sym.add_pin(Pin::new("a|b", "1|2", -20, 0, 10, PinOrientation::Left));
+    lib.add(sym);
+    lib.save(temp_dir.path().join("PinOnly.SchLib"))
+        .expect("a pin's strings are binary and may carry a '|'");
+
+    let mut lib = PcbLib::new();
+    let mut fp = Footprint::new("PIPES");
+    fp.add_pad(Pad::smd("1|2", 0.0, 0.0, 1.0, 1.0));
+    fp.description = "A|B".to_string();
+    lib.add(fp);
+    let err = lib
+        .save(temp_dir.path().join("Pipes.PcbLib"))
+        .expect_err("a description with a '|' must be refused");
+    let text = err.to_string();
+    assert!(
+        text.contains("Footprint 'PIPES' description contains '|'"),
+        "{text}"
+    );
+    assert!(text.contains("cut at the '|'"), "{text}");
+
+    let mut lib = PcbLib::new();
+    let mut fp = Footprint::new("PADONLY");
+    fp.add_pad(Pad::smd("1|2", 0.0, 0.0, 1.0, 1.0));
+    fp.add_text(Text::new(0.0, 0.0, "x|y", 1.0, Layer::TopOverlay));
+    lib.add(fp);
+    lib.save(temp_dir.path().join("PadOnly.PcbLib"))
+        .expect("a pad designator and a text string are binary and may carry a '|'");
+}
+
+#[test]
+fn schlib_preserves_shape_flags_the_defaults_leave_unset() {
+    // The writer emits Transparent=T only for a transparent polyline and
+    // omits IsNotAccesible for an accessible arc or ellipse; each must read
+    // back as set, not as the from-scratch default.
+    use altium_designer_mcp::altium::schlib::{Arc as SchArc, Ellipse, Polyline};
+
+    let temp_dir = test_temp_dir();
+    let file_path = temp_dir.path().join("test_shape_flags.SchLib");
+
+    let mut lib = SchLib::new();
+    let mut sym = Symbol::new("FLAGS");
+    sym.add_pin(Pin::new("1", "1", -20, 0, 10, PinOrientation::Left));
+    let mut polyline = Polyline::new(vec![(0.0, 0.0), (10.0, 10.0)]);
+    polyline.transparent = true;
+    sym.add_polyline(polyline);
+    let mut arc = SchArc::new(0, 0, 5, 0.0, 90.0);
+    arc.is_not_accessible = false;
+    sym.add_arc(arc);
+    let mut ellipse = Ellipse::new(0, 0, 4, 2);
+    ellipse.is_not_accessible = false;
+    sym.add_ellipse(ellipse);
+    lib.add(sym);
+    lib.save(&file_path).expect("Failed to write SchLib");
+
+    let read_lib = SchLib::open(&file_path).expect("Failed to read SchLib");
+    let read_sym = read_lib.get("FLAGS").expect("Symbol not found");
+    assert!(read_sym.polylines[0].transparent, "polyline Transparent");
+    assert!(!read_sym.arcs[0].is_not_accessible, "arc accessible");
+    assert!(
+        !read_sym.ellipses[0].is_not_accessible,
+        "ellipse accessible"
+    );
+}
+
 /// Returns the set of OLE stream paths (lower-cased) in a written library file,
-/// used to assert whether the optional pin auxiliary streams were emitted.
+/// for asserting whether the optional pin auxiliary streams were emitted.
 fn ole_stream_paths(path: &std::path::Path) -> Vec<String> {
     let file = File::open(path).expect("open written SchLib");
     let cfb = cfb::CompoundFile::open(file).expect("parse OLE");
@@ -852,4 +1011,190 @@ fn schlib_file_roundtrip_pin_symbols_and_colour() {
     assert_eq!(p2.symbol_inside, PinSymbol::ActiveLowOutput);
     assert_eq!(p2.symbol_outside, PinSymbol::OpenCollector);
     assert_eq!(p2.colour, 0xFF_0000);
+}
+
+/// Numeric silkscreen text must survive a write → read cycle unchanged (#309).
+///
+/// Pin-1 markers and value legends are routinely just digits, and the reader
+/// must not treat an all-digit content block as a `/WideStrings` index.
+///
+/// Note on what this test does and does not prove today: it passes both with
+/// and without that fix, because the reader looks for `/WideStrings` at the
+/// root while the writer (and Altium) store it per component, so the lookup
+/// table is always empty and the heuristic never fires end to end. The unit
+/// test `text_content_block_is_literal_never_a_wide_strings_index` is the one
+/// that actually pins the fix, by passing a populated table directly. This
+/// guards the same behaviour through the real file path for when the stream
+/// mismatch is fixed and the table stops being empty.
+#[test]
+fn pcblib_roundtrip_preserves_numeric_silkscreen_text() {
+    let temp_dir = test_temp_dir();
+    let file_path = temp_dir.path().join("numeric_text.PcbLib");
+
+    let numeric_text = |content: &str, y: f64| Text {
+        raw_layer_id: None,
+        barcode_full_width: None,
+        barcode_full_height: None,
+        barcode_x_margin: None,
+        barcode_y_margin: None,
+        barcode_kind: 0,
+        barcode_font_name: String::new(),
+        barcode_inverted: false,
+        barcode_show_text: false,
+        x: 0.0,
+        y,
+        text: content.to_string(),
+        height: 1.0,
+        layer: Layer::TopOverlay,
+        kind: TextKind::Stroke,
+        rotation: 0.0,
+        stroke_font: None,
+        stroke_width: None,
+        italic: false,
+        bold: false,
+        mirror: false,
+        is_comment: false,
+        is_designator: false,
+        font_name: "Arial".to_string(),
+        justification: TextJustification::default(),
+        is_inverted: false,
+        inverted_border: None,
+        use_inverted_rectangle: false,
+        inverted_rect_width: None,
+        inverted_rect_height: None,
+        inverted_rect_text_offset: None,
+        flags: PcbFlags::default(),
+        net_index: 0xFFFF,
+        polygon_index: 0xFFFF,
+        component_index: -1,
+        unique_id: None,
+        guid: None,
+        raw_geometry: None,
+    };
+
+    let mut lib = PcbLib::new();
+    let mut fp = Footprint::new("NUMERIC_MARKS");
+    // Several entries so a mis-resolved index would land on a different string
+    // rather than coincidentally matching.
+    for (i, content) in ["1", "2", "10", "0"].iter().enumerate() {
+        #[allow(clippy::cast_precision_loss)]
+        fp.add_text(numeric_text(content, -(i as f64) - 1.0));
+    }
+    fp.add_text(numeric_text("REF", -9.0));
+    lib.add(fp);
+    lib.save(&file_path).expect("save");
+
+    let read_back = PcbLib::open(&file_path).expect("open");
+    let fp = read_back.get("NUMERIC_MARKS").expect("footprint");
+
+    let got: Vec<&str> = fp.text.iter().map(|t| t.text.as_str()).collect();
+    assert_eq!(
+        got,
+        vec!["1", "2", "10", "0", "REF"],
+        "numeric silkscreen must round-trip verbatim"
+    );
+}
+
+// =============================================================================
+// Component names that differ only in case
+// =============================================================================
+
+/// The OLE directory compares storage names without regard to case, so two
+/// components whose names differ only in case used to fail the whole save
+/// inside the directory (`Cannot create storage ... already exists`). They
+/// now get distinct storage names and both read back under their real
+/// names; a lookup resolves a name regardless of case, the exact spelling
+/// first when both exist.
+#[test]
+fn names_differing_only_in_case_save_and_resolve() {
+    let dir = test_temp_dir();
+
+    let mut lib = PcbLib::new();
+    let mut upper = Footprint::new("RES_0402");
+    upper.add_pad(Pad::smd("1", 0.0, 0.0, 0.5, 0.5));
+    let mut lower = Footprint::new("res_0402");
+    lower.add_pad(Pad::smd("1", 0.0, 0.0, 0.5, 0.5));
+    lower.add_pad(Pad::smd("2", 1.0, 0.0, 0.5, 0.5));
+    lib.add(upper);
+    lib.add(lower);
+    let path = dir.path().join("case.PcbLib");
+    lib.save(&path).expect("two case variants save");
+    let back = PcbLib::open(&path).expect("reopen");
+    assert_eq!(back.names(), ["RES_0402", "res_0402"]);
+    assert_eq!(back.get("res_0402").expect("exact").pads.len(), 2);
+    assert_eq!(back.get("RES_0402").expect("exact").pads.len(), 1);
+    assert_eq!(
+        back.get("Res_0402").expect("case-insensitive").name,
+        "RES_0402",
+        "the first match in library order when no spelling is exact"
+    );
+    assert!(back.get("RES_0603").is_none());
+
+    let mut lib = SchLib::new();
+    lib.add(Symbol::new("LM358"));
+    lib.add(Symbol::new("lm358"));
+    let path = dir.path().join("case.SchLib");
+    lib.save(&path).expect("two case variants save");
+    let mut back = SchLib::open(&path).expect("reopen");
+    assert_eq!(back.names(), ["LM358", "lm358"]);
+    assert_eq!(back.get("Lm358").expect("case-insensitive").name, "LM358");
+    assert_eq!(back.get_mut("LM358").expect("exact").name, "LM358");
+    assert_eq!(back.remove("lm358").expect("exact").name, "lm358");
+    assert_eq!(
+        back.remove("lm358")
+            .expect("now resolves to the other")
+            .name,
+        "LM358"
+    );
+    assert!(back.is_empty());
+}
+
+/// A rename keeps the component where it was, and a set of renames resolves
+/// every old name before any is applied, so a chain renames each once.
+#[test]
+fn renames_keep_positions_and_resolve_before_applying() {
+    let mut lib = PcbLib::new();
+    for name in ["A", "B", "C"] {
+        lib.add(Footprint::new(name));
+    }
+    assert!(lib.rename("A", "A2"));
+    assert!(!lib.rename("NOPE", "X"));
+    assert_eq!(lib.names(), ["A2", "B", "C"]);
+    let missing = lib.rename_all(&[
+        ("B".to_string(), "C".to_string()),
+        ("C".to_string(), "D".to_string()),
+        ("Z".to_string(), "Y".to_string()),
+    ]);
+    assert_eq!(missing, ["Z"]);
+    assert_eq!(
+        lib.names(),
+        ["A2", "C", "D"],
+        "B became C and the old C became D"
+    );
+
+    let mut lib = SchLib::new();
+    for name in ["A", "B", "C"] {
+        lib.add(Symbol::new(name));
+    }
+    assert!(lib.rename("a", "A2"), "resolved regardless of case");
+    assert_eq!(lib.names(), ["A2", "B", "C"]);
+    let missing = lib.rename_all(&[
+        ("B".to_string(), "C".to_string()),
+        ("C".to_string(), "D".to_string()),
+    ]);
+    assert!(missing.is_empty());
+    assert_eq!(lib.names(), ["A2", "C", "D"]);
+    assert_eq!(lib.get("D").expect("the old C under its new key").name, "D");
+
+    // An update that carries another name renames the symbol too, and the
+    // library resolves the new name from then on.
+    let mut replacement = Symbol::new("D2");
+    replacement.description = "updated".to_string();
+    assert_eq!(
+        lib.update("D", replacement).expect("the old symbol").name,
+        "D"
+    );
+    assert_eq!(lib.names(), ["A2", "C", "D2"]);
+    assert_eq!(lib.get("D2").expect("new key").description, "updated");
+    assert!(lib.get("D").is_none());
 }

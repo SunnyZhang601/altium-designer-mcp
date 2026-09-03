@@ -47,6 +47,11 @@ pub use crate::altium::TextJustification;
 
 /// Default text-box justification for a from-scratch `PcbLib` text: `BottomLeft`,
 /// which the writer encodes to the template's `0x03` byte at geometry offset 132.
+#[allow(clippy::trivially_copy_pass_by_ref)] // serde requires &T
+const fn is_zero_barcode_kind(v: &u8) -> bool {
+    *v == 0
+}
+
 const fn default_justification() -> TextJustification {
     TextJustification::BottomLeft
 }
@@ -94,6 +99,13 @@ pub struct Text {
     /// Text height in mm.
     #[serde(serialize_with = "crate::altium::serde_round::serialize")]
     pub height: f64,
+    /// The header layer byte exactly as read, kept only when the layer table
+    /// does not map it — the primitive then sits on the `MultiLayer`
+    /// catch-all, and without the byte a rewrite would store `74` in its
+    /// place. Replayed while the primitive still sits there; moving it to a
+    /// layer the model can name discards the byte for that layer's own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub raw_layer_id: Option<u8>,
     /// Layer the text is on.
     pub layer: Layer,
     /// Rotation angle in degrees.
@@ -204,6 +216,51 @@ pub struct Text {
         serialize_with = "crate::altium::serde_round::option::serialize"
     )]
     pub inverted_rect_text_offset: Option<f64>,
+    /// Barcode overall width in mm — geometry offset 137. Only meaningful when
+    /// [`Self::kind`] is `BarCode`; `None` replays the template bytes.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "crate::altium::serde_round::option"
+    )]
+    pub barcode_full_width: Option<f64>,
+    /// Barcode overall height in mm — geometry offset 141.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "crate::altium::serde_round::option"
+    )]
+    pub barcode_full_height: Option<f64>,
+    /// Barcode horizontal quiet-zone margin in mm — geometry offset 145.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "crate::altium::serde_round::option"
+    )]
+    pub barcode_x_margin: Option<f64>,
+    /// Barcode vertical quiet-zone margin in mm — geometry offset 149.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "crate::altium::serde_round::option"
+    )]
+    pub barcode_y_margin: Option<f64>,
+    /// Barcode symbology — geometry byte @157. `0` on a non-barcode text, `1` for
+    /// Code128, the only symbology AD24 names in its scripting enum.
+    #[serde(default, skip_serializing_if = "is_zero_barcode_kind")]
+    pub barcode_kind: u8,
+    /// Font for the barcode's human-readable line — geometry offsets 161-224,
+    /// stored UTF-16LE and null-padded, unlike the record's other strings.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub barcode_font_name: String,
+    /// Whether the barcode renders inverted (light bars on dark) — geometry byte
+    /// @159. Only meaningful for a barcode.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub barcode_inverted: bool,
+    /// Whether the human-readable line is drawn under the bars — geometry byte
+    /// @225. Altium defaults this on for a new barcode.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub barcode_show_text: bool,
     /// Primitive flags (locked, keepout, etc.).
     #[serde(default, skip_serializing_if = "PcbFlags::is_empty")]
     pub flags: PcbFlags,
@@ -222,6 +279,73 @@ pub struct Text {
     /// Unique ID assigned by Altium (8-character alphanumeric string).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unique_id: Option<String>,
+    /// Altium's stable identity for this primitive, from the footprint's
+    /// `PrimitiveGuids` stream (`{XXXXXXXX-…}`), or `None` for a primitive
+    /// with no recorded identity (anything built from scratch). Riding on the
+    /// primitive itself, the identity follows it through structural edits —
+    /// deleting a neighbour cannot re-point it, which the old footprint-level
+    /// ordinal list could not guarantee.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub guid: Option<String>,
+    /// The text's geometry block exactly as read (base64 in JSON), used as
+    /// the write-side base with every typed field overlaid — AD caches its own
+    /// render metrics in bytes we do not model, and the golden zeroes bytes
+    /// the `AltiumSharp` template fills. `None` (from scratch) uses the
+    /// template.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "crate::altium::base64_opt"
+    )]
+    pub raw_geometry: Option<Vec<u8>>,
+}
+
+impl Text {
+    /// Creates a stroke-font text of `height` mm at (`x`, `y`) on `layer`,
+    /// every other field at the value a text placed from scratch gets.
+    #[must_use]
+    pub fn new(x: f64, y: f64, text: impl Into<String>, height: f64, layer: Layer) -> Self {
+        Self {
+            raw_layer_id: None,
+            barcode_full_width: None,
+            barcode_full_height: None,
+            barcode_x_margin: None,
+            barcode_y_margin: None,
+            barcode_kind: 0,
+            barcode_font_name: String::new(),
+            barcode_inverted: false,
+            barcode_show_text: false,
+            x,
+            y,
+            text: text.into(),
+            height,
+            layer,
+            kind: TextKind::Stroke,
+            rotation: 0.0,
+            stroke_font: None,
+            stroke_width: None,
+            italic: false,
+            bold: false,
+            mirror: false,
+            is_comment: false,
+            is_designator: false,
+            font_name: "Arial".to_string(),
+            justification: TextJustification::default(),
+            is_inverted: false,
+            inverted_border: None,
+            use_inverted_rectangle: false,
+            inverted_rect_width: None,
+            inverted_rect_height: None,
+            inverted_rect_text_offset: None,
+            flags: PcbFlags::default(),
+            net_index: 0xFFFF,
+            polygon_index: 0xFFFF,
+            component_index: -1,
+            unique_id: None,
+            guid: None,
+            raw_geometry: None,
+        }
+    }
 }
 
 /// A filled rectangle on a layer.
@@ -239,6 +363,13 @@ pub struct Fill {
     /// Second corner Y position in mm.
     #[serde(serialize_with = "crate::altium::serde_round::serialize")]
     pub y2: f64,
+    /// The header layer byte exactly as read, kept only when the layer table
+    /// does not map it — the primitive then sits on the `MultiLayer`
+    /// catch-all, and without the byte a rewrite would store `74` in its
+    /// place. Replayed while the primitive still sits there; moving it to a
+    /// layer the model can name discards the byte for that layer's own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub raw_layer_id: Option<u8>,
     /// Layer the fill is on.
     pub layer: Layer,
     /// Rotation angle in degrees.
@@ -273,6 +404,14 @@ pub struct Fill {
     /// Unique ID assigned by Altium (8-character alphanumeric string).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unique_id: Option<String>,
+    /// Altium's stable identity for this primitive, from the footprint's
+    /// `PrimitiveGuids` stream (`{XXXXXXXX-…}`), or `None` for a primitive
+    /// with no recorded identity (anything built from scratch). Riding on the
+    /// primitive itself, the identity follows it through structural edits —
+    /// deleting a neighbour cannot re-point it, which the old footprint-level
+    /// ordinal list could not guarantee.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub guid: Option<String>,
 }
 
 impl Fill {
@@ -280,6 +419,7 @@ impl Fill {
     #[must_use]
     pub const fn new(x1: f64, y1: f64, x2: f64, y2: f64, layer: Layer) -> Self {
         Self {
+            raw_layer_id: None,
             x1,
             y1,
             x2,
@@ -293,6 +433,7 @@ impl Fill {
             solder_mask_expansion: None,
             keepout_restrictions: None,
             unique_id: None,
+            guid: None,
         }
     }
 
@@ -302,6 +443,7 @@ impl Fill {
         let half_w = width / 2.0;
         let half_h = height / 2.0;
         Self {
+            raw_layer_id: None,
             x1: x - half_w,
             y1: y - half_h,
             x2: x + half_w,
@@ -315,13 +457,14 @@ impl Fill {
             solder_mask_expansion: None,
             keepout_restrictions: None,
             unique_id: None,
+            guid: None,
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{Fill, Layer, StrokeFont, TextKind};
+    use super::{Fill, Layer, StrokeFont, Text, TextJustification, TextKind};
 
     #[test]
     fn fill_from_center_computes_symmetric_corners() {
@@ -352,5 +495,22 @@ mod tests {
             let s = serde_json::to_string(&font).unwrap();
             assert_eq!(serde_json::from_str::<StrokeFont>(&s).unwrap(), font);
         }
+    }
+
+    #[test]
+    fn omitted_text_fields_fall_back_to_the_template_defaults() {
+        // A caller-supplied text carries only the five required fields. The
+        // omitted font and justification must land on the values that reproduce
+        // the geometry template byte-for-byte: "Arial" and BottomLeft (0x03).
+        let json = serde_json::json!({
+            "x": 1.0,
+            "y": 2.0,
+            "text": "REF",
+            "height": 1.5,
+            "layer": serde_json::to_value(Layer::TopOverlay).unwrap(),
+        });
+        let t: Text = serde_json::from_value(json).unwrap();
+        assert_eq!(t.font_name, "Arial");
+        assert_eq!(t.justification, TextJustification::BottomLeft);
     }
 }

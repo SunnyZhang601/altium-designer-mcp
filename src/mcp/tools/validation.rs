@@ -26,91 +26,142 @@ impl McpServer {
         Ok(())
     }
 
-    /// Checks if a pad's per-layer data is uniform (all layers have same values).
+    /// Validates a component name for every tool that creates one (write,
+    /// copy, rename, bulk rename, update, import): non-empty and free of the
+    /// characters neither an OLE storage name nor a Windows file name may
+    /// carry. The library layer sanitises the OLE-forbidden subset as a
+    /// safety net, but the tools refuse up front so a caller learns why.
     ///
-    /// When all per-layer values are identical, the data is redundant and can be
-    /// omitted in compact mode, even if the pad was stored with `FullStack` mode.
-    pub(crate) fn pad_has_uniform_per_layer_data(pad: &crate::altium::pcblib::Pad) -> bool {
-        // Check per_layer_sizes - all should match primary width/height
-        let sizes_uniform = pad.per_layer_sizes.as_ref().map_or(true, |sizes| {
-            sizes
-                .iter()
-                .all(|&(w, h)| (w - pad.width).abs() < 0.001 && (h - pad.height).abs() < 0.001)
-        });
-
-        // Check per_layer_shapes - all should match primary shape
-        let shapes_uniform = pad
-            .per_layer_shapes
-            .as_ref()
-            .map_or(true, |shapes| shapes.iter().all(|s| *s == pad.shape));
-
-        // Check per_layer_corner_radii - all should match primary corner_radius_percent
-        let primary_radius = pad.corner_radius_percent.unwrap_or(0);
-        let radii_uniform = pad
-            .per_layer_corner_radii
-            .as_ref()
-            .map_or(true, |radii| radii.iter().all(|&r| r == primary_radius));
-
-        // Check per_layer_offsets - all should be zero (no offset)
-        let offsets_uniform = pad.per_layer_offsets.as_ref().map_or(true, |offsets| {
-            offsets
-                .iter()
-                .all(|&(x, y)| x.abs() < 0.001 && y.abs() < 0.001)
-        });
-
-        sizes_uniform && shapes_uniform && radii_uniform && offsets_uniform
+    /// Note: OLE storage names are limited to 31 characters, but the library layer
+    /// handles this by truncating storage names while preserving full names in
+    /// the PATTERN/LIBREFERENCE fields.
+    /// The error for a name the library already holds: `message` as given
+    /// when the spelling is the same, and with the existing spelling named
+    /// when only the case differs — the two are one storage to the OLE
+    /// directory and one component to Altium, so the clash is real even
+    /// though the strings are not equal.
+    pub(crate) fn taken_name_error(message: String, requested: &str, existing: &str) -> String {
+        if existing == requested {
+            message
+        } else {
+            format!("{message} as '{existing}' (component names are case-insensitive)")
+        }
     }
 
-    /// Validates all coordinates in a footprint before writing.
+    pub(crate) fn validate_ole_name(name: &str) -> Result<(), String> {
+        const INVALID_CHARS: &[char] = &['/', '\\', ':', '*', '?', '"', '<', '>', '|'];
+
+        if name.is_empty() {
+            return Err("Component name cannot be empty".to_string());
+        }
+        if let Some(c) = name.chars().find(|c| INVALID_CHARS.contains(c)) {
+            return Err(format!(
+                "Component name '{name}' contains invalid character '{c}'. \
+                 Names cannot contain: / \\ : * ? \" < > |",
+            ));
+        }
+        Ok(())
+    }
+
+    /// Validates every coordinate and size a footprint will write, kind by
+    /// kind from the enum, so a primitive kind cannot go unchecked: a value
+    /// past the safe range would otherwise saturate on save and land in the
+    /// file silently wrong.
     pub(crate) fn validate_footprint_coordinates(
         footprint: &crate::altium::pcblib::Footprint,
     ) -> Result<(), String> {
+        for kind in crate::altium::pcblib::PrimitiveKind::WRITE_ORDER {
+            Self::validate_footprint_kind(footprint, kind)?;
+        }
+        Ok(())
+    }
+
+    /// The range checks of one primitive kind.
+    fn validate_footprint_kind(
+        footprint: &crate::altium::pcblib::Footprint,
+        kind: crate::altium::pcblib::PrimitiveKind,
+    ) -> Result<(), String> {
+        use crate::altium::pcblib::PrimitiveKind;
+
         let name = &footprint.name;
-
-        for (i, pad) in footprint.pads.iter().enumerate() {
-            Self::validate_coordinate(pad.x, &format!("Footprint '{name}' pad {i} x"))?;
-            Self::validate_coordinate(pad.y, &format!("Footprint '{name}' pad {i} y"))?;
-            Self::validate_coordinate(pad.width, &format!("Footprint '{name}' pad {i} width"))?;
-            Self::validate_coordinate(pad.height, &format!("Footprint '{name}' pad {i} height"))?;
-            if let Some(hole) = pad.hole_size {
-                Self::validate_coordinate(hole, &format!("Footprint '{name}' pad {i} hole_size"))?;
+        let check = |value: f64, index: usize, field: &str| {
+            Self::validate_coordinate(
+                value,
+                &format!("Footprint '{name}' {} {index} {field}", kind.name()),
+            )
+        };
+        match kind {
+            PrimitiveKind::Pad => {
+                for (i, pad) in footprint.pads.iter().enumerate() {
+                    check(pad.x, i, "x")?;
+                    check(pad.y, i, "y")?;
+                    check(pad.width, i, "width")?;
+                    check(pad.height, i, "height")?;
+                    if let Some(hole) = pad.hole_size {
+                        check(hole, i, "hole_size")?;
+                    }
+                }
+            }
+            PrimitiveKind::Via => {
+                for (i, via) in footprint.vias.iter().enumerate() {
+                    check(via.x, i, "x")?;
+                    check(via.y, i, "y")?;
+                    check(via.diameter, i, "diameter")?;
+                    check(via.hole_size, i, "hole_size")?;
+                }
+            }
+            PrimitiveKind::Track => {
+                for (i, track) in footprint.tracks.iter().enumerate() {
+                    check(track.x1, i, "x1")?;
+                    check(track.y1, i, "y1")?;
+                    check(track.x2, i, "x2")?;
+                    check(track.y2, i, "y2")?;
+                    check(track.width, i, "width")?;
+                }
+            }
+            PrimitiveKind::Arc => {
+                for (i, arc) in footprint.arcs.iter().enumerate() {
+                    check(arc.x, i, "x")?;
+                    check(arc.y, i, "y")?;
+                    check(arc.radius, i, "radius")?;
+                    check(arc.width, i, "width")?;
+                }
+            }
+            PrimitiveKind::Region => {
+                for (i, region) in footprint.regions.iter().enumerate() {
+                    for (j, vertex) in region.vertices.iter().enumerate() {
+                        check(vertex.x, i, &format!("vertex {j} x"))?;
+                        check(vertex.y, i, &format!("vertex {j} y"))?;
+                    }
+                }
+            }
+            PrimitiveKind::Text => {
+                for (i, text) in footprint.text.iter().enumerate() {
+                    check(text.x, i, "x")?;
+                    check(text.y, i, "y")?;
+                    check(text.height, i, "height")?;
+                }
+            }
+            PrimitiveKind::Fill => {
+                for (i, fill) in footprint.fills.iter().enumerate() {
+                    check(fill.x1, i, "x1")?;
+                    check(fill.y1, i, "y1")?;
+                    check(fill.x2, i, "x2")?;
+                    check(fill.y2, i, "y2")?;
+                }
+            }
+            PrimitiveKind::ComponentBody => {
+                for (i, body) in footprint.component_bodies.iter().enumerate() {
+                    for (j, (x, y)) in body.outline.iter().enumerate() {
+                        check(*x, i, &format!("outline {j} x"))?;
+                        check(*y, i, &format!("outline {j} y"))?;
+                    }
+                    check(body.overall_height, i, "overall_height")?;
+                    check(body.standoff_height, i, "standoff_height")?;
+                    check(body.z_offset, i, "z_offset")?;
+                }
             }
         }
-
-        for (i, track) in footprint.tracks.iter().enumerate() {
-            Self::validate_coordinate(track.x1, &format!("Footprint '{name}' track {i} x1"))?;
-            Self::validate_coordinate(track.y1, &format!("Footprint '{name}' track {i} y1"))?;
-            Self::validate_coordinate(track.x2, &format!("Footprint '{name}' track {i} x2"))?;
-            Self::validate_coordinate(track.y2, &format!("Footprint '{name}' track {i} y2"))?;
-            Self::validate_coordinate(track.width, &format!("Footprint '{name}' track {i} width"))?;
-        }
-
-        for (i, arc) in footprint.arcs.iter().enumerate() {
-            Self::validate_coordinate(arc.x, &format!("Footprint '{name}' arc {i} x"))?;
-            Self::validate_coordinate(arc.y, &format!("Footprint '{name}' arc {i} y"))?;
-            Self::validate_coordinate(arc.radius, &format!("Footprint '{name}' arc {i} radius"))?;
-            Self::validate_coordinate(arc.width, &format!("Footprint '{name}' arc {i} width"))?;
-        }
-
-        for (i, region) in footprint.regions.iter().enumerate() {
-            for (j, vertex) in region.vertices.iter().enumerate() {
-                Self::validate_coordinate(
-                    vertex.x,
-                    &format!("Footprint '{name}' region {i} vertex {j} x"),
-                )?;
-                Self::validate_coordinate(
-                    vertex.y,
-                    &format!("Footprint '{name}' region {i} vertex {j} y"),
-                )?;
-            }
-        }
-
-        for (i, text) in footprint.text.iter().enumerate() {
-            Self::validate_coordinate(text.x, &format!("Footprint '{name}' text {i} x"))?;
-            Self::validate_coordinate(text.y, &format!("Footprint '{name}' text {i} y"))?;
-            Self::validate_coordinate(text.height, &format!("Footprint '{name}' text {i} height"))?;
-        }
-
         Ok(())
     }
 
@@ -328,9 +379,19 @@ impl McpServer {
             )?;
         }
 
-        for (i, text) in symbol.text.iter().enumerate() {
-            Self::validate_schlib_coordinate(text.x, &format!("Symbol '{name}' text {i} x"))?;
-            Self::validate_schlib_coordinate(text.y, &format!("Symbol '{name}' text {i} y"))?;
+        for (i, ieee) in symbol.ieee_symbols.iter().enumerate() {
+            Self::validate_schlib_coordinate(
+                ieee.x,
+                &format!("Symbol '{name}' ieee_symbol {i} x"),
+            )?;
+            Self::validate_schlib_coordinate(
+                ieee.y,
+                &format!("Symbol '{name}' ieee_symbol {i} y"),
+            )?;
+            Self::validate_schlib_coordinate(
+                ieee.scale_factor,
+                &format!("Symbol '{name}' ieee_symbol {i} scale_factor"),
+            )?;
         }
 
         for (i, param) in symbol.parameters.iter().enumerate() {
@@ -344,11 +405,364 @@ impl McpServer {
 
 #[cfg(test)]
 mod tests {
-    use crate::altium::pcblib::{Arc, Footprint, Layer, Pad, PadShape, Region, Track};
+    use crate::altium::pcblib::{Arc, Footprint, Layer, Pad, Region, Track};
     use crate::altium::schlib::{Ellipse, Line, Pin, PinOrientation, Rectangle, RoundRect, Symbol};
     use crate::mcp::server::McpServer;
 
     // ---- validate_coordinate ------------------------------------------------
+
+    /// Well past `MAX_SCHLIB_COORDINATE`, so any family that range-checks its
+    /// coordinates rejects it.
+    const FAR: f64 = 99_999.0;
+
+    #[test]
+    #[allow(clippy::too_many_lines)] // a flat per-family case list, like the code it covers
+    fn every_symbol_shape_family_has_its_coordinates_range_checked() {
+        // A schematic coordinate past the safe range saturates on save, so a
+        // shape drawn far off-sheet would be written silently wrong. Each
+        // family is checked by its own loop, so each needs its own case or a
+        // family could go unchecked without any test noticing.
+        use crate::mcp::tools::test_support::{create_test_server, get_result_text, test_temp_dir};
+        use serde_json::json;
+
+        let dir = test_temp_dir();
+        let server = create_test_server(dir.path());
+        let path = dir.path().join("Far.SchLib");
+
+        let cases: [(&str, serde_json::Value, &str); 14] = [
+            (
+                "rectangles",
+                json!([{ "x1": 0, "y1": 0, "x2": FAR, "y2": 10 }]),
+                "rectangle 0 x2",
+            ),
+            (
+                "lines",
+                json!([{ "x1": 0, "y1": 0, "x2": FAR, "y2": 0 }]),
+                "line 0 x2",
+            ),
+            (
+                "polylines",
+                json!([{ "points": [{ "x": 0, "y": 0 }, { "x": FAR, "y": 0 }] }]),
+                "polyline 0 point 1 x",
+            ),
+            (
+                "arcs",
+                json!([{ "x": 0, "y": 0, "radius": FAR, "start_angle": 0, "end_angle": 90 }]),
+                "arc 0 radius",
+            ),
+            (
+                "ellipses",
+                json!([{ "x": 0, "y": 0, "radius_x": FAR, "radius_y": 5 }]),
+                "ellipse 0 radius_x",
+            ),
+            (
+                "labels",
+                json!([{ "x": FAR, "y": 0, "text": "L" }]),
+                "label 0 x",
+            ),
+            (
+                "round_rects",
+                json!([{
+                    "x1": 0, "y1": 0, "x2": 10, "y2": 10,
+                    "corner_x_radius": FAR, "corner_y_radius": 2,
+                }]),
+                "round_rect 0 corner_x_radius",
+            ),
+            (
+                "polygons",
+                json!([{ "points": [{ "x": 0, "y": 0 }, { "x": 10, "y": 0 }, { "x": FAR, "y": 10 }] }]),
+                "polygon 0 point 2 x",
+            ),
+            (
+                "pies",
+                json!([{ "x": 0, "y": 0, "radius": FAR, "start_angle": 0, "end_angle": 90 }]),
+                "pie 0 radius",
+            ),
+            (
+                "images",
+                json!([{ "x1": 0, "y1": 0, "x2": FAR, "y2": 10, "file_name": "logo.bmp" }]),
+                "image 0 x2",
+            ),
+            (
+                "text_frames",
+                json!([{ "x1": 0, "y1": 0, "x2": FAR, "y2": 10, "text": "F" }]),
+                "text_frame 0 x2",
+            ),
+            (
+                "beziers",
+                json!([{
+                    "x1": 0, "y1": 0, "x2": 10, "y2": 0,
+                    "x3": 20, "y3": 0, "x4": FAR, "y4": 0,
+                }]),
+                "bezier 0 point 3 x",
+            ),
+            (
+                "elliptical_arcs",
+                json!([{
+                    "x": 0, "y": 0, "radius": FAR, "secondary_radius": 5,
+                    "start_angle": 0, "end_angle": 90,
+                }]),
+                "elliptical_arc 0 radius",
+            ),
+            (
+                "ieee_symbols",
+                json!([{ "x": FAR, "y": 0, "symbol": 1 }]),
+                "ieee_symbol 0 x",
+            ),
+        ];
+
+        for (family, payload, expected) in cases {
+            let mut symbol = json!({ "name": "FAR" });
+            symbol[family] = payload;
+            let r = server.call_write_schlib(&json!({
+                "filepath": path.to_string_lossy(),
+                "symbols": [symbol],
+            }));
+            let text = get_result_text(&r);
+            assert!(r.is_error, "{family} was not range-checked: {text}");
+            assert!(
+                text.contains(expected),
+                "{family}: expected the error to name {expected:?}, got: {text}"
+            );
+        }
+    }
+
+    /// Every footprint primitive kind has its coordinates and sizes
+    /// range-checked — a kind the validator skipped would saturate on save.
+    #[test]
+    fn every_footprint_primitive_kind_has_its_coordinates_range_checked() {
+        use crate::altium::pcblib::PrimitiveKind;
+        use crate::mcp::tools::test_support::{create_test_server, get_result_text, test_temp_dir};
+        use serde_json::json;
+
+        let dir = test_temp_dir();
+        let server = create_test_server(dir.path());
+        let path = dir.path().join("Far.PcbLib");
+
+        let cases: [(PrimitiveKind, &str, serde_json::Value, &str); PrimitiveKind::COUNT] = [
+            (
+                PrimitiveKind::Pad,
+                "pads",
+                json!([{ "designator": "1", "x": FAR, "y": 0, "width": 1, "height": 1 }]),
+                "pad 0 x",
+            ),
+            (
+                PrimitiveKind::Via,
+                "vias",
+                json!([{ "x": 0, "y": FAR, "diameter": 0.6, "hole_size": 0.3 }]),
+                "via 0 y",
+            ),
+            (
+                PrimitiveKind::Track,
+                "tracks",
+                json!([{ "x1": 0, "y1": 0, "x2": FAR, "y2": 0, "width": 0.2, "layer": "TopOverlay" }]),
+                "track 0 x2",
+            ),
+            (
+                PrimitiveKind::Arc,
+                "arcs",
+                json!([{ "x": 0, "y": 0, "radius": FAR, "start_angle": 0, "end_angle": 360, "width": 0.2, "layer": "TopOverlay" }]),
+                "arc 0 radius",
+            ),
+            (
+                PrimitiveKind::Text,
+                "text",
+                json!([{ "x": 0, "y": 0, "text": "T", "height": FAR, "layer": "TopOverlay" }]),
+                "text 0 height",
+            ),
+            (
+                PrimitiveKind::Region,
+                "regions",
+                json!([{ "vertices": [{ "x": 0, "y": 0 }, { "x": 1, "y": 0 }, { "x": FAR, "y": 1 }], "layer": "TopCourtyard" }]),
+                "region 0 vertex 2 x",
+            ),
+            (
+                PrimitiveKind::Fill,
+                "fills",
+                json!([{ "x1": 0, "y1": 0, "x2": 1, "y2": FAR, "layer": "TopOverlay" }]),
+                "fill 0 y2",
+            ),
+            (
+                PrimitiveKind::ComponentBody,
+                "component_bodies",
+                json!([{ "outline": [[0, 0], [1, 0], [1, FAR]], "overall_height": 1 }]),
+                "component_body 0 outline 2 y",
+            ),
+        ];
+        let covered: std::collections::BTreeSet<&str> =
+            cases.iter().map(|(kind, ..)| kind.name()).collect();
+        assert_eq!(covered.len(), PrimitiveKind::COUNT, "one case per kind");
+
+        for (_, family, payload, expected) in cases {
+            let mut footprint = json!({ "name": "FAR" });
+            footprint[family] = payload;
+            let r = server.call_write_pcblib(&json!({
+                "filepath": path.to_string_lossy(),
+                "footprints": [footprint],
+            }));
+            let text = get_result_text(&r);
+            assert!(r.is_error, "{family} was not range-checked: {text}");
+            assert!(
+                text.contains(expected),
+                "{family}: expected the error to name {expected:?}, got: {text}"
+            );
+        }
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)] // a flat per-field case list, like the code it covers
+    fn each_coordinate_within_a_family_is_checked_on_its_own() {
+        // The families above are checked one field at a time, so covering one
+        // corner of a rectangle says nothing about the other three. A field
+        // that slipped through would saturate on save while its neighbours
+        // were caught — a shape anchored correctly at one end and folded flat
+        // at the other.
+        use crate::mcp::tools::test_support::{create_test_server, get_result_text, test_temp_dir};
+        use serde_json::json;
+
+        let dir = test_temp_dir();
+        let server = create_test_server(dir.path());
+        let path = dir.path().join("Corners.SchLib");
+
+        let cases: [(&str, serde_json::Value, &str); 17] = [
+            (
+                // Pin coordinates are integers, so this mirrors FAR rather
+                // than casting it.
+                "pins",
+                json!([{ "name": "1", "designator": "1", "x": 0, "y": 99_999, "length": 10, "orientation": "left" }]),
+                "pin 0 y",
+            ),
+            (
+                "pins",
+                json!([{ "name": "1", "designator": "1", "x": 0, "y": 0, "length": 99_999, "orientation": "left" }]),
+                "pin 0 length",
+            ),
+            (
+                "rectangles",
+                json!([{ "x1": FAR, "y1": 0, "x2": 10, "y2": 10 }]),
+                "rectangle 0 x1",
+            ),
+            (
+                "rectangles",
+                json!([{ "x1": 0, "y1": FAR, "x2": 10, "y2": 10 }]),
+                "rectangle 0 y1",
+            ),
+            (
+                "rectangles",
+                json!([{ "x1": 0, "y1": 0, "x2": 10, "y2": FAR }]),
+                "rectangle 0 y2",
+            ),
+            (
+                "polylines",
+                json!([{ "points": [{ "x": 0, "y": 0 }, { "x": 0, "y": FAR }] }]),
+                "polyline 0 point 1 y",
+            ),
+            (
+                "ellipses",
+                json!([{ "x": 0, "y": 0, "radius_x": 5, "radius_y": FAR }]),
+                "ellipse 0 radius_y",
+            ),
+            (
+                "round_rects",
+                json!([{
+                    "x1": 0, "y1": 0, "x2": 10, "y2": 10,
+                    "corner_x_radius": 2, "corner_y_radius": FAR,
+                }]),
+                "round_rect 0 corner_y_radius",
+            ),
+            (
+                "polygons",
+                json!([{ "points": [{ "x": 0, "y": 0 }, { "x": 10, "y": 0 }, { "x": 5, "y": FAR }] }]),
+                "polygon 0 point 2 y",
+            ),
+            (
+                "text_frames",
+                json!([{ "x1": 0, "y1": FAR, "x2": 10, "y2": 10, "text": "F" }]),
+                "text_frame 0 y1",
+            ),
+            (
+                "text_frames",
+                json!([{ "x1": 0, "y1": 0, "x2": 10, "y2": FAR, "text": "F" }]),
+                "text_frame 0 y2",
+            ),
+            (
+                "text_frames",
+                json!([{ "x1": 0, "y1": 0, "x2": 10, "y2": 10, "text": "F", "text_margin": FAR }]),
+                "text_frame 0 text_margin",
+            ),
+            (
+                "beziers",
+                json!([{
+                    "x1": 0, "y1": 0, "x2": 10, "y2": 0,
+                    "x3": 20, "y3": 0, "x4": 30, "y4": FAR,
+                }]),
+                "bezier 0 point 3 y",
+            ),
+            (
+                "elliptical_arcs",
+                json!([{
+                    "x": 0, "y": FAR, "radius": 5, "secondary_radius": 5,
+                    "start_angle": 0, "end_angle": 90,
+                }]),
+                "elliptical_arc 0 y",
+            ),
+            (
+                "elliptical_arcs",
+                json!([{
+                    "x": 0, "y": 0, "radius": 5, "secondary_radius": FAR,
+                    "start_angle": 0, "end_angle": 90,
+                }]),
+                "elliptical_arc 0 secondary_radius",
+            ),
+            (
+                "ieee_symbols",
+                json!([{ "x": 0, "y": FAR, "symbol": 1 }]),
+                "ieee_symbol 0 y",
+            ),
+            (
+                "ieee_symbols",
+                json!([{ "x": 0, "y": 0, "symbol": 1, "scale_factor": FAR }]),
+                "ieee_symbol 0 scale_factor",
+            ),
+        ];
+
+        for (family, payload, expected) in cases {
+            let mut symbol = json!({ "name": "FAR" });
+            symbol[family] = payload;
+            let r = server.call_write_schlib(&json!({
+                "filepath": path.to_string_lossy(),
+                "symbols": [symbol],
+            }));
+            let text = get_result_text(&r);
+            assert!(r.is_error, "{expected} was not range-checked: {text}");
+            assert!(
+                text.contains(expected),
+                "expected the error to name {expected:?}, got: {text}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_footprint_text_height_out_of_range_is_caught() {
+        // The PcbLib side has the same per-field shape; text height is the one
+        // field there that is neither a coordinate nor a width.
+        use crate::mcp::tools::test_support::{create_test_server, get_result_text, test_temp_dir};
+        use serde_json::json;
+
+        let dir = test_temp_dir();
+        let server = create_test_server(dir.path());
+        let r = server.call_write_pcblib(&json!({
+            "filepath": dir.path().join("Tall.PcbLib").to_string_lossy(),
+            "footprints": [{
+                "name": "FP",
+                "pads": [{ "designator": "1", "x": 0.0, "y": 0.0, "width": 1.0, "height": 1.0 }],
+                "text": [{ "x": 0.0, "y": 0.0, "text": "REF", "height": 99_999.0, "layer": "Top Overlay" }],
+            }],
+        }));
+        let text = get_result_text(&r);
+        assert!(r.is_error, "{text}");
+        assert!(text.contains("text 0 height"), "{text}");
+    }
 
     #[test]
     fn validate_coordinate_accepts_finite_in_range() {
@@ -371,36 +785,6 @@ mod tests {
         assert!(McpServer::validate_coordinate(6000.0, "x")
             .unwrap_err()
             .contains("exceeds"));
-    }
-
-    // ---- pad_has_uniform_per_layer_data ------------------------------------
-
-    #[test]
-    fn pad_uniform_when_no_per_layer_data() {
-        let pad = Pad::smd("1", 0.0, 0.0, 1.0, 1.0);
-        assert!(McpServer::pad_has_uniform_per_layer_data(&pad));
-    }
-
-    #[test]
-    fn pad_non_uniform_sizes_shapes_radii_offsets() {
-        let base = Pad::smd("1", 0.0, 0.0, 1.0, 1.0);
-
-        let mut sizes = base.clone();
-        sizes.per_layer_sizes = Some(vec![(2.0, 1.0)]); // width differs from 1.0
-        assert!(!McpServer::pad_has_uniform_per_layer_data(&sizes));
-
-        let mut shapes = base.clone();
-        shapes.per_layer_shapes = Some(vec![PadShape::Round]); // differs from primary
-        assert!(!McpServer::pad_has_uniform_per_layer_data(&shapes));
-
-        let mut radii = base.clone();
-        radii.corner_radius_percent = Some(0);
-        radii.per_layer_corner_radii = Some(vec![50]); // differs from 0
-        assert!(!McpServer::pad_has_uniform_per_layer_data(&radii));
-
-        let mut offsets = base;
-        offsets.per_layer_offsets = Some(vec![(0.5, 0.0)]); // non-zero offset
-        assert!(!McpServer::pad_has_uniform_per_layer_data(&offsets));
     }
 
     // ---- validate_footprint_coordinates ------------------------------------

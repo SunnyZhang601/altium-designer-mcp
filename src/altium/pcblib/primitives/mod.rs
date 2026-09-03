@@ -45,8 +45,8 @@ mod models3d;
 pub use models3d::{ComponentBody, EmbeddedModel, Model3D};
 mod pads;
 pub use pads::{
-    HoleShape, MaskExpansionMode, Pad, PadShape, PadStackMode, PowerPlaneConnectStyle, Via,
-    ViaStackMode,
+    DrillLayerPairType, HoleShape, MaskExpansionMode, Pad, PadShape, PadStackMode,
+    PowerPlaneConnectStyle, Via, ViaStackMode,
 };
 mod shapes;
 pub use shapes::{Arc, Region, RegionKind, Track, Vertex};
@@ -73,7 +73,50 @@ bitflags! {
         const TENTING_TOP = 0x0008;
         /// Bottom solder mask tenting enabled (covers the pad/via).
         const TENTING_BOTTOM = 0x0010;
+        /// Fabrication test point on the top layer. Altium locks a primitive it
+        /// marks as a test point, so this normally reads alongside `LOCKED`.
+        const TESTPOINT_TOP = 0x0020;
+        /// Fabrication test point on the bottom layer, likewise locked by Altium.
+        const TESTPOINT_BOTTOM = 0x0040;
+        /// On-disk flag bit 0, which nothing here models; carried verbatim so a
+        /// read-modify-write leaves the flag word as Altium wrote it (hand-authored
+        /// libraries set bits the scripted golden never does).
+        const DISK_BIT_0 = 0x0080;
+        /// On-disk flag bit 1, carried verbatim (see [`Self::DISK_BIT_0`]).
+        const DISK_BIT_1 = 0x0100;
+        /// On-disk flag bit 4, carried verbatim (see [`Self::DISK_BIT_0`]); set on
+        /// every track of a hand-authored pin-header footprint.
+        const DISK_BIT_4 = 0x0200;
+        /// On-disk flag bit 10, carried verbatim (see [`Self::DISK_BIT_0`]).
+        const DISK_BIT_10 = 0x0400;
+        /// On-disk flag bit 11, carried verbatim (see [`Self::DISK_BIT_0`]).
+        const DISK_BIT_11 = 0x0800;
+        /// On-disk flag bit 12, carried verbatim (see [`Self::DISK_BIT_0`]).
+        const DISK_BIT_12 = 0x1000;
+        /// On-disk flag bit 13, carried verbatim (see [`Self::DISK_BIT_0`]).
+        const DISK_BIT_13 = 0x2000;
+        /// On-disk flag bit 14, carried verbatim (see [`Self::DISK_BIT_0`]).
+        const DISK_BIT_14 = 0x4000;
+        /// On-disk flag bit 15, carried verbatim (see [`Self::DISK_BIT_0`]).
+        const DISK_BIT_15 = 0x8000;
     }
+}
+
+impl PcbFlags {
+    /// The on-disk flag bits nothing here models, paired with the flag that
+    /// carries each one verbatim. Everything else in the word is a modelled
+    /// bit (`flags.rs`).
+    pub(crate) const DISK_BITS: [(u16, Self); 9] = [
+        (0x0001, Self::DISK_BIT_0),
+        (0x0002, Self::DISK_BIT_1),
+        (0x0010, Self::DISK_BIT_4),
+        (0x0400, Self::DISK_BIT_10),
+        (0x0800, Self::DISK_BIT_11),
+        (0x1000, Self::DISK_BIT_12),
+        (0x2000, Self::DISK_BIT_13),
+        (0x4000, Self::DISK_BIT_14),
+        (0x8000, Self::DISK_BIT_15),
+    ];
 }
 
 #[cfg(test)]

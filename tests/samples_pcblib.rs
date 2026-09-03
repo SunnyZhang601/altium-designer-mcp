@@ -6,7 +6,8 @@
 //! writer's output, as `file_io_roundtrip.rs` does).
 
 use altium_designer_mcp::altium::pcblib::{
-    HoleShape, Layer, PadShape, PadStackMode, PcbLib, RegionKind, TextKind,
+    DrillLayerPairType, HoleShape, Layer, MaskExpansionMode, PadShape, PadStackMode, PcbFlags,
+    PcbLib, PrimitiveKind, RegionKind, StrokeFont, TextKind,
 };
 use std::path::PathBuf;
 
@@ -39,13 +40,13 @@ fn samples_exist() {
 fn samples_pcblib_pad_shapes() {
     let lib = PcbLib::open(sample("footprints.PcbLib")).expect("failed to open footprints.PcbLib");
 
-    // Seventeen footprints: twelve per-primitive-family footprints plus the five
-    // coverage-enrichment footprints (TEXT_STYLE, REGION_CUTOUT, TEXT_SPECIAL,
-    // MULTILAYER, EMBSTEP). Note: PAD_THERMAL remains a documented negative — the
-    // thermal-relief/power-plane setters crash AD24's scripting engine on a fresh
-    // library pad in every sequence tried (batch 4b final bisect); see
-    // GenerateSamples.pas.
-    assert_eq!(lib.len(), 17, "expected exactly seventeen footprints");
+    // Twelve per-primitive-family footprints plus the coverage-enrichment ones
+    // (TEXT_STYLE, REGION_CUTOUT, TEXT_SPECIAL, MULTILAYER, EMBSTEP, PRIMPROPS,
+    // batch 5's STEP_REF, MECH20, TEXT_WIDE_ONLY, and BODYPREC).
+    // Note: PAD_THERMAL remains a documented negative — the thermal-relief /
+    // power-plane setters crash AD24's scripting engine on a fresh library pad in
+    // every sequence tried (batch 4b final bisect); see GenerateSamples.pas.
+    assert_eq!(lib.len(), 26, "expected exactly twenty-six footprints");
     let names = lib.names();
     for expected in [
         "PAD_SHAPES",
@@ -63,8 +64,16 @@ fn samples_pcblib_pad_shapes() {
         "TEXT_STYLE",
         "REGION_CUTOUT",
         "TEXT_SPECIAL",
+        "TEXT_LONG",
+        "Резистор_0402",
+        "PADMASK",
+        "LOCKFLAGS_PCB",
         "MULTILAYER",
         "EMBSTEP",
+        "PRIMPROPS",
+        "STEP_REF",
+        "MECH20",
+        "TEXT_WIDE_ONLY",
     ] {
         assert!(
             names.iter().any(|n| n == expected),
@@ -468,9 +477,13 @@ fn samples_pcblib_regions() {
             region.layer,
         );
         assert_eq!(region.kind, RegionKind::Copper, "golden regions are copper");
-        assert!(
-            region.name.is_empty(),
-            "golden region NAME is blank, got {:?}",
+        // A single space, not empty: Altium writes `NAME= ` on a default region.
+        // This read blank until the parameter reader stopped trimming values,
+        // and the writer then emitted `NAME=`, altering the record on every
+        // read-modify-write.
+        assert_eq!(
+            region.name, " ",
+            "golden region NAME is a single space, got {:?}",
             region.name
         );
         // ARCRESOLUTION=0.5mil = 0.0127 mm.
@@ -686,6 +699,41 @@ fn samples_pcblib_text_win1252() {
 }
 
 #[test]
+fn samples_pcblib_text_long_comes_from_wide_strings() {
+    // The out-of-line text path, against a real Altium file (#314, #309).
+    //
+    // A Text record's block 1 is a Pascal SHORT string, so Altium truncates it
+    // at 255 bytes and writes the full text to /{component}/WideStrings. This
+    // footprint's first string is 264 characters, which is what makes that path
+    // observable: every other sample text is short enough for Altium to
+    // duplicate inline, where block 1 alone is sufficient.
+    //
+    // The short string alongside it is the last entry in the stream, so it
+    // covers the null terminator that ends the final value.
+    let lib = PcbLib::open(sample("footprints.PcbLib")).expect("failed to open footprints.PcbLib");
+
+    let footprint = lib.get("TEXT_LONG").expect("footprint TEXT_LONG not found");
+    assert_eq!(footprint.text.len(), 2, "TEXT_LONG has 2 strings");
+
+    let long = footprint
+        .text
+        .iter()
+        .find(|t| t.text.len() > 255)
+        .expect("the long string must survive block 1's 255-byte limit");
+    let expected: String = "A".repeat(260) + "_END";
+    assert_eq!(long.text.len(), 264, "264 characters, not truncated to 255");
+    assert_eq!(long.text, expected, "the full authored text, verbatim");
+
+    // Last entry in the stream, so its final character sits against the
+    // terminator.
+    assert!(
+        footprint.text.iter().any(|t| t.text == "SHORT"),
+        "the final entry keeps its last character: {:?}",
+        footprint.text.iter().map(|t| &t.text).collect::<Vec<_>>()
+    );
+}
+
+#[test]
 fn samples_pcblib_body3d() {
     let lib = PcbLib::open(sample("footprints.PcbLib")).expect("failed to open footprints.PcbLib");
 
@@ -711,11 +759,9 @@ fn samples_pcblib_body3d() {
         "standoff_height: expected ~0, got {}",
         body.standoff_height,
     );
-    // Layer-reader regression (PR-11): the body is authored on Mechanical 13
-    // (layer id 69). It was previously collapsed to Top3DBody because the reader
-    // decoded only the V7_LAYER string via an incomplete map (MECHANICAL2-7) and
-    // ignored the CommonPrimitiveData header layer byte. The reader now reads the
-    // header byte, so the true layer survives.
+    // The body is authored on Mechanical 13 (layer id 69). The reader must
+    // take the layer from the CommonPrimitiveData header byte: decoding only
+    // the V7_LAYER string collapses any layer outside that map to Top3DBody.
     assert_eq!(body.layer, Layer::Mechanical13, "body layer");
 
     // Altium reorders the contour vertices on save, so we assert the vertex count
@@ -803,7 +849,7 @@ fn samples_pcblib_body3d() {
 }
 
 // ---------------------------------------------------------------------------
-// Coverage-enrichment tests (docs/FIXTURE_COVERAGE.md): non-default PcbLib
+// Coverage-enrichment tests (scripts/samples/COVERAGE.md): non-default PcbLib
 // property values authored by GenerateSamples.pas, verified against the real
 // Altium-regenerated fixture.
 // ---------------------------------------------------------------------------
@@ -816,8 +862,8 @@ fn samples_pcblib_text_style() {
         .expect("TEXT_STYLE footprint not found");
 
     // A single TrueType text authored with Bold + Italic + Mirror + FontName —
-    // the first real-Altium ground truth for these IPCB_Text style fields (they
-    // were previously exercised only by a self-round-trip / oracle default).
+    // real-Altium ground truth for these IPCB_Text style fields, beyond what a
+    // self-round-trip or an oracle default can show.
     assert_eq!(fp.text.len(), 1, "TEXT_STYLE has one text");
     let t = &fp.text[0];
     assert_eq!(t.kind, TextKind::TrueType, "text kind is TrueType");
@@ -825,6 +871,286 @@ fn samples_pcblib_text_style() {
     assert!(t.italic, "text is italic");
     assert!(t.mirror, "text is mirrored");
     assert_eq!(t.font_name, "Arial", "TrueType font name round-trips");
+}
+
+#[test]
+fn samples_pcblib_via_manual_mask_expansion() {
+    let lib = PcbLib::open(sample("footprints.PcbLib")).expect("failed to open footprints.PcbLib");
+    let fp = lib.get("PRIMPROPS").expect("PRIMPROPS footprint not found");
+
+    // The counterpart to samples_pcblib_via_mask_state_is_altium_factory_default:
+    // that one pins a via left on the rule, this one a via switched to manual.
+    // Both expansions had to be set through TPadCache — the direct
+    // Via.SolderMaskExpansion* / .PasteMaskExpansion* setters compile and then
+    // bring AD24 down with a native access violation, so no golden can ever be
+    // authored that way (see GenerateSamples.pas).
+    assert_eq!(fp.vias.len(), 1, "PRIMPROPS has one via");
+    let v = &fp.vias[0];
+    assert_eq!(
+        v.solder_mask_expansion_mode,
+        MaskExpansionMode::Manual,
+        "the cache marks the expansion manual"
+    );
+    assert!(
+        approx_eq(v.solder_mask_expansion, 0.1778, 1e-4),
+        "7 mil solder-mask expansion, got {}",
+        v.solder_mask_expansion
+    );
+    assert!(
+        approx_eq(v.paste_mask_expansion, 0.0762, 1e-4),
+        "3 mil paste-mask expansion, got {}",
+        v.paste_mask_expansion
+    );
+}
+
+#[test]
+fn samples_pcblib_component_body_placement_and_appearance() {
+    let lib = PcbLib::open(sample("footprints.PcbLib")).expect("failed to open footprints.PcbLib");
+    let fp = lib.get("PRIMPROPS").expect("PRIMPROPS footprint not found");
+
+    // The only body in the library that is not flat, grey and opaque. Without it
+    // the standoff, cavity, colour and opacity arms read nothing but defaults.
+    assert_eq!(fp.component_bodies.len(), 1, "PRIMPROPS has one body");
+    let b = &fp.component_bodies[0];
+
+    // 10 mil standoff, 50 mil overall, 5 mil cavity.
+    assert!(
+        approx_eq(b.standoff_height, 0.254, 1e-6),
+        "standoff height, got {}",
+        b.standoff_height
+    );
+    assert!(
+        approx_eq(b.overall_height, 1.27, 1e-6),
+        "overall height, got {}",
+        b.overall_height
+    );
+    // CAVITYHEIGHT was on the reader's modelled-keys list — and so excluded from
+    // the unknown-key passthrough — while no field parsed it, and the writer
+    // emitted a hard-coded `CAVITYHEIGHT=0mil`. A non-zero value was therefore
+    // lost in both directions until this fixture caught it.
+    assert!(
+        approx_eq(b.cavity_height, 0.127, 1e-6),
+        "cavity height, got {}",
+        b.cavity_height
+    );
+
+    // Red at half opacity, against the grey opaque default every other body has.
+    assert_eq!(b.body_color_3d, 255, "3D body colour (BGR red)");
+    assert!(
+        approx_eq(b.body_opacity_3d, 0.5, 1e-6),
+        "3D body opacity, got {}",
+        b.body_opacity_3d
+    );
+}
+
+#[test]
+fn samples_pcblib_rotated_unplated_slot() {
+    let lib = PcbLib::open(sample("footprints.PcbLib")).expect("failed to open footprints.PcbLib");
+    let fp = lib.get("PRIMPROPS").expect("PRIMPROPS footprint not found");
+
+    // Every other hole in the library is unrotated and plated, so both arms read
+    // nothing but defaults. The slot is 20 mil across and 40 mil long, turned 30
+    // degrees, and unplated.
+    let pad = fp
+        .pads
+        .iter()
+        .find(|p| p.designator == "S1")
+        .expect("PRIMPROPS pad S1 not found");
+    assert_eq!(pad.hole_shape, HoleShape::Slot, "slotted hole");
+    assert!(
+        pad.hole_size.is_some_and(|h| approx_eq(h, 0.508, 1e-6)),
+        "20 mil slot width, got {:?}",
+        pad.hole_size
+    );
+    assert!(
+        approx_eq(pad.hole_slot_length, 1.016, 1e-6),
+        "40 mil slot length, got {}",
+        pad.hole_slot_length
+    );
+    assert!(
+        approx_eq(pad.hole_rotation, 30.0, 1e-9),
+        "slot rotated 30 degrees, got {}",
+        pad.hole_rotation
+    );
+    assert!(!pad.is_plated, "authored unplated");
+}
+
+#[test]
+fn samples_pcblib_text_stroke_fonts() {
+    let lib = PcbLib::open(sample("footprints.PcbLib")).expect("failed to open footprints.PcbLib");
+    let fp = lib.get("PRIMPROPS").expect("PRIMPROPS footprint not found");
+
+    // The reader only surfaces a stroke font when the geometry's font id at @25
+    // is above 1, so a library of default-font texts never reaches that arm.
+    // FontID 2 = Sans Serif, 3 = Serif; both also carry a non-default 12 mil
+    // stroke width, which no other text in the library sets.
+    let by_text = |t: &str| {
+        fp.text
+            .iter()
+            .find(|x| x.text == t)
+            .unwrap_or_else(|| panic!("PRIMPROPS text {t:?} not found"))
+    };
+
+    let sans = by_text("SANS");
+    assert_eq!(
+        sans.kind,
+        TextKind::Stroke,
+        "authored as stroke, not TrueType"
+    );
+    assert_eq!(sans.stroke_font, Some(StrokeFont::SansSerif), "FontID 2");
+    assert!(
+        sans.stroke_width
+            .is_some_and(|w| approx_eq(w, 0.3048, 1e-6)),
+        "12 mil stroke width, got {:?}",
+        sans.stroke_width
+    );
+
+    let serif = by_text("SERIF");
+    assert_eq!(serif.kind, TextKind::Stroke);
+    assert_eq!(serif.stroke_font, Some(StrokeFont::Serif), "FontID 3");
+}
+
+/// A borrowed list of per-primitive identity GUIDs, one entry per primitive.
+type GuidList<'a> = Vec<&'a Option<String>>;
+
+#[test]
+fn samples_pcblib_primitive_guids_survive_a_rewrite() {
+    let src = sample("footprints.PcbLib");
+    let mut lib = PcbLib::open(&src).expect("failed to open footprints.PcbLib");
+
+    // Identities ride on the primitives themselves, so a structural edit moves
+    // them with their primitive instead of re-pointing the survivors. ARCS: two
+    // arcs, each with its own GUID, plus the footprint record's own (kind 85).
+    let arcs = lib.get("ARCS").expect("ARCS footprint not found");
+    let (a, b) = (
+        arcs.arcs[0].guid.as_deref().expect("arc 0 carries a GUID"),
+        arcs.arcs[1].guid.as_deref().expect("arc 1 carries a GUID"),
+    );
+    assert_ne!(a, b, "each arc has its own identity");
+    for guid in [a, b] {
+        assert!(
+            guid.starts_with('{') && guid.ends_with('}') && guid.len() == 38,
+            "GUID is brace-wrapped and 36 characters wide, got {guid:?}"
+        );
+    }
+    assert!(
+        arcs.guid.is_some(),
+        "the footprint record has a GUID of its own"
+    );
+
+    // The point of reading them is writing them back unchanged — on every
+    // primitive of every footprint.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let out = dir.path().join("rewritten.PcbLib");
+    lib.save(&out).expect("write the library back");
+    let reread = PcbLib::open(&out).expect("reopen the rewritten library");
+
+    for footprint in lib.iter() {
+        let after = reread
+            .get(&footprint.name)
+            .unwrap_or_else(|| panic!("{} missing after rewrite", footprint.name));
+        assert_eq!(
+            after.guid, footprint.guid,
+            "{}: footprint GUID",
+            footprint.name
+        );
+        let pairs: [(&str, GuidList, GuidList); 8] = [
+            (
+                "arcs",
+                footprint.arcs.iter().map(|p| &p.guid).collect(),
+                after.arcs.iter().map(|p| &p.guid).collect(),
+            ),
+            (
+                "pads",
+                footprint.pads.iter().map(|p| &p.guid).collect(),
+                after.pads.iter().map(|p| &p.guid).collect(),
+            ),
+            (
+                "vias",
+                footprint.vias.iter().map(|p| &p.guid).collect(),
+                after.vias.iter().map(|p| &p.guid).collect(),
+            ),
+            (
+                "tracks",
+                footprint.tracks.iter().map(|p| &p.guid).collect(),
+                after.tracks.iter().map(|p| &p.guid).collect(),
+            ),
+            (
+                "text",
+                footprint.text.iter().map(|p| &p.guid).collect(),
+                after.text.iter().map(|p| &p.guid).collect(),
+            ),
+            (
+                "regions",
+                footprint.regions.iter().map(|p| &p.guid).collect(),
+                after.regions.iter().map(|p| &p.guid).collect(),
+            ),
+            (
+                "fills",
+                footprint.fills.iter().map(|p| &p.guid).collect(),
+                after.fills.iter().map(|p| &p.guid).collect(),
+            ),
+            (
+                "bodies",
+                footprint.component_bodies.iter().map(|p| &p.guid).collect(),
+                after.component_bodies.iter().map(|p| &p.guid).collect(),
+            ),
+        ];
+        for (kind, before_guids, after_guids) in pairs {
+            assert_eq!(
+                after_guids, before_guids,
+                "{}: {kind} GUIDs changed across a rewrite",
+                footprint.name
+            );
+        }
+    }
+}
+
+#[test]
+fn samples_pcblib_region_kinds_and_naming() {
+    let lib = PcbLib::open(sample("footprints.PcbLib")).expect("failed to open footprints.PcbLib");
+    let fp = lib.get("PRIMPROPS").expect("PRIMPROPS footprint not found");
+
+    // One region per TRegionKind AD24 offers. Authoring all four is the only way
+    // to pin the integer behind each name: nothing documents them, and a region
+    // whose kind we misread is indistinguishable from a plain copper pour.
+    let by_name = |n: &str| {
+        fp.regions
+            .iter()
+            .find(|r| r.name == n)
+            .unwrap_or_else(|| panic!("PRIMPROPS region {n:?} not found"))
+    };
+
+    // KIND=2. Also proves Name and UnionIndex survive: every other region in the
+    // library is unnamed and in no union.
+    let named = by_name("NamedPour");
+    assert_eq!(named.kind, RegionKind::NamedRegion, "KIND=2");
+    assert_eq!(named.union_index, 7, "authored union index");
+
+    // KIND=4.
+    assert_eq!(by_name("CavityRgn").kind, RegionKind::Cavity, "KIND=4");
+
+    // KIND=1, the plain polygon cutout.
+    assert_eq!(by_name("PlainCut").kind, RegionKind::Cutout, "KIND=1");
+
+    // eRegionKind_BoardCutout is NOT a kind on disk: AD24 rewrites it as copper
+    // on the keep-out layer with ISBOARDCUTOUT=TRUE, the same representation
+    // samples_pcblib_region_cutout asserts. Named here so the four authored
+    // kinds account for only three KIND integers.
+    let cut = by_name("BoardCut");
+    assert_eq!(cut.kind, RegionKind::Copper, "a board cutout stores KIND=0");
+    assert_eq!(
+        cut.layer,
+        Layer::KeepOut,
+        "and is moved to the keep-out layer"
+    );
+    assert!(
+        cut.additional_parameters
+            .iter()
+            .any(|(k, v)| k == "ISBOARDCUTOUT" && v == "TRUE"),
+        "the board-cutout flag is preserved, got {:?}",
+        cut.additional_parameters
+    );
 }
 
 #[test]
@@ -853,9 +1179,8 @@ fn samples_pcblib_region_cutout() {
         "the board-cutout flag is preserved in additional_parameters, got {:?}",
         r.additional_parameters
     );
-    // Altium also silently MOVED the authored eTopLayer region onto the
-    // keep-out layer (LAYER=KEEPOUT + KEEPOUT=TRUE in the same param block) —
-    // the authored layer is not preserved for a board cutout. Assert the real
+    // Altium also MOVED the authored eTopLayer region onto the keep-out layer
+    // (LAYER=KEEPOUT + KEEPOUT=TRUE in the same param block). Assert the real
     // on-disk placement so the relocation is documented ground truth.
     assert_eq!(
         r.layer,
@@ -868,6 +1193,37 @@ fn samples_pcblib_region_cutout() {
             .any(|(k, v)| k == "KEEPOUT" && v == "TRUE"),
         "the KEEPOUT flag is preserved in additional_parameters, got {:?}",
         r.additional_parameters
+    );
+    // The layer it was drawn on survives after all, in V7_LAYER: the layer byte
+    // says keep-out, the token still says TOP. Nothing else in the record
+    // records it, so deriving the token from `layer` would lose it.
+    assert_eq!(
+        r.v7_layer.as_deref(),
+        Some("TOP"),
+        "V7_LAYER keeps the authored layer even though the layer byte does not"
+    );
+}
+
+#[test]
+fn samples_pcblib_cutout_v7_layer_survives_a_read_modify_write() {
+    use std::io::Cursor;
+
+    let mut lib = PcbLib::open(sample("footprints.PcbLib")).expect("failed to open golden");
+    let mut buffer = Cursor::new(Vec::new());
+    lib.write(&mut buffer).expect("write the golden back");
+    buffer.set_position(0);
+    let after = PcbLib::read(&mut buffer).expect("read back");
+
+    let r = &after
+        .get("REGION_CUTOUT")
+        .expect("REGION_CUTOUT survives")
+        .regions[0];
+    assert_eq!(r.layer, Layer::KeepOut);
+    assert_eq!(
+        r.v7_layer.as_deref(),
+        Some("TOP"),
+        "re-deriving the token from the layer byte would write KEEPOUT and lose \
+         the layer the cutout was drawn on"
     );
 }
 
@@ -933,9 +1289,20 @@ fn samples_pcblib_embstep() {
     assert_eq!(fp.component_bodies.len(), 1, "EMBSTEP has 1 component body");
     let body = &fp.component_bodies[0];
 
-    assert_eq!(
-        body.model_id, "{A0448C65-C10D-4882-92F6-D6E5A5C55B3D}",
-        "the body references the embedded model's GUID"
+    // Altium mints a fresh model GUID every time the samples are authored, so the
+    // link is asserted rather than the literal: the body must reference a model the
+    // library actually carries, in Altium's brace-wrapped GUID form. Pinning the
+    // value would break on every regeneration for no added coverage.
+    assert!(
+        body.model_id.starts_with('{') && body.model_id.ends_with('}') && body.model_id.len() == 38,
+        "model_id is a brace-wrapped GUID, got {:?}",
+        body.model_id
+    );
+    assert!(
+        lib.models()
+            .any(|m| m.id.eq_ignore_ascii_case(&body.model_id)),
+        "the body must reference one of the library's embedded models, got {:?}",
+        body.model_id
     );
     assert_eq!(body.model_name, "minimal.step", "MODEL.NAME");
     assert!(body.embedded, "MODEL.EMBED=TRUE reads as embedded");
@@ -953,9 +1320,10 @@ fn samples_pcblib_embstep() {
     // CommonPrimitiveData layer byte 57 (also V7_LAYER=MECHANICAL1).
     assert_eq!(body.layer, Layer::Mechanical1, "body layer");
 
-    // The referenced model must actually exist in the library's embedded-model
-    // store, resolved through the same lookup the reader uses (case-insensitive).
-    assert_eq!(lib.model_count(), 1, "the library embeds exactly one model");
+    // The referenced model must actually exist in the library's model store,
+    // resolved through the same lookup the reader uses (case-insensitive). The
+    // store holds two entries: this embedded one and STEP_REF's referenced one.
+    assert_eq!(lib.model_count(), 2, "EMBSTEP's model and STEP_REF's");
     let model = lib
         .get_model(&body.model_id)
         .expect("the body's MODELID resolves to an embedded model");
@@ -1003,11 +1371,11 @@ fn samples_pcblib_text_special() {
 
     // Two special text items authored in batch 4a: a Code-128 barcode ("BC128")
     // and an inverted (knockout) TrueType text in a framed rectangle ("INV").
-    // First real-Altium ground truth for TextKind::BarCode and the inverted
-    // text-box descriptor (offsets 110-133), previously only
-    // self-round-trip-tested. Matched by content; on-disk order is not
+    // Real-Altium ground truth for TextKind::BarCode and the inverted
+    // text-box descriptor (offsets 110-133), beyond a
+    // self-round-trip. Matched by content; on-disk order is not
     // guaranteed.
-    assert_eq!(fp.text.len(), 2, "TEXT_SPECIAL has two text items");
+    assert_eq!(fp.text.len(), 5, "TEXT_SPECIAL has five text items");
     let by_content = |content: &str| {
         fp.text
             .iter()
@@ -1028,10 +1396,10 @@ fn samples_pcblib_text_special() {
     );
 
     // Inverted TrueType: authored Inverted + UseInvertedRectangle +
-    // InvertedTTTextBorder = 10 mil. The rectangle dimensions themselves were
-    // auto-computed by Altium on save (not authored), so only the border is
-    // asserted exactly; the width/height must simply be present (Some) since
-    // UseInvertedRectangle is set.
+    // InvertedTTTextBorder = 10 mil, with an EXPLICIT 120 x 70 mil rectangle.
+    // The size used to be left to Altium, but AD computes it lazily from the
+    // rendered text extent and a headless save can catch it at 0 (the
+    // 2026-09-01 regeneration did) — so the generator authors it.
     let inv = by_content("INV");
     assert_eq!(inv.kind, TextKind::TrueType, "INV kind is TrueType");
     assert!(inv.is_inverted, "INV is inverted (knockout)");
@@ -1042,29 +1410,922 @@ fn samples_pcblib_text_special() {
         "INV inverted_border: expected 10 mil = 0.254 mm, got {:?}",
         inv.inverted_border,
     );
-    // The auto-computed on-disk values (fixture ground truth): width 1,040,750
-    // internal units = 104.075 mil = 2.643505 mm; height 584,375 units =
-    // 58.4375 mil = 1.4843125 mm.
     assert!(
         approx_eq(
             inv.inverted_rect_width.expect("INV has a rect width"),
-            2.643_505,
-            1e-5
+            3.048,
+            1e-6
         ),
-        "INV inverted_rect_width: got {:?}",
+        "INV inverted_rect_width: expected 120 mil = 3.048 mm, got {:?}",
         inv.inverted_rect_width,
     );
     assert!(
         approx_eq(
             inv.inverted_rect_height.expect("INV has a rect height"),
-            1.484_312_5,
-            1e-5
+            1.778,
+            1e-6
         ),
-        "INV inverted_rect_height: got {:?}",
+        "INV inverted_rect_height: expected 70 mil = 1.778 mm, got {:?}",
         inv.inverted_rect_height,
     );
     assert_eq!(
         inv.inverted_rect_text_offset, None,
         "INV text offset was not authored (zero on disk reads back None)"
     );
+
+    // Barcode sizing block. Two barcodes were authored with every field different,
+    // and each offset identified by the authored value appearing there: @137/@141
+    // the 400x100 and 600x150 mil sizes, @145/@149 the margins, @157 the symbology,
+    // @161 the font as UTF-16LE. BC2 is what pins them; BC128 is the control for
+    // the margins it never set.
+    let bc2 = by_content("BC2");
+    assert_eq!(bc2.kind, TextKind::BarCode);
+    assert_eq!(bc2.barcode_kind, 1, "Code128");
+    assert!(approx_eq(
+        bc2.barcode_full_width.expect("width"),
+        15.24,
+        1e-3
+    ));
+    assert!(approx_eq(
+        bc2.barcode_full_height.expect("height"),
+        3.81,
+        1e-3
+    ));
+    assert!(approx_eq(
+        bc2.barcode_x_margin.expect("x margin"),
+        0.762,
+        1e-3
+    ));
+    assert!(approx_eq(
+        bc2.barcode_y_margin.expect("y margin"),
+        1.016,
+        1e-3
+    ));
+    assert_eq!(bc2.barcode_font_name, "Courier New");
+    assert!(bc2.barcode_inverted, "BC2 is authored inverted");
+    assert!(bc2.barcode_show_text, "and with its readable line shown");
+
+    // BC3 and BC4 differ from BC2 in exactly one field each, which is what pins
+    // @159 and @225 to the right flag rather than to each other.
+    let bc3 = by_content("BC3");
+    assert!(!bc3.barcode_inverted, "BC3 turns Inverted off");
+    assert!(bc3.barcode_show_text, "and leaves ShowText alone");
+    let bc4 = by_content("BC4");
+    assert!(bc4.barcode_inverted, "BC4 leaves Inverted alone");
+    assert!(!bc4.barcode_show_text, "and turns ShowText off");
+
+    let bc1 = by_content("BC128");
+    assert!(approx_eq(
+        bc1.barcode_full_width.expect("width"),
+        10.16,
+        1e-3
+    ));
+    assert_eq!(bc1.barcode_font_name, "Arial", "the default barcode font");
+
+    // A non-barcode text carries none of it, so the block cannot be read
+    // unconditionally out of the template bytes every text record has.
+    let inv = by_content("INV");
+    assert_eq!(inv.barcode_kind, 0);
+    assert!(inv.barcode_full_width.is_none());
+    assert!(inv.barcode_font_name.is_empty());
+}
+
+#[test]
+fn samples_pcblib_golden_survives_a_read_modify_write() {
+    // The whole library is read from the Altium-authored golden and written
+    // back through our writer, in memory. A footprint Altium can author must be
+    // saveable: TEXT_LONG's 264-character string exceeds the 255-byte Pascal
+    // short string in block 1, so the writer has to truncate that block and let
+    // /WideStrings carry the full value, exactly as Altium does.
+    use std::io::Cursor;
+
+    let mut lib = PcbLib::open(sample("footprints.PcbLib")).expect("failed to open golden");
+    let before = lib.len();
+
+    let mut buffer = Cursor::new(Vec::new());
+    lib.write(&mut buffer)
+        .expect("the golden library must be writable");
+    buffer.set_position(0);
+    let round_tripped = PcbLib::read(&mut buffer).expect("read back");
+
+    assert_eq!(round_tripped.len(), before, "no footprint lost");
+
+    let long = round_tripped
+        .get("TEXT_LONG")
+        .expect("TEXT_LONG survives")
+        .text
+        .iter()
+        .find(|t| t.text.len() > 255)
+        .expect("the 264-character text keeps its full length");
+    assert_eq!(long.text, "A".repeat(260) + "_END");
+}
+
+#[test]
+fn samples_pcblib_every_guid_record_attaches_to_its_primitive() {
+    use std::io::Read as _;
+
+    // The stream keys each GUID by the primitive's ordinal among ALL of the
+    // footprint's primitives. The reader attaches each record to the primitive
+    // at that ordinal (kind cross-checked), so for the golden — whose ordinal
+    // space is known-good — every non-85 record must land: the multiset of
+    // attached GUIDs equals the multiset in the raw stream.
+    let path = sample("footprints.PcbLib");
+    let lib = PcbLib::open(&path).expect("failed to open footprints.PcbLib");
+    let file = std::fs::File::open(&path).expect("open");
+    let mut cfb = cfb::CompoundFile::open(file).expect("parse OLE");
+
+    let mut checked = 0;
+    for footprint in lib.iter() {
+        let stream = format!("/{}/PrimitiveGuids/Data", footprint.name);
+        let Ok(mut s) = cfb.open_stream(&stream) else {
+            continue;
+        };
+        let mut raw = Vec::new();
+        s.read_to_end(&mut raw).expect("read stream");
+
+        // Raw records: [kind: u32][ordinal: u32][guid: 16 bytes].
+        let mut stream_guids: Vec<(u32, [u8; 16])> = raw
+            .chunks_exact(24)
+            .map(|r| {
+                let kind = u32::from_le_bytes([r[0], r[1], r[2], r[3]]);
+                let mut g = [0u8; 16];
+                g.copy_from_slice(&r[8..24]);
+                (kind, g)
+            })
+            .collect();
+        stream_guids.retain(|&(kind, _)| kind != 85);
+
+        let mut attached: Vec<&str> = footprint
+            .arcs
+            .iter()
+            .map(|p| p.guid.as_deref())
+            .chain(footprint.pads.iter().map(|p| p.guid.as_deref()))
+            .chain(footprint.vias.iter().map(|p| p.guid.as_deref()))
+            .chain(footprint.tracks.iter().map(|p| p.guid.as_deref()))
+            .chain(footprint.text.iter().map(|p| p.guid.as_deref()))
+            .chain(footprint.regions.iter().map(|p| p.guid.as_deref()))
+            .chain(footprint.fills.iter().map(|p| p.guid.as_deref()))
+            .chain(footprint.component_bodies.iter().map(|p| p.guid.as_deref()))
+            .flatten()
+            .collect();
+        attached.sort_unstable();
+
+        assert_eq!(
+            attached.len(),
+            stream_guids.len(),
+            "{}: every non-85 record must attach to exactly one primitive",
+            footprint.name
+        );
+        assert!(
+            footprint.guid.is_some(),
+            "{}: the kind-85 record becomes the footprint's own GUID",
+            footprint.name
+        );
+        checked += 1;
+    }
+    assert!(
+        checked >= 20,
+        "only {checked} footprints carried GUID streams"
+    );
+}
+
+#[test]
+fn samples_pcblib_primitive_order_survives_a_read_modify_write() {
+    use std::io::Cursor;
+
+    let mut lib = PcbLib::open(sample("footprints.PcbLib")).expect("failed to open golden");
+    let before: Vec<(String, Vec<PrimitiveKind>)> = lib
+        .iter()
+        .map(|f| (f.name.clone(), f.primitive_order.clone()))
+        .collect();
+
+    let mut buffer = Cursor::new(Vec::new());
+    lib.write(&mut buffer).expect("write the golden back");
+    buffer.set_position(0);
+    let after = PcbLib::read(&mut buffer).expect("read back");
+
+    for (name, order) in before {
+        let rewritten = after
+            .get(&name)
+            .unwrap_or_else(|| panic!("{name} missing after rewrite"));
+        assert_eq!(
+            rewritten.primitive_order, order,
+            "{name}: primitives came back in a different order, which \
+             renumbers every PrimitiveGuids ordinal and PRIMITIVEINDEX"
+        );
+    }
+}
+
+#[test]
+fn samples_pcblib_layer_stack_survives_a_read_modify_write() {
+    use std::io::Cursor;
+
+    /// The value of one key in a raw `|KEY=VALUE|` parameter block.
+    fn param(block: &[u8], key: &str) -> Option<String> {
+        block.split(|&b| b == b'|').find_map(|seg| {
+            let eq = seg.iter().position(|&b| b == b'=')?;
+            (seg[..eq] == *key.as_bytes())
+                .then(|| String::from_utf8_lossy(&seg[eq + 1..]).into_owned())
+        })
+    }
+
+    /// The block minus the three keys that describe one particular save.
+    fn stack_only(block: &[u8]) -> Vec<Vec<u8>> {
+        block
+            .split(|&b| b == b'|')
+            .filter(|seg| {
+                let key = seg.split(|&b| b == b'=').next().unwrap_or_default();
+                !["FILENAME", "DATE", "TIME"]
+                    .iter()
+                    .any(|k| key == k.as_bytes())
+            })
+            .map(<[u8]>::to_vec)
+            .collect()
+    }
+
+    let mut lib = PcbLib::open(sample("footprints.PcbLib")).expect("failed to open golden");
+    let before = lib
+        .metadata()
+        .library_params
+        .clone()
+        .expect("the golden carries a layer stack");
+
+    // Altium named this layer; our template stack calls slot 12 "Top Assembly".
+    // Keeping the authored name is the point — a designer's "Mechanical 15 =
+    // Assembly Top" must not be renamed by a read-modify-write.
+    assert_eq!(
+        param(&before, "LAYER_V8_12NAME").as_deref(),
+        Some("Mechanical 2"),
+        "the golden's own name for mechanical layer 2"
+    );
+
+    let mut buffer = Cursor::new(Vec::new());
+    lib.write(&mut buffer).expect("write the golden back");
+    buffer.set_position(0);
+    let after = PcbLib::read(&mut buffer)
+        .expect("read back")
+        .metadata()
+        .library_params
+        .clone()
+        .expect("the rewritten library carries a layer stack");
+
+    assert_eq!(
+        stack_only(&after),
+        stack_only(&before),
+        "the library's own board configuration must come back byte-for-byte: \
+         layer names, enabled flags, USEDBYPRIMS, layer sets and per-layer ids"
+    );
+
+    // A library with no stack of its own falls back to the template, which is
+    // what makes the assertion above meaningful rather than tautological.
+    let mut fresh = PcbLib::new();
+    let mut buffer = Cursor::new(Vec::new());
+    fresh.write(&mut buffer).expect("write an empty library");
+    buffer.set_position(0);
+    let template = PcbLib::read(&mut buffer)
+        .expect("read back")
+        .metadata()
+        .library_params
+        .clone()
+        .expect("a written library always has a stack");
+    assert_eq!(
+        param(&template, "LAYER_V8_12NAME").as_deref(),
+        Some("Top Assembly"),
+        "the template stack names slot 12 differently from the golden"
+    );
+}
+
+#[test]
+fn samples_pcblib_padmask_expansions() {
+    // Manual paste / solder-mask expansion, authored by Altium.
+    //
+    // These live behind the pad's cache record rather than as direct scripting
+    // properties, so until now they were only ever exercised by a self-round-trip
+    // — our writer and reader agreeing with each other proves nothing about the
+    // on-disk values. Pad 2 is the control: an untouched pad keeps the rule-driven
+    // default, so a reader that hard-coded Manual would fail here.
+    let lib = PcbLib::open(sample("footprints.PcbLib")).expect("failed to open footprints.PcbLib");
+    let fp = lib.get("PADMASK").expect("footprint PADMASK not found");
+
+    let pad = |d: &str| {
+        fp.pads
+            .iter()
+            .find(|p| p.designator == d)
+            .unwrap_or_else(|| panic!("pad {d} not found"))
+    };
+
+    // Authored as 7 mil solder / 3 mil paste.
+    let manual = pad("1");
+    assert_eq!(manual.solder_mask_expansion_mode, MaskExpansionMode::Manual);
+    assert_eq!(manual.paste_mask_expansion_mode, MaskExpansionMode::Manual);
+    assert!(
+        approx_eq(manual.solder_mask_expansion.expect("solder"), 0.1778, 1e-4),
+        "solder mask 7 mil, got {:?}",
+        manual.solder_mask_expansion
+    );
+    assert!(
+        approx_eq(manual.paste_mask_expansion.expect("paste"), 0.0762, 1e-4),
+        "paste mask 3 mil, got {:?}",
+        manual.paste_mask_expansion
+    );
+
+    let default_pad = pad("2");
+    assert_eq!(
+        default_pad.solder_mask_expansion_mode,
+        MaskExpansionMode::None,
+        "an untouched pad stays rule-driven"
+    );
+    assert_eq!(
+        default_pad.paste_mask_expansion_mode,
+        MaskExpansionMode::None
+    );
+
+    // Pad 3 measures its solder-mask expansion from the hole edge (main-block bool
+    // @125). The offset was derived by diffing this pad against pad 1 byte by byte —
+    // every other difference between them is geometry — so pads 1 and 2 double as the
+    // controls that keep the flag from being read unconditionally.
+    assert!(
+        pad("3").solder_mask_expansion_from_hole_edge,
+        "pad 3 measures mask expansion from the hole edge"
+    );
+    for d in ["1", "2"] {
+        assert!(
+            !pad(d).solder_mask_expansion_from_hole_edge,
+            "pad {d} measures from the pad edge"
+        );
+    }
+}
+
+#[test]
+fn samples_pcblib_via_mask_state_is_altium_factory_default() {
+    // Ground truth for the mask-expansion tri-state on a via, which is Altium's
+    // `TCacheState = (eCacheInvalid, eCacheValid, eCacheManual)`.
+    //
+    // An Altium-authored via carries byte @66 = 0 (`eCacheInvalid`), meaning the
+    // stored expansion is stale. Our from-scratch via writes the same byte, so
+    // this pins the two together. Altium recomputes a rule-driven expansion on
+    // load either way (`scripts/Verify-MaskCacheState.ps1`), so what this
+    // protects is fidelity with a factory via, not the resulting mask.
+    let lib = PcbLib::open(sample("footprints.PcbLib")).expect("failed to open footprints.PcbLib");
+    let fp = lib.get("VIAS").expect("footprint VIAS not found");
+    assert_eq!(fp.vias.len(), 2);
+
+    for (i, via) in fp.vias.iter().enumerate() {
+        assert_eq!(
+            via.solder_mask_expansion_mode,
+            MaskExpansionMode::None,
+            "via {i} keeps the factory cache state"
+        );
+        assert!(
+            approx_eq(via.solder_mask_expansion, 0.1016, 1e-4),
+            "via {i} carries Altium's 4 mil template expansion, got {}",
+            via.solder_mask_expansion
+        );
+        assert!(
+            via.paste_mask_expansion.abs() < 1e-9,
+            "a via has no paste by default, got {}",
+            via.paste_mask_expansion
+        );
+        // @258 / @312 are 0 in Altium's via template. Asserting the decoded defaults
+        // catches a reader that picked the wrong offsets in a 321-byte block, which a
+        // self-round-trip could not.
+        assert!(
+            !via.solder_mask_expansion_from_hole_edge,
+            "via {i} measures mask expansion from the pad edge"
+        );
+        assert_eq!(
+            via.drill_layer_pair_type,
+            DrillLayerPairType::Through,
+            "via {i} is a through via"
+        );
+    }
+}
+
+#[test]
+fn samples_pcblib_locked_flag() {
+    // The LOCKED bit of the shared common-header flag word, authored by Altium
+    // (`Moveable := False`). A pad and a track cover the two record shapes that
+    // carry it; the unlocked pad is the control, so a reader that sets LOCKED
+    // unconditionally fails here rather than passing.
+    let lib = PcbLib::open(sample("footprints.PcbLib")).expect("failed to open footprints.PcbLib");
+    let fp = lib
+        .get("LOCKFLAGS_PCB")
+        .expect("footprint LOCKFLAGS_PCB not found");
+
+    let pad = |d: &str| {
+        fp.pads
+            .iter()
+            .find(|p| p.designator == d)
+            .unwrap_or_else(|| panic!("pad {d} not found"))
+    };
+    assert!(
+        pad("1").flags.contains(PcbFlags::LOCKED),
+        "pad 1 is authored locked"
+    );
+    assert!(
+        !pad("2").flags.contains(PcbFlags::LOCKED),
+        "pad 2 is the unlocked control"
+    );
+
+    // KEEPOUT is the other bit of the same word, and must not bleed into LOCKED.
+    let keepout = pad("3");
+    assert!(
+        keepout.flags.contains(PcbFlags::KEEPOUT),
+        "pad 3 is authored as a keepout"
+    );
+    assert!(
+        !keepout.flags.contains(PcbFlags::LOCKED),
+        "keepout must not imply locked"
+    );
+    assert!(
+        !pad("1").flags.contains(PcbFlags::KEEPOUT),
+        "and locked must not imply keepout"
+    );
+
+    // Every record shape that carries the shared flag word is authored with each
+    // bit, so no shape is left resting on a self-round-trip. Each is matched by the
+    // flag rather than by index, and the opposite bit is asserted absent, so a
+    // reader that decoded the word into the wrong shape's field would fail here.
+    assert_eq!(fp.tracks.len(), 2, "LOCKFLAGS_PCB has two tracks");
+    assert_eq!(fp.arcs.len(), 2, "LOCKFLAGS_PCB has two arcs");
+    assert_eq!(fp.fills.len(), 2, "LOCKFLAGS_PCB has two fills");
+
+    let locked_track = fp
+        .tracks
+        .iter()
+        .find(|t| t.flags.contains(PcbFlags::LOCKED))
+        .expect("a locked track");
+    assert!(
+        !locked_track.flags.contains(PcbFlags::KEEPOUT),
+        "the locked track is not also a keepout"
+    );
+    let keepout_track = fp
+        .tracks
+        .iter()
+        .find(|t| t.flags.contains(PcbFlags::KEEPOUT))
+        .expect("a keepout track");
+    assert!(
+        !keepout_track.flags.contains(PcbFlags::LOCKED),
+        "the keepout track is not also locked"
+    );
+
+    let locked_arc = fp
+        .arcs
+        .iter()
+        .find(|a| a.flags.contains(PcbFlags::LOCKED))
+        .expect("a locked arc");
+    assert!(
+        !locked_arc.flags.contains(PcbFlags::KEEPOUT),
+        "the locked arc is not also a keepout"
+    );
+    let keepout_arc = fp
+        .arcs
+        .iter()
+        .find(|a| a.flags.contains(PcbFlags::KEEPOUT))
+        .expect("a keepout arc");
+    assert!(
+        !keepout_arc.flags.contains(PcbFlags::LOCKED),
+        "the keepout arc is not also locked"
+    );
+
+    let locked_fill = fp
+        .fills
+        .iter()
+        .find(|f| f.flags.contains(PcbFlags::LOCKED))
+        .expect("a locked fill");
+    assert!(
+        !locked_fill.flags.contains(PcbFlags::KEEPOUT),
+        "the locked fill is not also a keepout"
+    );
+    let keepout_fill = fp
+        .fills
+        .iter()
+        .find(|f| f.flags.contains(PcbFlags::KEEPOUT))
+        .expect("a keepout fill");
+    assert!(
+        !keepout_fill.flags.contains(PcbFlags::LOCKED),
+        "the keepout fill is not also locked"
+    );
+
+    // The plain arcs and fills elsewhere in the library are the controls: an
+    // unconditional LOCKED or KEEPOUT would light up here.
+    let arcs = lib.get("ARCS").expect("footprint ARCS not found");
+    assert!(
+        arcs.arcs.iter().all(|a| a.flags.is_empty()),
+        "the ARCS arcs carry no flags"
+    );
+    let fills = lib.get("FILLS").expect("footprint FILLS not found");
+    assert!(
+        fills.fills.iter().all(|f| f.flags.is_empty()),
+        "the FILLS fills carry no flags"
+    );
+}
+
+#[test]
+fn samples_pcblib_jumper_group() {
+    // Jumper group (main-block i16 @110-111), authored by Altium: pads 7 and 8 share
+    // id 4 while every other pad keeps 0, so a reader that hard-coded either value
+    // fails rather than passes.
+    let lib = PcbLib::open(sample("footprints.PcbLib")).expect("failed to open footprints.PcbLib");
+    let fp = lib
+        .get("LOCKFLAGS_PCB")
+        .expect("footprint LOCKFLAGS_PCB not found");
+    let pad = |d: &str| {
+        fp.pads
+            .iter()
+            .find(|p| p.designator == d)
+            .unwrap_or_else(|| panic!("pad {d} not found"))
+    };
+    assert_eq!(pad("7").jumper_id, 4, "pad 7 is in jumper group 4");
+    assert_eq!(pad("8").jumper_id, 4, "and so is pad 8");
+    for d in ["1", "2", "3", "4", "5", "6"] {
+        assert_eq!(pad(d).jumper_id, 0, "pad {d} is in no jumper group");
+    }
+}
+
+#[test]
+fn samples_pcblib_testpoint_flags() {
+    // Issue #334: a pad authored with only IsTestPoint_Top read back as LOCKED and
+    // reported nothing for the flag that was set. Both halves are explained here.
+    //
+    // The LOCKED was real — Altium clears a primitive's unlocked bit when it marks
+    // it as a test point, confirmed against the raw flag word (0x0088 top / 0x0108
+    // bottom, against a control pad's 0x000C). The silence was ours: PcbFlags did
+    // not model the test-point bits at all, so they were dropped on read.
+    let lib = PcbLib::open(sample("footprints.PcbLib")).expect("failed to open footprints.PcbLib");
+    let fp = lib
+        .get("LOCKFLAGS_PCB")
+        .expect("footprint LOCKFLAGS_PCB not found");
+    let pad = |d: &str| {
+        fp.pads
+            .iter()
+            .find(|p| p.designator == d)
+            .unwrap_or_else(|| panic!("pad {d} not found"))
+    };
+    // Fabrication test points (issue #334). Altium clears the primitive's unlocked
+    // bit when it marks a test point, so these read LOCKED as well — that is
+    // Altium's own behaviour, verified against the raw flag word (0x0088 / 0x0108
+    // against a control pad's 0x000C), not a decode defect.
+    let tp_top = pad("5");
+    assert!(
+        tp_top.flags.contains(PcbFlags::TESTPOINT_TOP),
+        "pad 5 is a top-side fabrication test point"
+    );
+    assert!(
+        !tp_top.flags.contains(PcbFlags::TESTPOINT_BOTTOM),
+        "and not a bottom-side one"
+    );
+    assert!(
+        tp_top.flags.contains(PcbFlags::LOCKED),
+        "Altium locks a pad it marks as a test point"
+    );
+    let tp_bottom = pad("6");
+    assert!(
+        tp_bottom.flags.contains(PcbFlags::TESTPOINT_BOTTOM),
+        "pad 6 is a bottom-side fabrication test point"
+    );
+    assert!(
+        !tp_bottom.flags.contains(PcbFlags::TESTPOINT_TOP),
+        "and not a top-side one"
+    );
+    // The control pads prove the bits are not set unconditionally.
+    for d in ["1", "2", "3", "4"] {
+        let p = pad(d);
+        assert!(
+            !p.flags
+                .intersects(PcbFlags::TESTPOINT_TOP | PcbFlags::TESTPOINT_BOTTOM),
+            "pad {d} carries no test-point flag"
+        );
+    }
+}
+
+#[test]
+fn samples_pcblib_drill_tolerances() {
+    // Positive / negative drill tolerance (extended-tail i32 @162/@166), authored
+    // by Altium as +3 mil / -2 mil. The other pads in the footprint are the
+    // control: an absent tolerance must read as None, not as a zero, because the
+    // writer distinguishes the two and a zero would be written back as an
+    // explicit tolerance.
+    let lib = PcbLib::open(sample("footprints.PcbLib")).expect("failed to open footprints.PcbLib");
+    let fp = lib
+        .get("LOCKFLAGS_PCB")
+        .expect("footprint LOCKFLAGS_PCB not found");
+
+    let pad = |d: &str| {
+        fp.pads
+            .iter()
+            .find(|p| p.designator == d)
+            .unwrap_or_else(|| panic!("pad {d} not found"))
+    };
+
+    let toleranced = pad("4");
+    assert!(
+        approx_eq(
+            toleranced.hole_positive_tolerance.expect("+tolerance"),
+            0.0762,
+            1e-4
+        ),
+        "+3 mil, got {:?}",
+        toleranced.hole_positive_tolerance
+    );
+    assert!(
+        approx_eq(
+            toleranced.hole_negative_tolerance.expect("-tolerance"),
+            0.0508,
+            1e-4
+        ),
+        "-2 mil, got {:?}",
+        toleranced.hole_negative_tolerance
+    );
+
+    for d in ["1", "2", "3"] {
+        assert_eq!(
+            pad(d).hole_positive_tolerance,
+            None,
+            "pad {d} has no authored tolerance"
+        );
+        assert_eq!(pad(d).hole_negative_tolerance, None, "pad {d}");
+    }
+}
+
+/// The hand-authored `manual/identifier.PcbLib` (AD24 UI, 2026-08-16): one
+/// footprint, two extruded bodies whose `IDENTIFIER` values settle the on-disk
+/// encoding — comma-separated decimal Unicode code points (`µΩ电` =
+/// `181,937,30005`) — and whose `MODEL.*` groups prove a UI-authored extruded
+/// body carries a stable `MODELID`, real `MODEL.2D.X/Y` placement, and
+/// `MODEL.EXTRUDED.MINZ/MAXZ`, unlike the script-authored golden's bodies.
+///
+/// Bodies are matched by identifier, never by index: a twin-save experiment
+/// showed AD reorders bodies between saves of the same in-memory state.
+#[test]
+fn samples_manual_identifier_bodies_read_exactly() {
+    let lib = PcbLib::open(sample("manual/identifier.PcbLib"))
+        .expect("failed to open manual/identifier.PcbLib");
+    let fp = lib.get("BODY_IDENT").expect("BODY_IDENT footprint");
+    assert_eq!(fp.component_bodies.len(), 2, "two bodies");
+
+    let by_ident = |ident: &str| {
+        fp.component_bodies
+            .iter()
+            .find(|b| b.identifier == ident)
+            .unwrap_or_else(|| panic!("body {ident:?} not found"))
+    };
+
+    let ascii = by_ident("BodyA");
+    assert!(
+        approx_eq(ascii.overall_height, 1.0, 1e-4),
+        "BodyA is 1 mm tall"
+    );
+    let uni = by_ident("\u{00B5}\u{03A9}\u{7535}"); // µΩ电
+    assert!(
+        approx_eq(uni.overall_height, 0.5, 1e-4),
+        "µΩ电 is 0.5 mm tall"
+    );
+
+    for body in [ascii, uni] {
+        assert!(
+            body.model_id.starts_with('{') && body.model_id.len() == 38,
+            "a UI-authored extruded body carries a MODELID: {:?}",
+            body.model_id
+        );
+        assert_ne!(body.model_checksum, 0, "and a checksum");
+        assert_eq!(
+            body.texture_size_x.as_deref(),
+            Some("0.0001mil"),
+            "the UI's texture size is 0.0001mil, not the scripted 0mil"
+        );
+    }
+    // Real 2D placement, from dragging the bodies in the editor.
+    assert!(
+        approx_eq(uni.model_2d_x, -0.5715, 1e-4),
+        "µΩ电 MODEL.2D.X (-22.5 mil)"
+    );
+    assert!(
+        approx_eq(uni.model_2d_y, -2.159, 1e-4),
+        "µΩ电 MODEL.2D.Y (-85 mil)"
+    );
+    assert!(
+        approx_eq(ascii.model_2d_x, -1.905, 1e-4),
+        "BodyA MODEL.2D.X (-75 mil)"
+    );
+    assert!(
+        approx_eq(ascii.model_2d_y, 1.016, 1e-4),
+        "BodyA MODEL.2D.Y (40 mil)"
+    );
+}
+
+/// Every body field of the manual identifier fixture survives our own
+/// write -> read, including the fields only this fixture exercises.
+#[test]
+fn samples_manual_identifier_survives_a_write_read_cycle() {
+    use std::io::Cursor;
+
+    let mut lib =
+        PcbLib::open(sample("manual/identifier.PcbLib")).expect("open manual/identifier.PcbLib");
+    let mut buffer = Cursor::new(Vec::new());
+    lib.write(&mut buffer).expect("write");
+    buffer.set_position(0);
+    let reread = PcbLib::read(&mut buffer).expect("read back");
+
+    let before = lib.get("BODY_IDENT").expect("before");
+    let after = reread.get("BODY_IDENT").expect("after");
+    for b in &before.component_bodies {
+        let a = after
+            .component_bodies
+            .iter()
+            .find(|a| a.identifier == b.identifier)
+            .unwrap_or_else(|| panic!("body {:?} lost", b.identifier));
+        assert_eq!(a.model_id, b.model_id, "{}: MODELID", b.identifier);
+        assert_eq!(
+            a.model_checksum, b.model_checksum,
+            "{}: checksum",
+            b.identifier
+        );
+        assert_eq!(
+            a.texture_size_x, b.texture_size_x,
+            "{}: texture size",
+            b.identifier
+        );
+        assert!(
+            approx_eq(a.model_2d_x, b.model_2d_x, 1e-6),
+            "{}: 2D X",
+            b.identifier
+        );
+        assert!(
+            approx_eq(a.model_2d_y, b.model_2d_y, 1e-6),
+            "{}: 2D Y",
+            b.identifier
+        );
+        assert!(
+            approx_eq(a.overall_height, b.overall_height, 1e-6),
+            "{}: height",
+            b.identifier
+        );
+    }
+}
+
+/// `STEP_REF` (batch 5): the same STEP model attached with `IPCB_Model.Embed`
+/// cleared. A script-authored non-embedded model is NOT the form a UI-authored
+/// library showed (an empty `MODELID` and no store entry): Altium still gives
+/// the body a `MODELID`, lists the model in `/Library/Models/Data` with
+/// `EMBED=FALSE`, and stores its bytes all the same. Both forms exist on disk
+/// and both read; the writer reproduces whichever it read.
+#[test]
+fn samples_pcblib_step_ref_is_a_referenced_model_with_a_store_entry() {
+    let lib = PcbLib::open(sample("footprints.PcbLib")).expect("failed to open footprints.PcbLib");
+    let fp = lib.get("STEP_REF").expect("STEP_REF footprint not found");
+    assert_eq!(fp.component_bodies.len(), 1, "one body");
+    let body = &fp.component_bodies[0];
+    assert!(!body.embedded, "MODEL.EMBED=FALSE reads as not embedded");
+    assert!(
+        body.model_id.starts_with('{') && body.model_id.len() == 38,
+        "a referenced model still carries a MODELID: {:?}",
+        body.model_id
+    );
+    assert_eq!(
+        body.model_name, "minimal.step",
+        "MODEL.NAME is the file name"
+    );
+    assert_eq!(body.model_checksum, 1_975_055, "the same STEP as EMBSTEP's");
+    assert_eq!(body.layer, Layer::Mechanical1);
+
+    let model = lib
+        .get_model(&body.model_id)
+        .expect("the referenced model has a store entry");
+    assert_eq!(model.name, "minimal.step");
+    assert_eq!(
+        model.compressed_size, 189,
+        "its bytes are stored regardless"
+    );
+    assert_eq!(model.data.len(), 267);
+    // EMBSTEP's embedded copy is a distinct entry with its own id.
+    let embedded = &lib.get("EMBSTEP").expect("EMBSTEP").component_bodies[0];
+    assert_ne!(embedded.model_id, body.model_id);
+}
+
+/// `MECH20` (batch 5): one primitive of every layered kind on Mechanical 20.
+/// Altium stores each under header byte 72 (the last the legacy byte can
+/// name) with the real layer in the V7 id (`0x01020014`) or, for the region
+/// and the body, the `V7_LAYER=MECHANICAL20` token — the pair hand-authored
+/// tracks had shown, now seen on every kind. Every one reads as Mechanical 20
+/// with nothing carried: the writer stores the layer the same way.
+#[test]
+fn samples_pcblib_mech20_every_kind_resolves_past_the_legacy_sixteen() {
+    let lib = PcbLib::open(sample("footprints.PcbLib")).expect("failed to open footprints.PcbLib");
+    let fp = lib.get("MECH20").expect("MECH20 footprint not found");
+
+    assert_eq!(fp.tracks.len(), 1);
+    assert_eq!(fp.tracks[0].layer, Layer::Mechanical20, "track");
+    assert_eq!(fp.tracks[0].raw_layer_id, None, "nothing to carry");
+    assert_eq!(fp.arcs.len(), 1);
+    assert_eq!(fp.arcs[0].layer, Layer::Mechanical20, "arc");
+    assert_eq!(fp.arcs[0].raw_layer_id, None);
+    assert_eq!(fp.text.len(), 1);
+    assert_eq!(fp.text[0].layer, Layer::Mechanical20, "text");
+    assert_eq!(fp.text[0].text, "M20");
+    assert_eq!(fp.text[0].raw_layer_id, None);
+    assert_eq!(fp.fills.len(), 1);
+    assert_eq!(fp.fills[0].layer, Layer::Mechanical20, "fill");
+    assert_eq!(fp.fills[0].raw_layer_id, None);
+    assert_eq!(fp.regions.len(), 1);
+    assert_eq!(fp.regions[0].layer, Layer::Mechanical20, "region");
+    assert_eq!(
+        fp.regions[0].v7_layer, None,
+        "the MECHANICAL20 token follows from the layer"
+    );
+    assert_eq!(fp.pads.len(), 1);
+    assert_eq!(fp.pads[0].layer, Layer::Mechanical20, "pad");
+    assert_eq!(fp.pads[0].designator, "M");
+    assert_eq!(fp.pads[0].raw_layer_id, None);
+    assert_eq!(fp.component_bodies.len(), 1);
+    assert_eq!(fp.component_bodies[0].layer, Layer::Mechanical20, "body");
+    assert_eq!(fp.component_bodies[0].raw_layer_id, None);
+    assert_eq!(fp.component_bodies[0].v7_layer, None);
+}
+
+/// `TEXT_WIDE_ONLY` (batch 5): `WideStrings` is the authoritative form of a
+/// text and `ENCODEDTEXT` holds its UTF-16 code units. The second text has a
+/// character the Data stream cannot hold — U+0094, which Altium narrowed to
+/// `?` — so only the wide form carries it, the shape a UI-typed Ω has.
+#[test]
+fn samples_pcblib_text_wide_only_reads_the_wide_form() {
+    let lib = PcbLib::open(sample("footprints.PcbLib")).expect("failed to open footprints.PcbLib");
+    let fp = lib
+        .get("TEXT_WIDE_ONLY")
+        .expect("TEXT_WIDE_ONLY footprint not found");
+    assert_eq!(fp.text.len(), 2, "two texts");
+    let by_y = |y: f64| {
+        fp.text
+            .iter()
+            .find(|t| approx_eq(t.y, y, 1e-6))
+            .unwrap_or_else(|| panic!("no text at y = {y} mm"))
+    };
+    // Latin-1 characters narrow and widen losslessly.
+    assert_eq!(by_y(0.0).text, "10 \u{ce}\u{a9}");
+    // U+0094 is `?` in the Data stream and 148 in ENCODEDTEXT1; the wide form wins.
+    assert_eq!(by_y(2.54).text, "\u{94}Q\u{bb}");
+}
+
+/// `manual/pipe.PcbLib` (AD24, scripted 2026-08-30): a footprint whose
+/// description and region name were given a `|` through Altium's own API.
+/// Altium writes them raw (`DESCRIPTION=A|B=C`) and, opening the file again,
+/// reads the description back as `A` (its `description_lengths` reports 1
+/// through `scripts/Verify-Libraries.ps1`) — so does this reader, and the
+/// writer refuses a `|` rather than write text that comes back cut.
+#[test]
+fn manual_pipe_fixture_shows_altium_cuts_pcb_text_at_the_pipe() {
+    let lib = PcbLib::open(sample("manual/pipe.PcbLib")).expect("open manual/pipe.PcbLib");
+    let fp = lib.get("PIPEFP").expect("footprint PIPEFP not found");
+    assert_eq!(fp.description, "A");
+    assert_eq!(fp.regions[0].name, "R");
+}
+
+/// BODYPREC: an extruded body whose outline was authored OFF-GRID by raw
+/// internal units (1 unit = 0.0001 mil) — `MilsToCoord(-50) + 1` and friends.
+/// AD24 keeps the exact units through its save, so this golden pins the
+/// reader's full outline precision: each coordinate converts back to the
+/// authored unit count exactly, with no rounding to a coarser grid.
+#[test]
+fn samples_pcblib_bodyprec() {
+    let lib = PcbLib::open(sample("footprints.PcbLib")).expect("failed to open footprints.PcbLib");
+    let footprint = lib.get("BODYPREC").expect("footprint BODYPREC not found");
+    assert_eq!(footprint.component_bodies.len(), 1, "BODYPREC has one body");
+
+    let body = &footprint.component_bodies[0];
+    assert_eq!(body.outline.len(), 4, "outline is a 4-vertex box");
+
+    // The authored vertices in internal units (10_000 units = 1 mil; one unit
+    // is 2.54e-6 mm). Altium re-anchors the contour cycle, so match as a set.
+    let authored: [(i64, i64); 4] = [
+        (-499_999, -249_997),
+        (500_007, -250_001),
+        (499_997, 250_009),
+        (-500_009, 249_993),
+    ];
+    // A rounded ±0.5 mm coordinate is far inside i64 range.
+    #[allow(clippy::cast_possible_truncation)]
+    let mut read_units: Vec<(i64, i64)> = body
+        .outline
+        .iter()
+        .map(|&(x, y)| ((x / 2.54e-6).round() as i64, (y / 2.54e-6).round() as i64))
+        .collect();
+    read_units.sort_unstable();
+    let mut expected = authored.to_vec();
+    expected.sort_unstable();
+    assert_eq!(
+        read_units, expected,
+        "every off-grid outline unit survives exactly (got {:?})",
+        body.outline
+    );
+
+    // And the conversion itself is sub-unit accurate: no coordinate is off by
+    // more than a billionth of a millimetre from its unit-exact position.
+    for &(x, y) in &body.outline {
+        let xu = (x / 2.54e-6).round() * 2.54e-6;
+        let yu = (y / 2.54e-6).round() * 2.54e-6;
+        assert!(
+            (x - xu).abs() < 1e-9 && (y - yu).abs() < 1e-9,
+            "outline point ({x}, {y}) sits on an exact unit"
+        );
+    }
 }

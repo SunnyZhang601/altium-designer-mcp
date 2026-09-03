@@ -15,8 +15,13 @@ _34 tools._
 
 ## `read_pcblib`
 
-Read an Altium .PcbLib file and return its contents including footprints with their primitives (pads, tracks, arcs, regions, text). Returns structured data that can be
-used to understand existing footprint styles. All coordinates and dimensions are in millimetres (mm). For large libraries, use component_name to fetch specific
+**Read a PcbLib** — read-only
+
+Read an Altium .PcbLib file and return its contents including footprints with their primitives (pads, vias, tracks, arcs, regions, fills, text, component_bodies). Returns
+structured data that can be used to understand existing footprint styles. All coordinates and dimensions are in millimetres (mm). Fields such as guid, unique_id,
+raw_tail, raw_block, raw_geometry, raw_layer_id, param_key_order and primitive_order are fidelity carriers: pass them back unchanged to write_pcblib or update_component
+and the rewrite is byte-identical to the source; omit them when authoring from scratch. Each footprint is the same JSON shape get_component, export_library and
+write_pcblib use; a list with no entries and an optional field with no value are omitted rather than empty/null. For large libraries, use component_name to fetch specific
 footprints, or use limit/offset for pagination.
 
 **Example**
@@ -35,15 +40,21 @@ footprints, or use limit/offset for pagination.
 | Name | Type | Required | Description |
 | --- | --- | --- | --- |
 | `compact` | boolean | no | If true (default), omit per-layer pad data when stack_mode is Simple. Set to false for full output. |
-| `component_name` | string | no | Optional: fetch only this specific footprint by name |
+| `component_name` | string | no | Optional: fetch only this footprint, by name in any case; a name the library does not hold is an error naming the available footprints |
 | `filepath` | string | yes | Path to the .PcbLib file |
-| `limit` | integer | no | Optional: maximum number of footprints to return (default: all) |
-| `offset` | integer | no | Optional: skip first N footprints (default: 0) |
+| `limit` | integer | no | Optional: maximum number of footprints to return, 1 or more (default: all) (min: 1) |
+| `offset` | integer | no | Optional: skip the first N footprints, 0 or more (default: 0) (min: 0) |
 
 ## `read_schlib`
 
-Read an Altium .SchLib file and return its contents including symbols with their primitives (pins, rectangles, lines, text). Coordinates are in schematic units (10 units
-= 1 grid square, not mm). For large libraries, use component_name to fetch specific symbols, or use limit/offset for pagination.
+**Read a SchLib** — read-only
+
+Read an Altium .SchLib file and return its contents including symbols with their primitives (pins, rectangles, round_rects, lines, polylines, polygons, arcs, pies,
+images, text_frames, beziers, ellipses, elliptical_arcs, labels, ieee_symbols), parameters and footprint links. Coordinates are in schematic units (10 units = 1 grid
+square, not mm). Fields such as unique_id, primitive_order, header_params, raw_params, all_pin_count and extra_streams are fidelity carriers: pass them back unchanged to
+write_schlib or update_component and the rewrite is byte-identical to the source; omit them when authoring from scratch. Each symbol is the same JSON shape get_component,
+export_library and write_schlib use; a list with no entries and an optional field with no value are omitted rather than empty/null. For large libraries, use
+component_name to fetch specific symbols, or use limit/offset for pagination.
 
 **Example**
 
@@ -60,12 +71,14 @@ Read an Altium .SchLib file and return its contents including symbols with their
 
 | Name | Type | Required | Description |
 | --- | --- | --- | --- |
-| `component_name` | string | no | Optional: fetch only this specific symbol by name |
+| `component_name` | string | no | Optional: fetch only this symbol, by name in any case; a name the library does not hold is an error naming the available symbols |
 | `filepath` | string | yes | Path to the .SchLib file |
-| `limit` | integer | no | Optional: maximum number of symbols to return (default: all) |
-| `offset` | integer | no | Optional: skip first N symbols (default: 0) |
+| `limit` | integer | no | Optional: maximum number of symbols to return, 1 or more (default: all) (min: 1) |
+| `offset` | integer | no | Optional: skip the first N symbols, 0 or more (default: 0) (min: 0) |
 
 ## `list_components`
+
+**List components** — read-only
 
 List all component/footprint names in an Altium library file (.PcbLib or .SchLib). Supports pagination with limit/offset for large libraries. Use include_metadata for
 additional details like part_count and pin_count.
@@ -89,14 +102,17 @@ additional details like part_count and pin_count.
 | Name | Type | Required | Description |
 | --- | --- | --- | --- |
 | `filepath` | string | yes | Path to the library file |
-| `include_metadata` | boolean | no | If true, return objects with metadata (part_count, pin_count, etc.) instead of just names. Default: false |
-| `limit` | integer | no | Maximum number of components to return (optional, default: all) |
-| `offset` | integer | no | Number of components to skip (optional, default: 0) |
+| `include_metadata` | boolean | no | If true, return objects with metadata instead of just names: a footprint's description, one count per primitive kind and has_3d_model; a symbol's description, designator, part_count, pin_count and footprint_count. Default: false |
+| `limit` | integer | no | Maximum number of components to return, 1 or more (optional, default: all) (min: 1) |
+| `offset` | integer | no | Number of components to skip, 0 or more (optional, default: 0) (min: 0) |
 
 ## `extract_style`
 
-Extract style information from an existing Altium library file. Returns statistics about track widths, colours, pin lengths, layer usage, and other styling parameters.
-Use this to learn from existing libraries and create consistent new components.
+**Extract a library's style** — read-only
+
+Extract style information from an existing Altium library file. A PcbLib reports track and arc widths per layer, pad shapes, text heights and the layer usage of every
+primitive kind (a via counts as Multi-Layer); a SchLib reports pin lengths, stroke widths and the stroke, fill and text colours of every record kind. Use this to learn
+from existing libraries and create consistent new components.
 
 **Example**
 
@@ -117,12 +133,17 @@ Use this to learn from existing libraries and create consistent new components.
 
 ## `write_pcblib`
 
-Write footprints to an Altium .PcbLib file. Each footprint is defined by its primitives: pads (with position, size, shape, layer), tracks, vias, fills, arcs, regions, and
-text. The AI is responsible for calculating correct positions and sizes based on IPC-7351B or other standards. All coordinates and dimensions must be in millimetres (mm).
-The response 'bodies' array echoes each footprint's 3D body height and source; a footprint with no STEP model and no component body reports source 'none'. Set
-'auto_3d_body': true to have an extruded placeholder body (default height 1.0 mm, flagged 'assumed_height': true) added to such footprints, then confirm or override it by
-supplying 'component_bodies' explicitly. The response also includes a 'warnings' array flagging silkscreen (overlay) tracks that overlap a pad (silk-on-pad) so you can
-move them clear.
+**Write a PcbLib** — writes files (a backup is taken first)
+
+Write footprints to an Altium .PcbLib file (set 'append': true to add to an existing library instead of replacing it). Each footprint is defined by its primitives: pads
+(with position, size, shape, layer), tracks, vias, fills, arcs, regions, text and component_bodies. The AI is responsible for calculating correct positions and sizes
+based on IPC-7351B or other standards. All coordinates and dimensions must be in millimetres (mm). A footprint authored without a '.Designator' text receives one on the
+Top Overlay automatically, just above its topmost pad, so every placed part shows its reference designator: supply your own to control its placement, or set
+'auto_designator': false to omit it; a footprint echoed back from a read (carrying primitive_order) is never touched. The response 'bodies' array echoes each footprint's
+3D body height and source; a footprint with no STEP model and no component body reports source 'none'. Set 'auto_3d_body': true to have an extruded placeholder body
+(default height 1.0 mm, flagged 'assumed_height': true) added to such footprints, then confirm or override it by supplying 'component_bodies' explicitly. The response
+also includes a 'warnings' array flagging silkscreen (overlay) tracks that overlap a pad (silk-on-pad) so you can move them clear. No text field may contain '|', the
+separator of Altium's record format, which cannot hold it.
 
 **Example**
 
@@ -205,13 +226,20 @@ move them clear.
 | --- | --- | --- | --- |
 | `append` | boolean | no | If true, append to existing file; if false, create new file |
 | `auto_3d_body` | boolean | no | If true, footprints with pads but no STEP model and no component body get a placeholder extruded 3D body (1.0 mm tall, flagged assumed_height). Default false: nothing is added unless you ask, since many footprints (fiducials, test points, mounting holes) legitimately have no body. Prefer supplying real heights via component_bodies. |
+| `auto_designator` | boolean | no | If true (default), a footprint authored without a '.Designator' text gets one on the Top Overlay just above its topmost pad, so the placed part shows its reference designator. Never applied to a footprint echoed back from read_pcblib/get_component (one carrying primitive_order): Altium's own library footprints carry no designator text, and a read-modify-write must not add primitives. Set false to author a footprint without one. |
 | `filepath` | string | yes | Path to the .PcbLib file to create/modify |
 | `footprints` | array<object> | yes | Array of footprint definitions |
 
 ## `write_schlib`
 
-Write schematic symbols to an Altium .SchLib file. Each symbol is defined by its primitives: pins, rectangles, round_rects, lines, polylines, polygons, arcs, pies,
-images, text_frames, beziers, ellipses, elliptical_arcs, labels, and text. Coordinates must be in schematic units (10 units = 1 grid square, not mm).
+**Write a SchLib** — writes files (a backup is taken first)
+
+Write schematic symbols to an Altium .SchLib file (set 'append': true to add to an existing library instead of replacing it). Each symbol is defined by its primitives:
+pins, rectangles, round_rects, lines, polylines, polygons, arcs, pies, images, text_frames, beziers, ellipses, elliptical_arcs, labels, and text — plus its designator,
+parameters (Value, Manufacturer, ...) and footprint links ('footprints', name + optional library_path). Multi-part symbols set 'part_count' and tag each pin with
+'owner_part_id'. Coordinates must be in schematic units (10 units = 1 grid square, not mm); a pin's (x, y) is its body-attach end and 'orientation' is the direction it
+points outward — the response echoes each pin's computed body_end and tip. No text field may contain '|', the separator of Altium's record format; Altium's own editor
+stores it as '¦' (U+00A6).
 
 **Example**
 
@@ -280,6 +308,8 @@ images, text_frames, beziers, ellipses, elliptical_arcs, labels, and text. Coord
 
 ## `write_libpkg`
 
+**Write a LibPkg project** — writes files (a backup is taken first)
+
 Write an Altium Library Package (.LibPkg) project file that groups source library documents (.SchLib and .PcbLib) so they can be compiled into an Integrated Library
 (.IntLib). Member documents are referenced by their path relative to the .LibPkg. This generates only the project source; compiling to a binary .IntLib is a one-click
 operation inside Altium Designer (Project > Compile Integrated Library).
@@ -307,6 +337,8 @@ operation inside Altium Designer (Project > Compile Integrated Library).
 | `filepath` | string | yes | Path to the .LibPkg file to create |
 
 ## `delete_component`
+
+**Delete components** — writes files (a backup is taken first)
 
 Delete one or more components from an Altium library file (.PcbLib or .SchLib). The file type is auto-detected from the extension. Returns status for each component:
 deleted, not_found, or error. Use dry_run=true to preview changes without modifying the file.
@@ -337,8 +369,11 @@ deleted, not_found, or error. Use dry_run=true to preview changes without modify
 
 ## `validate_library`
 
-Validate an Altium library file for common issues. Checks for: empty components (no pads/pins), duplicate designators, invalid coordinates, zero-size primitives, and
-other integrity problems. Returns a list of warnings and errors.
+**Validate a library** — read-only
+
+Validate an Altium library file for common issues. Checks for: empty components (no pads/pins), duplicate designators, invalid coordinates, zero-size primitives,
+overlapping pads, 3D bodies whose embedded model the library does not contain, embedded models no footprint references, and other integrity problems. Returns a list of
+warnings and errors.
 
 **Example**
 
@@ -359,8 +394,11 @@ other integrity problems. Returns a list of warnings and errors.
 
 ## `export_library`
 
-Export an Altium library to JSON or CSV format for version control, backup, or external processing. JSON includes full component data; CSV provides a summary table of
-component names and basic info.
+**Export a library** — read-only
+
+Export an Altium library to JSON or CSV format for version control, backup, or external processing. JSON includes full component data and, for a PcbLib, the embedded 3D
+models the bodies reference (`embedded_models`, base64 STEP data keyed by model GUID) so an import restores them; CSV provides a summary table: name, description (and a
+symbol's designator), one count column per primitive kind, and the external 3D model / footprint link count.
 
 **Example**
 
@@ -385,8 +423,11 @@ component names and basic info.
 
 ## `import_library`
 
-Import components from JSON data into an Altium library file. Accepts JSON in the format produced by export_library, enabling round-trip workflows. Auto-detects library
-type (PcbLib/SchLib) from the JSON data.
+**Import a library** — writes files (a backup is taken first)
+
+Import components from JSON data into an Altium library file. Accepts JSON in the format produced by export_library, enabling round-trip workflows: a PcbLib export's
+`embedded_models` are restored alongside the footprints, and a body whose model the data does not contain is reported in warnings. Auto-detects library type
+(PcbLib/SchLib) from the JSON data.
 
 **Example**
 
@@ -418,6 +459,8 @@ type (PcbLib/SchLib) from the JSON data.
 
 ## `extract_step_model`
 
+**Extract a STEP model** — read-only
+
 Extract embedded STEP 3D models from an Altium .PcbLib file. Models are stored compressed inside the library and this tool extracts them to standalone .step files.
 Supports multiple modes: 'auto' (default), 'list', 'extract_all', or 'extract_by_footprint'.
 
@@ -441,13 +484,15 @@ Supports multiple modes: 'auto' (default), 'list', 'extract_all', or 'extract_by
 | --- | --- | --- | --- |
 | `filepath` | string | yes | Path to the .PcbLib file containing embedded 3D models |
 | `footprint_name` | string | no | Footprint name to extract models for (required for 'extract_by_footprint' mode) |
-| `limit` | integer | no | Maximum number of models to list (for 'list' mode) |
+| `limit` | integer | no | Maximum number of models to list, 1 or more (for 'list' mode) (min: 1) |
 | `mode` | enum | no | Extraction mode: 'auto' (default) extracts single model or lists if multiple; 'list' always lists models; 'extract_all' extracts all models to output_dir; 'extract_by_footprint' extracts models used by specified footprint (one of: auto, list, extract_all, extract_by_footprint) |
 | `model` | string | no | Model name (e.g., 'RESC1005X04L.step') or GUID to extract (for 'auto' mode) |
-| `offset` | integer | no | Number of models to skip when listing (for 'list' mode) |
+| `offset` | integer | no | Number of models to skip when listing, 0 or more (for 'list' mode) (min: 0) |
 | `output_path` | string | no | Meaning depends only on the mode, never on how many models match: for 'auto' it is the FILE path for the extracted .step; for 'extract_all' and 'extract_by_footprint' it is a DIRECTORY that receives one file per model (created if absent). Omit to get the model inline as base64 ('auto' single model, or 'extract_by_footprint' with a single match). |
 
 ## `diff_libraries`
+
+**Compare two libraries** — read-only
 
 Compare two Altium library files and report differences. Shows added, removed, and modified components. Both files must be the same type (.PcbLib or .SchLib).
 
@@ -472,8 +517,11 @@ Compare two Altium library files and report differences. Shows added, removed, a
 
 ## `batch_update`
 
-Perform batch updates across all components in an Altium library file. For PcbLib: update track widths, rename layers. For SchLib: update parameter values across symbols.
-Use dry_run=true to preview changes without modifying the file.
+**Batch-update a library** — writes files (a backup is taken first)
+
+Perform one batch operation across all components in an Altium library file. PcbLib: 'update_track_width' (change every track of from_width to to_width, within tolerance)
+and 'rename_layer' (move every primitive from from_layer to to_layer). SchLib: 'update_parameters' (set parameter values across symbols). Use dry_run=true to preview
+changes without modifying the file.
 
 **Example**
 
@@ -503,7 +551,10 @@ Use dry_run=true to preview changes without modifying the file.
 
 ## `copy_component`
 
-Copy/duplicate a component within an Altium library file. Creates a new component with a different name but identical primitives. Useful for creating variants.
+**Duplicate a component** — writes files (a backup is taken first)
+
+Copy/duplicate a component within an Altium library file. Creates a new component with a different name and identical primitives, but its own identity: the copy's GUIDs
+and unique ids are minted fresh rather than shared with the original. Useful for creating variants.
 
 **Example**
 
@@ -530,6 +581,8 @@ Copy/duplicate a component within an Altium library file. Creates a new componen
 | `target_name` | string | yes | Name for the new copied component |
 
 ## `rename_component`
+
+**Rename a component** — writes files (a backup is taken first)
 
 Rename a component within an Altium library file. This is an atomic operation that changes the component's name while preserving all primitives and properties. More
 efficient than copy + delete for simple renames.
@@ -558,8 +611,12 @@ efficient than copy + delete for simple renames.
 
 ## `copy_component_cross_library`
 
-Copy a component from one Altium library to another. Both libraries must be the same type (PcbLib to PcbLib, or SchLib to SchLib). Useful for consolidating libraries or
-sharing components between projects.
+**Copy a component to another library** — writes files (a backup is taken first)
+
+Copy a component from one Altium library to another. Both libraries must be the same type (PcbLib to PcbLib, or SchLib to SchLib), and different files (use copy_component
+to duplicate within a library). The component keeps its identity, and the embedded 3D models its bodies reference travel with it; an external STEP file reference is
+dropped with a warning unless preserve_external_paths is true, since a path relative to the source library rarely resolves elsewhere. Useful for consolidating libraries
+or sharing components between projects.
 
 **Example**
 
@@ -592,8 +649,11 @@ sharing components between projects.
 
 ## `merge_libraries`
 
+**Merge libraries** — writes files (a backup is taken first)
+
 Merge multiple Altium libraries into a single library. All source libraries must be the same type (all PcbLib or all SchLib). Components are copied from each source into
-the target library. Use dry_run=true to preview what would be merged.
+the target library, together with the embedded 3D models their bodies reference (a model shared by several footprints is copied once; a body whose model is missing from
+its source is merged as-is and reported in warnings). External STEP file references are carried unchanged. Use dry_run=true to preview what would be merged.
 
 **Example**
 
@@ -623,6 +683,8 @@ the target library. Use dry_run=true to preview what would be merged.
 
 ## `reorder_components`
 
+**Reorder components** — writes files (a backup is taken first)
+
 Reorder components in an Altium library file (.PcbLib or .SchLib). Specify the desired order as a list of component names. Components not in the list are placed at the
 end in their original relative order.
 
@@ -650,6 +712,8 @@ end in their original relative order.
 | `filepath` | string | yes | Path to the .PcbLib or .SchLib file |
 
 ## `update_component`
+
+**Update a component in place** — writes files (a backup is taken first)
 
 Update a component in-place within an Altium library file, preserving its position. For PcbLib, provide a footprint object. For SchLib, provide a symbol object. The
 component is matched by name. Use dry_run=true to preview changes without modifying.
@@ -695,10 +759,12 @@ component is matched by name. Use dry_run=true to preview changes without modify
 | `component_name` | string | yes | Name of the component to update (must exist in library) |
 | `dry_run` | boolean | no | If true, show what would be updated without actually modifying the file (default: `false`) |
 | `filepath` | string | yes | Path to the .PcbLib or .SchLib file |
-| `footprint` | object | no | For PcbLib: footprint data (same format as write_pcblib) |
-| `symbol` | object | no | For SchLib: symbol data (same format as write_schlib) |
+| `footprint` | object | no | For PcbLib: the footprint to store, in the shape write_pcblib takes per footprints entry |
+| `symbol` | object | no | For SchLib: the symbol to store, in the shape write_schlib takes per symbols entry |
 
 ## `search_components`
+
+**Search components** — read-only
 
 Search for components across multiple Altium libraries using regex or glob patterns. Returns matching component names with their source library paths. Supports both
 `.PcbLib` (footprints) and `.SchLib` (symbols) files.
@@ -730,6 +796,8 @@ Search for components across multiple Altium libraries using regex or glob patte
 
 ## `get_component`
 
+**Get a component** — read-only
+
 Get a single component by name from an Altium library. Returns the full component data (footprint or symbol) without needing to read and filter the entire library.
 Supports both `.PcbLib` (footprints) and `.SchLib` (symbols) files.
 
@@ -753,6 +821,8 @@ Supports both `.PcbLib` (footprints) and `.SchLib` (symbols) files.
 | `filepath` | string | yes | Path to the Altium library file (.PcbLib or .SchLib) |
 
 ## `component_exists`
+
+**Check components exist** — read-only
 
 Check if one or more components exist in an Altium library. Use this to validate component names before operations like rename, copy, or delete. Supports both `.PcbLib`
 and `.SchLib` files.
@@ -782,7 +852,10 @@ and `.SchLib` files.
 
 ## `render_footprint`
 
-Render an ASCII art visualisation of a footprint from a PcbLib file. Shows pads, tracks, and other primitives in a simple text format for quick preview.
+**Preview a footprint** — read-only
+
+Render an ASCII art visualisation of a footprint from a PcbLib file: every primitive kind — pads (with designators), vias, tracks, arcs, fills, regions, text marks and
+3D-body outlines — each with its own marker, plus a per-kind count line and a legend. A quick preview, not a rendering.
 
 **Example**
 
@@ -805,14 +878,17 @@ Render an ASCII art visualisation of a footprint from a PcbLib file. Shows pads,
 | --- | --- | --- | --- |
 | `component_name` | string | yes | Name of the footprint to render |
 | `filepath` | string | yes | Path to the Altium PcbLib file |
-| `max_height` | integer | no | Maximum height in characters (default: 40) |
-| `max_width` | integer | no | Maximum width in characters (default: 80) |
+| `max_height` | integer | no | Maximum height in characters (default: 40) (min: 1) |
+| `max_width` | integer | no | Maximum width in characters (default: 80) (min: 1) |
 | `scale` | number | no | Characters per mm (default: 2.0). Higher = more detail |
 
 ## `render_symbol`
 
-Render an ASCII art visualisation of a schematic symbol from a SchLib file. Shows pins, rectangles, lines, and other primitives in a simple text format for quick preview.
-Coordinates are in schematic units (10 units = 1 grid).
+**Preview a symbol** — read-only
+
+Render an ASCII art visualisation of a schematic symbol from a SchLib file: every record kind of the requested part — pins (with designators), rectangles, rounded
+rectangles, lines, polylines, polygons, arcs, pies, ellipses, elliptical arcs, beziers, images, text frames, labels and IEEE symbols — each with its own marker, plus a
+per-kind count line and a legend. Coordinates are in schematic units (10 units = 1 grid).
 
 **Example**
 
@@ -836,12 +912,14 @@ Coordinates are in schematic units (10 units = 1 grid).
 | --- | --- | --- | --- |
 | `component_name` | string | yes | Name of the symbol to render |
 | `filepath` | string | yes | Path to the Altium SchLib file |
-| `max_height` | integer | no | Maximum height in characters (default: 40) |
-| `max_width` | integer | no | Maximum width in characters (default: 80) |
-| `part_id` | integer | no | Part ID for multi-part symbols (default: 1, shows all parts if 0) |
+| `max_height` | integer | no | Maximum height in characters (default: 40) (min: 1) |
+| `max_width` | integer | no | Maximum width in characters (default: 80) (min: 1) |
+| `part_id` | integer | no | Part ID for multi-part symbols (default: 1, shows all parts if 0) (min: 0) |
 | `scale` | number | no | Characters per 10 schematic units (default: 1.0). Higher = more detail |
 
 ## `manage_schlib_parameters`
+
+**Manage symbol parameters** — writes files (a backup is taken first)
 
 Manage component parameters in Altium SchLib files. Supports listing, getting, setting, adding, and deleting parameters like Value, Manufacturer, Part Number, etc.
 
@@ -868,15 +946,17 @@ Manage component parameters in Altium SchLib files. Supports listing, getting, s
 | `filepath` | string | yes | Path to the Altium SchLib file |
 | `hidden` | boolean | no | Whether the parameter is hidden (optional for set, add) |
 | `operation` | enum | yes | Operation to perform: list (all parameters), get (single parameter), set (update value), add (new parameter), delete (remove parameter) (one of: list, get, set, add, delete) |
-| `param_type` | integer | no | Parameter type (0=String, 1=Boolean, 2=Integer, 3=Float) (optional for set, add). Default: 0 |
-| `parameter_name` | string | no | Name of the parameter (required for get, set, add, delete) |
-| `read_only_state` | integer | no | Read-only state (0=editable, 1=read-only) (optional for set, add). Default: 0 |
+| `param_type` | integer | no | Parameter type (0=String, 1=Boolean, 2=Integer, 3=Float) (optional for set, add). Default: 0 (range: 0-3) |
+| `parameter_name` | string | no | Name of the parameter (required for get, set, add, delete); matched without regard to case, as Altium treats parameter names |
+| `read_only_state` | integer | no | Read-only state (0=editable, 1=read-only) (optional for set, add). Default: 0 (range: 0-1) |
 | `unique_id` | string | no | 8-char Altium unique ID (optional for set, add). Default: auto-generated |
 | `value` | string | no | Parameter value (required for set, add) |
-| `x` | integer | no | X position in schematic units (optional for add) |
-| `y` | integer | no | Y position in schematic units (optional for add) |
+| `x` | integer | no | X position in schematic units (optional for set, add) |
+| `y` | integer | no | Y position in schematic units (optional for set, add) |
 
 ## `manage_schlib_footprints`
+
+**Manage symbol footprint links** — writes files (a backup is taken first)
 
 Manage footprint links in Altium SchLib symbols. Supports listing, adding, and removing footprint references that link schematic symbols to PCB footprints.
 
@@ -899,7 +979,7 @@ Manage footprint links in Altium SchLib symbols. Supports listing, adding, and r
 | Name | Type | Required | Description |
 | --- | --- | --- | --- |
 | `component_name` | string | yes | Name of the symbol to manage footprints for |
-| `description` | string | no | Footprint description (optional for add) |
+| `description` | string | no | Footprint description (optional for add). Keep to 256 characters if the library will be imported into an Altium 365 workspace — that importer refuses longer ones; a longer description is written and reported as a validation warning. |
 | `filepath` | string | yes | Path to the Altium SchLib file |
 | `footprint_name` | string | no | Footprint name (required for add, remove) |
 | `library_path` | string | no | Optional (add): absolute path to the .PcbLib containing the footprint, written as ModelDatafile0 so Altium can resolve and preview the model. Omit to link by name only (requires the library to be installed/in the project, else 'footprint not found'). |
@@ -907,8 +987,11 @@ Manage footprint links in Altium SchLib symbols. Supports listing, adding, and r
 
 ## `compare_components`
 
+**Compare two components** — read-only
+
 Compare two specific components in detail, showing differences in primitives, parameters, and properties. Components can be from the same library or different libraries.
-Returns detailed primitive-level differences (pads, tracks, pins, etc.).
+Returns primitive-level differences for every kind: pads, vias, tracks, arcs, regions, text, fills and 3D bodies of a footprint; pins, every graphic shape, parameters and
+footprint links of a symbol. Identity (GUIDs, unique ids) is never a difference.
 
 **Example**
 
@@ -939,8 +1022,10 @@ Returns detailed primitive-level differences (pads, tracks, pins, etc.).
 
 ## `repair_library`
 
-Repair a library by removing orphaned references. For PcbLib files, this removes: (1) embedded models not referenced by any footprint, and (2) component body references
-that point to non-existent models. This fixes libraries where STEP model data is missing but references remain.
+**Repair a library** — writes files (a backup is taken first)
+
+Repair a PcbLib by removing orphaned 3D-model data: (1) embedded models not referenced by any footprint, and (2) component body references that point to non-existent
+models. This fixes libraries where STEP model data is missing but references remain (validate_library reports both conditions). PcbLib only; a SchLib is refused.
 
 **Example**
 
@@ -963,6 +1048,8 @@ that point to non-existent models. This fixes libraries where STEP model data is
 
 ## `list_backups`
 
+**List backups** — read-only
+
 List available backup files for an Altium library. Shows timestamped .bak files that were automatically created before write operations.
 
 **Example**
@@ -984,7 +1071,10 @@ List available backup files for an Altium library. Shows timestamped .bak files 
 
 ## `restore_backup`
 
-Restore an Altium library file from a backup. If no specific backup is specified, restores from the most recent backup.
+**Restore a backup** — writes files (a backup is taken first)
+
+Restore an Altium library file from a backup. If no specific backup is specified, restores from the most recent backup. The current file is snapshotted as a new backup
+first (reported as pre_restore_backup), so a wrong pick is itself reversible, and the restore is written atomically.
 
 **Example**
 
@@ -1006,6 +1096,8 @@ Restore an Altium library file from a backup. If no specific backup is specified
 | `filepath` | string | yes | Path to the library file to restore |
 
 ## `bulk_rename`
+
+**Rename components by pattern** — writes files (a backup is taken first)
 
 Rename multiple components in a library using regex pattern matching. Supports capture groups for flexible renaming (e.g., 'RESC(.*)' -> 'RES_$1').
 
@@ -1034,7 +1126,11 @@ Rename multiple components in a library using regex pattern matching. Supports c
 
 ## `update_pad`
 
-Update specific properties of a pad in a PcbLib footprint without replacing the entire component. Find pad by designator and apply only the specified updates.
+**Update a pad** — writes files (a backup is taken first)
+
+Update specific properties of a pad in a PcbLib footprint without replacing the entire component. Find pad by designator and apply only the specified updates. On a
+stacked pad (stack_mode other than simple) a width/height/shape change also reaches the per-layer tables: layers that shared the old primary value follow it, layers with
+their own value keep it, and the response reports how many followed.
 
 **Example**
 
@@ -1067,7 +1163,12 @@ Update specific properties of a pad in a PcbLib footprint without replacing the 
 
 ## `update_primitive`
 
-Update specific properties of a primitive (track, arc, region, or text) in a PcbLib footprint. Find primitive by type and index, apply only specified updates.
+**Update a primitive** — writes files (a backup is taken first)
+
+Update specific properties of a primitive (track, arc, text, fill, region or via) in a PcbLib footprint. Find the primitive by type and index (its position in
+read_pcblib's list for that type), apply only the specified updates. Moving a primitive to another layer drops the layer carriers it was read with (a region's v7_layer,
+an unmapped raw_layer_id) so the new layer's own token is written. On a stacked via (diameter_stack_mode other than simple) a diameter change also reaches
+per_layer_diameters: layers that shared the old diameter follow it, layers with their own value keep it, and the response reports how many followed.
 
 **Example**
 
@@ -1095,6 +1196,6 @@ Update specific properties of a primitive (track, arc, region, or text) in a Pcb
 | `component_name` | string | yes | Name of the footprint containing the primitive |
 | `dry_run` | boolean | no | If true, show what would change without saving (default: false) |
 | `filepath` | string | yes | Path to the .PcbLib file |
-| `index` | integer | yes | Zero-based index of the primitive within its type array |
-| `primitive_type` | enum | yes | Type of primitive to update (one of: track, arc, region, text, fill) |
-| `updates` | object | yes | Properties to update (only specified properties are changed). Valid properties depend on primitive_type. |
+| `index` | integer | yes | Zero-based index of the primitive within its type array (min: 0) |
+| `primitive_type` | enum | yes | Type of primitive to update. Addressed by `index` into that primitive list. Pads are not here — they have a designator, so use update_pad. (one of: track, arc, region, text, fill, via) |
+| `updates` | object | yes | Properties to update (only specified properties are changed). Valid properties depend on primitive_type — track: x1, y1, x2, y2, width, layer; arc: x/x1, y/y1, radius, start_angle, end_angle, width, layer; text: x, y, height, rotation, text, layer; fill: x/x1, y/y1, x2, y2, rotation, layer; region: layer; via: x, y, diameter, hole_size, from_layer, to_layer. Any other key is refused. |

@@ -22,10 +22,11 @@
 
 use super::coord;
 use super::primitives::{
-    Arc, Bezier, Ellipse, EllipticalArc, FootprintModel, Image, Label, Line, Parameter, Pie, Pin,
-    Polygon, Polyline, Rectangle, RoundRect, ShapeDisplayFlags, Text, TextFrame, TextJustification,
+    Arc, Bezier, Ellipse, EllipticalArc, FootprintModel, IeeeSymbol, Image, Label, Line, Parameter,
+    Pie, Pin, Polygon, Polyline, Rectangle, RoundRect, ShapeDisplayFlags, TextFrame,
+    TextJustification,
 };
-use super::Symbol;
+use super::{SchPrimitiveKind, Symbol};
 use crate::altium::framing::{write_cstring_param_block, write_pascal_string};
 
 /// Writes a record frame to the output: Altium's `[u24 length LE][u8 flags]`
@@ -129,7 +130,16 @@ pub(crate) fn write_binary_pin(
     // ENCODED byte length (what the u8 length prefix actually holds), not the
     // UTF-8 String length — otherwise non-ASCII text is wrongly rejected even
     // though it fits in 255 encoded bytes.
-    let name = crate::altium::encode_windows1252(&pin.name);
+    //
+    // The name is the exception: Altium stores a non-ASCII pin name as its
+    // UTF-8 bytes (every one of the golden's 52 such pins, `Résistance`
+    // included though Windows-1252 could hold it) with the `PinWideText`
+    // stream beside it, so the record and the stream agree on every reader.
+    let name = if pin.name.is_ascii() {
+        crate::altium::encode_windows1252(&pin.name)
+    } else {
+        pin.name.as_bytes().to_vec()
+    };
     let designator = crate::altium::encode_windows1252(&pin.designator);
     let description = crate::altium::encode_windows1252(&pin.description);
     let swap_id_group = crate::altium::encode_windows1252(&pin.swap_id_group);
@@ -256,27 +266,374 @@ pub(crate) fn write_binary_pin(
     write_record_frame(data, &record, 1)
 }
 
+/// Header keys that exist only as constants: emitted for a symbol built from
+/// scratch (the scripted golden carries them) and otherwise only when the
+/// header read them — a UI-authored header omits them.
+const HEADER_CONSTANT_KEYS: &[&str] = &["LibraryPath", "SheetPartFileName"];
+
+/// Replays a read header segment by segment (see [`encode_component_header`]).
+///
+/// A segment whose field was not edited goes back verbatim: its plain value
+/// still names the same text once decoded the way the reader decoded it, or
+/// its canonical rendering is unchanged. A `%UTF8%` twin follows its plain
+/// key's verdict. An edited field is emitted in canonical form, its stale
+/// twin dropped when the new value is ASCII.
+fn replay_header(symbol: &Symbol, canonical: &[(String, String)]) -> Vec<String> {
+    let canonical_value = |key: &str| {
+        canonical
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case(key))
+            .map(|(_, v)| v.as_str())
+    };
+    let is_text_key = |key: &str| {
+        ["LibReference", "ComponentDescription", "SourceLibraryName"]
+            .iter()
+            .any(|k| k.eq_ignore_ascii_case(key))
+    };
+    // The value the reader derived from a plain text key.
+    let read_text =
+        |raw: &str| crate::altium::from_wire_text(raw).unwrap_or_else(|| raw.to_string());
+    let current_text = |key: &str| -> Option<&str> {
+        if key.eq_ignore_ascii_case("LibReference") {
+            Some(symbol.name.as_str())
+        } else if key.eq_ignore_ascii_case("ComponentDescription") {
+            Some(symbol.description.as_str())
+        } else if key.eq_ignore_ascii_case("SourceLibraryName") {
+            Some(symbol.source_library_name.as_str())
+        } else {
+            None
+        }
+    };
+    let plain_unchanged = |key: &str| {
+        symbol
+            .header_params
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case(key))
+            .is_some_and(|(_, raw)| current_text(key) == Some(read_text(raw).as_str()))
+    };
+
+    let mut placed: Vec<bool> = vec![false; canonical.len()];
+    let mut parts = Vec::with_capacity(symbol.header_params.len() + 4);
+    for (key, raw) in &symbol.header_params {
+        if key.is_empty() {
+            parts.push(String::new()); // an empty segment of `%UTF8%Key=…|||Key=…`
+            continue;
+        }
+        let plain_key = key.strip_prefix("%UTF8%").unwrap_or(key);
+        let index = canonical
+            .iter()
+            .position(|(k, _)| k.eq_ignore_ascii_case(key));
+        if let Some(i) = index {
+            placed[i] = true;
+        }
+        let unchanged = if is_text_key(plain_key) {
+            plain_unchanged(plain_key)
+        } else {
+            index.map_or(true, |i| canonical[i].1 == *raw)
+        };
+        if unchanged {
+            parts.push(format!("{key}={raw}"));
+        } else if let Some(value) = canonical_value(key) {
+            parts.push(format!("{key}={value}"));
+        }
+        // An edited text key whose stale twin is in canonical no longer:
+        // dropped with the segment (`canonical_value` found nothing).
+    }
+    for (i, (key, value)) in canonical.iter().enumerate() {
+        if !placed[i] && !HEADER_CONSTANT_KEYS.contains(&key.as_str()) {
+            parts.push(format!("{key}={value}"));
+        }
+    }
+    parts
+}
+
+/// Keys whose value is positional — assigned by the writer from the record's
+/// place in the stream — so the canonical value always wins and a stale read
+/// value is never replayed.
+const POSITIONAL_KEYS: &[&str] = &["IndexInSheet", "OwnerIndex"];
+
+/// A `key=value` the UI omits when it holds this value and a script writes
+/// out: left out when the read record lacked it and the value is still the
+/// implicit one, so the file comes back as Altium wrote it; emitted once the
+/// field is edited away from it.
+const IMPLICIT_DEFAULTS: &[(&str, &str)] = &[("LineWidth", "1"), ("Description", "")];
+
+/// Every key a content record's encoder can emit — the keys a struct field
+/// stands behind. A read key in this set that the canonical form now omits
+/// is a field edited to its omitted default (`IsHidden` cleared) and is
+/// dropped; a read key outside it is an Altium key this crate does not model
+/// and is replayed verbatim. Held complete against the golden by
+/// `every_golden_record_key_is_modelled`.
+const MODELLED_RECORD_KEYS: &[&str] = &[
+    "RECORD",
+    "Alignment",
+    "AreaColor",
+    "ClipToRect",
+    "Color",
+    "Corner.X",
+    "Corner.X_Frac",
+    "Corner.Y",
+    "Corner.Y_Frac",
+    "CornerXRadius",
+    "CornerXRadius_Frac",
+    "CornerYRadius",
+    "CornerYRadius_Frac",
+    "Description",
+    "%UTF8%Description",
+    "Dimmed",
+    "Disabled",
+    "EmbedImage",
+    "EndAngle",
+    "EndLineShape",
+    "FileName",
+    "%UTF8%FileName",
+    "FontID",
+    "GraphicallyLocked",
+    "HideName",
+    "IndexInSheet",
+    "IsConfigurable",
+    "IsHidden",
+    "IsMirrored",
+    "IsNotAccesible",
+    "IsRule",
+    "IsSolid",
+    "IsSystemParameter",
+    "Justification",
+    "KeepAspect",
+    "LineShapeSize",
+    "LineStyle",
+    "LineStyleExt",
+    "LineWidth",
+    "Location.X",
+    "Location.X_Frac",
+    "Location.Y",
+    "Location.Y_Frac",
+    "LocationCount",
+    "Mirror",
+    "Name",
+    "%UTF8%Name",
+    "NotAutoPosition",
+    "Orientation",
+    "OwnerIndex",
+    "OwnerPartDisplayMode",
+    "OwnerPartId",
+    "ParamType",
+    "Radius",
+    "Radius_Frac",
+    "ReadOnlyState",
+    "ScaleFactor",
+    "ScaleFactor_Frac",
+    "SecondaryRadius",
+    "SecondaryRadius_Frac",
+    "ShowBorder",
+    "ShowName",
+    "StartAngle",
+    "StartLineShape",
+    "Symbol",
+    "Text",
+    "%UTF8%Text",
+    "TextColor",
+    "TextHorzAnchor",
+    "TextMargin",
+    "TextMargin_Frac",
+    "TextVertAnchor",
+    "Transparent",
+    "UniqueID",
+    "WordWrap",
+    // RECORD=45, the footprint link
+    "ModelName",
+    "ModelType",
+    "DatafileCount",
+    "ModelDatafile0",
+    "ModelDatafileEntity0",
+    "ModelDatafileKind0",
+    "IsCurrent",
+];
+
+/// Whether `key` is one an encoder can emit: a vertex key (`X3`, `Y12`) or
+/// one of [`MODELLED_RECORD_KEYS`].
+fn is_modelled_record_key(key: &str) -> bool {
+    let vertex = key
+        .strip_prefix('X')
+        .or_else(|| key.strip_prefix('Y'))
+        .is_some_and(|rest| {
+            let rest = rest.strip_suffix("_Frac").unwrap_or(rest);
+            !rest.is_empty() && rest.bytes().all(|b| b.is_ascii_digit())
+        });
+    vertex
+        || MODELLED_RECORD_KEYS
+            .iter()
+            .any(|k| k.eq_ignore_ascii_case(key))
+}
+
+/// Replays a record read from a file over the canonical encoding of its
+/// current state (see `raw_params` on every record struct).
+///
+/// Segment by segment in the read order: a key the canonical form carries
+/// goes back verbatim when the two values decode to the same text (the UI
+/// stores a Latin-1 value as Windows-1252 where the canonical form uses
+/// UTF-8 bytes) and as the canonical value otherwise — an edit, or a
+/// positional key such as `IndexInSheet`. A key the canonical form lacks is
+/// dropped when an encoder could have emitted it (the field was edited to
+/// its omitted default — see [`MODELLED_RECORD_KEYS`]) and replayed verbatim
+/// otherwise, as an Altium key this crate does not model. Canonical keys the
+/// record lacked are appended, except an [`IMPLICIT_DEFAULTS`] value the
+/// file left implicit and a `UniqueID` the file never gave the record, which
+/// would be invented afresh on every save. A record without raw segments —
+/// built from scratch — is the canonical form.
+fn replay_record(canonical: &str, raw: &[(String, String)]) -> String {
+    if raw.is_empty() {
+        return canonical.to_string();
+    }
+    let canonical_pairs: Vec<(&str, &str)> = canonical
+        .split('|')
+        .skip(1)
+        .map(|segment| segment.split_once('=').unwrap_or((segment, "")))
+        .collect();
+    let canonical_value = |key: &str| {
+        canonical_pairs
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case(key))
+            .map(|(_, v)| *v)
+    };
+    let decoded =
+        |value: &str| crate::altium::from_wire_text(value).unwrap_or_else(|| value.to_string());
+    let is_positional = |key: &str| POSITIONAL_KEYS.iter().any(|k| k.eq_ignore_ascii_case(key));
+
+    // A `%UTF8%` twin's bytes are a locale artefact of the writing machine
+    // (the golden's were widened through Windows-1250), so whether it goes
+    // back verbatim follows its plain key, not its own bytes.
+    let raw_value = |key: &str| {
+        raw.iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case(key))
+            .map(|(_, v)| v.as_str())
+    };
+    let plain_unchanged = |key: &str| {
+        let plain = key.strip_prefix("%UTF8%").unwrap_or(key);
+        match (raw_value(plain), canonical_value(plain)) {
+            (Some(read), Some(current)) => read == current || decoded(read) == decoded(current),
+            _ => false,
+        }
+    };
+
+    let mut placed: Vec<bool> = vec![false; canonical_pairs.len()];
+    let mut parts: Vec<String> = Vec::with_capacity(raw.len() + 2);
+    for (key, read) in raw {
+        if key.is_empty() {
+            parts.push(String::new());
+            continue;
+        }
+        if let Some(i) = canonical_pairs
+            .iter()
+            .position(|(k, _)| k.eq_ignore_ascii_case(key))
+        {
+            placed[i] = true;
+            let current = canonical_pairs[i].1;
+            let unchanged = !is_positional(key)
+                && (read == current
+                    || decoded(read) == decoded(current)
+                    || (key.starts_with("%UTF8%") && plain_unchanged(key)));
+            let value = if unchanged { read.as_str() } else { current };
+            parts.push(format!("{key}={value}"));
+        } else if !is_positional(key) && !is_modelled_record_key(key) {
+            parts.push(format!("{key}={read}"));
+        }
+    }
+    for (i, (key, value)) in canonical_pairs.iter().enumerate() {
+        let implicit = IMPLICIT_DEFAULTS
+            .iter()
+            .any(|(k, v)| k.eq_ignore_ascii_case(key) && v == value);
+        // An identity the file never gave the record (Altium stores a pie
+        // without one) is not invented on its behalf: the canonical UniqueID
+        // here would be freshly generated, different on every save.
+        let invented_identity = key.eq_ignore_ascii_case("UniqueID");
+        if !placed[i] && !implicit && !invented_identity {
+            parts.push(format!("{key}={value}"));
+        }
+    }
+    format!("|{}", parts.join("|"))
+}
+
+/// Whether a parameter is Altium's own system `Comment` record — stored after
+/// the designator with the `IndexInSheet=-1` sentinel, outside the counter.
+/// `OwnerPartId=-1` alone does not make one: the UI stores every user
+/// parameter that way too, as a content record with its own slot.
+fn is_system_parameter(param: &super::Parameter) -> bool {
+    param.owner_part_id == -1 && param.name.eq_ignore_ascii_case("Comment")
+}
+
 /// Encodes a component header record.
+///
+/// A symbol read from a file replays its own header (`header_params`):
+/// every segment as read, verbatim, unless the field behind it was edited,
+/// in which case the canonical form of the new value takes its place. That
+/// keeps whichever `%UTF8%` layout Altium used (the UI's
+/// `%UTF8%Key=<UTF-8>|||Key=<Windows-1252>`, the scripted one's UTF-8 bytes
+/// in both keys), the keys it omitted and the ones this crate does not
+/// model. Modelled keys the record lacked are appended so a typed edit is
+/// never lost, except the constant ones it omitted on purpose. A symbol
+/// built from scratch emits the canonical header.
 fn encode_component_header(symbol: &Symbol) -> String {
+    let from_file = !symbol.header_params.is_empty();
+    let text = |key: &str, value: &str| -> Vec<(String, String)> {
+        if value.is_ascii() {
+            vec![(key.to_string(), value.to_string())]
+        } else {
+            let bytes = crate::altium::encode_utf8_param_value(value);
+            vec![
+                (key.to_string(), bytes.clone()),
+                (format!("%UTF8%{key}"), bytes),
+            ]
+        }
+    };
     let part_id_locked = if symbol.part_id_locked { "T" } else { "F" };
-    let parts = vec![
-        "RECORD=1".to_string(),
-        format!("LibReference={}", symbol.name),
-        format!("ComponentDescription={}", symbol.description),
-        format!("PartCount={}", symbol.part_count + 1), // Altium uses part_count + 1
-        format!("DisplayModeCount={}", symbol.display_mode_count),
-        "IndexInSheet=-1".to_string(),
-        "OwnerPartId=-1".to_string(),
-        format!("CurrentPartId={}", symbol.current_part_id),
-        "LibraryPath=*".to_string(),
-        format!("SourceLibraryName={}", symbol.source_library_name),
-        "SheetPartFileName=*".to_string(),
-        format!("TargetFileName={}", symbol.target_file_name),
-        format!("AllPinCount={}", symbol.pins.len()),
-        "AreaColor=11599871".to_string(), // Light yellow fill
-        "Color=128".to_string(),          // Dark red outline
-        format!("PartIDLocked={part_id_locked}"),
-    ];
+    let mut canonical: Vec<(String, String)> = vec![("RECORD".to_string(), "1".to_string())];
+    canonical.extend(text("LibReference", &symbol.name));
+    canonical.extend(text("ComponentDescription", &symbol.description));
+    canonical.extend([
+        ("PartCount".to_string(), (symbol.part_count + 1).to_string()), // Altium uses part_count + 1
+        (
+            "DisplayModeCount".to_string(),
+            symbol.display_mode_count.to_string(),
+        ),
+        ("IndexInSheet".to_string(), "-1".to_string()),
+        ("OwnerPartId".to_string(), "-1".to_string()),
+        (
+            "CurrentPartId".to_string(),
+            symbol.current_part_id.to_string(),
+        ),
+        ("LibraryPath".to_string(), "*".to_string()),
+    ]);
+    canonical.extend(text("SourceLibraryName", &symbol.source_library_name));
+    canonical.extend([
+        ("SheetPartFileName".to_string(), "*".to_string()),
+        (
+            "TargetFileName".to_string(),
+            symbol.target_file_name.clone(),
+        ),
+    ]);
+    // Altium keeps a stale count here, so a read value is carried; a
+    // from-scratch symbol writes its pin count, omitted at zero like every
+    // zero-valued integer key (the golden's pinless symbols carry none).
+    #[allow(clippy::cast_possible_truncation)]
+    let all_pin_count = symbol.all_pin_count.unwrap_or(symbol.pins.len() as u32);
+    if all_pin_count != 0 || symbol.all_pin_count.is_some() {
+        canonical.push(("AllPinCount".to_string(), all_pin_count.to_string()));
+    }
+    canonical.extend([
+        ("AreaColor".to_string(), "11599871".to_string()), // Light yellow fill
+        ("Color".to_string(), "128".to_string()),          // Dark red outline
+        ("PartIDLocked".to_string(), part_id_locked.to_string()),
+    ]);
+
+    let parts: Vec<String> = if from_file {
+        replay_header(symbol, &canonical)
+    } else {
+        canonical
+            .iter()
+            .map(|(key, value)| format!("{key}={value}"))
+            .collect()
+    };
 
     // Leading pipe, NO trailing pipe (matches Altium's ParametersToString).
     format!("|{}", parts.join("|"))
@@ -287,19 +644,24 @@ fn encode_component_header(symbol: &Symbol) -> String {
 ///
 /// A pure-Windows-1252 value emits the plain `<key>=<value>` — byte-identical to
 /// the pre-UTF-8 output, so the common case (and everything in the golden library)
-/// is unchanged. A value with non-Windows-1252 characters (Cyrillic, CJK, Greek
-/// `Ω`, …) would otherwise be silently corrupted to `?` by the record's
-/// Windows-1252 encoder; instead it is emitted as `%UTF8%<key>=<utf8-bytes>` so
-/// the true value survives, matching Altium / `AltiumSharp`. Only one of the two
-/// keys is ever written (never both), mirroring `AltiumSharp`'s writer.
+/// is unchanged.
+///
+/// A non-ASCII value is written **twice**, as Altium does: the plain `<key>`
+/// carrying the value's raw UTF-8 bytes, and a `%UTF8%<key>` companion. Altium
+/// reads the plain key, so omitting it leaves the name `?`-mangled in Altium
+/// even though our own reader recovers it; the companion is what `AltiumSharp`
+/// and older readers look for. Both are the same bytes on the wire, since the
+/// record is encoded as Windows-1252.
+///
+/// The gate is ASCII, not Windows-1252-representability: the golden stores
+/// `Résistance` as its UTF-8 bytes with a twin, even though `é` has a
+/// perfectly good single-byte form — AD promotes any non-ASCII value.
 fn text_field(key: &str, value: &str) -> String {
-    if crate::altium::requires_utf8(value) {
-        format!(
-            "%UTF8%{key}={}",
-            crate::altium::encode_utf8_param_value(value)
-        )
-    } else {
+    if value.is_ascii() {
         format!("{key}={value}")
+    } else {
+        let bytes = crate::altium::encode_utf8_param_value(value);
+        format!("{key}={bytes}|%UTF8%{key}={bytes}")
     }
 }
 
@@ -480,12 +842,14 @@ fn encode_rectangle(rect: &Rectangle, index: usize) -> String {
         ""
     };
     // Rectangles store the line style in LineStyleExt (Altium omits LineStyle),
-    // and omit it when zero.
+    // omitted when zero and placed between Corner.Y and LineWidth — an
+    // AD24-authored dashed rectangle stores
+    // `Corner.Y|LineStyleExt|LineWidth|AreaColor`.
     let line_style = nonzero("LineStyleExt", u32::from(rect.line_style));
     format!(
         "|RECORD=14|IsNotAccesible=T{}|OwnerPartId={}{}\
          {}{}{}{}\
-         |LineWidth={}{}{}{}{}{}|UniqueID={}",
+         {}|LineWidth={}{}{}{}{}|UniqueID={}",
         index_in_sheet(index),
         rect.owner_part_id,
         write_display_flags(rect.display_flags),
@@ -493,10 +857,10 @@ fn encode_rectangle(rect: &Rectangle, index: usize) -> String {
         coord_param("Location.Y", rect.y1),
         coord_param("Corner.X", rect.x2),
         coord_param("Corner.Y", rect.y2),
+        line_style,
         rect.line_width,
         nonzero("Color", rect.line_color),
         nonzero("AreaColor", rect.fill_color),
-        line_style,
         is_solid,
         transparent,
         rect.unique_id.clone().unwrap_or_else(generate_unique_id)
@@ -545,17 +909,18 @@ fn encode_line(line: &Line, index: usize) -> String {
 /// when set, `Text` / `Description` only when non-empty, and the read
 /// `UniqueID` is preserved.
 ///
-/// A **system** parameter — the Altium-authored `Comment`/`Designator`-class
-/// record with `owner_part_id == -1` — carries the `IndexInSheet=-1` sentinel
-/// (every golden symbol's system Comment stores
+/// The **system** parameter — Altium's own `Comment` record, see
+/// [`is_system_parameter`] — carries the `IndexInSheet=-1` sentinel (every
+/// golden symbol's system Comment stores
 /// `|RECORD=41|IndexInSheet=-1|OwnerPartId=-1|`) and never a content-counter
-/// slot; `index` is ignored for it. User parameters (`owner_part_id >= 1`)
-/// follow the shared 0-based content counter like every other record.
+/// slot; `index` is ignored for it. Every other parameter follows the shared
+/// 0-based content counter like every other record, whatever its owner — the
+/// UI stores user parameters with `OwnerPartId=-1` too.
 fn encode_parameter(param: &Parameter, index: usize) -> String {
     let mut parts = vec!["RECORD=41".to_string()];
     // IndexInSheet (system sentinel or counter, 0 omitted) directly after
     // RECORD, then OwnerPartId (parameters carry no IsNotAccesible token).
-    if param.owner_part_id == -1 {
+    if is_system_parameter(param) {
         parts.push("IndexInSheet=-1".to_string());
     } else {
         push_index_in_sheet(&mut parts, index);
@@ -583,7 +948,7 @@ fn encode_parameter(param: &Parameter, index: usize) -> String {
     if !param.value.is_empty() {
         parts.push(text_field("Text", &param.value));
     }
-    parts.push(format!("Name={}", param.name));
+    parts.push(text_field("Name", &param.name));
     if param.read_only_state != 0 {
         parts.push(format!("ReadOnlyState={}", param.read_only_state));
     }
@@ -599,13 +964,33 @@ fn encode_parameter(param: &Parameter, index: usize) -> String {
     if param.is_configurable {
         parts.push("IsConfigurable=T".to_string());
     }
+    if !param.auto_position {
+        parts.push("NotAutoPosition=T".to_string());
+    }
+    if param.is_rule {
+        parts.push("IsRule=T".to_string());
+    }
+    if param.is_system_parameter {
+        parts.push("IsSystemParameter=T".to_string());
+    }
+    if param.text_horz_anchor != 0 {
+        parts.push(format!("TextHorzAnchor={}", param.text_horz_anchor));
+    }
+    if param.text_vert_anchor != 0 {
+        parts.push(format!("TextVertAnchor={}", param.text_vert_anchor));
+    }
     if !param.description.is_empty() {
-        parts.push(format!("Description={}", param.description));
+        parts.push(text_field("Description", &param.description));
     }
     parts.push(format!(
         "UniqueID={}",
         param.unique_id.clone().unwrap_or_else(generate_unique_id)
     ));
+    // After UniqueID, matching the golden: AD24 emits `IsMirrored` last on a
+    // parameter record, though it emits it before UniqueID on a label.
+    if param.is_mirrored {
+        parts.push("IsMirrored=T".to_string());
+    }
     format!("|{}", parts.join("|"))
 }
 
@@ -775,10 +1160,11 @@ fn encode_bezier(bezier: &Bezier, index: usize) -> String {
         ""
     };
     format!(
-        "|RECORD=5{}{}|OwnerPartId={}|LineWidth={}{}|LocationCount=4{}{}{}{}{}{}{}{}|UniqueID={}",
+        "|RECORD=5{}{}|OwnerPartId={}{}|LineWidth={}{}|LocationCount=4{}{}{}{}{}{}{}{}|UniqueID={}",
         not_accessible,
         index_in_sheet(index),
         bezier.owner_part_id,
+        write_display_flags(bezier.display_flags),
         bezier.line_width,
         nonzero("Color", bezier.color),
         coord_param("X1", bezier.x1),
@@ -873,7 +1259,7 @@ fn encode_image(image: &Image, index: usize) -> String {
         parts.push("EmbedImage=T".to_string());
     }
     if !image.file_name.is_empty() {
-        parts.push(format!("FileName={}", image.file_name));
+        parts.push(text_field("FileName", &image.file_name));
     }
     parts.push(format!(
         "UniqueID={}",
@@ -1037,13 +1423,14 @@ fn encode_elliptical_arc(arc: &EllipticalArc, index: usize) -> String {
     // (scaled by 100,000), carrying near-boundary values into the integer part.
     // See [`super::coord`] for the shared encoding.
     format!(
-        "|RECORD=11|IsNotAccesible=T{}|OwnerPartId={}\
+        "|RECORD=11|IsNotAccesible=T{}|OwnerPartId={}{}\
          {}{}\
          {}\
          {}\
          |LineWidth={}{}{}{}|UniqueID={}",
         index_in_sheet(index),
         arc.owner_part_id,
+        write_display_flags(arc.display_flags),
         coord_param("Location.X", arc.x),
         coord_param("Location.Y", arc.y),
         coord_param("Radius", arc.radius),
@@ -1091,37 +1478,29 @@ fn encode_label(label: &Label, index: usize) -> String {
     )
 }
 
-/// Encodes a text annotation record. Token order mirrors [`encode_label`]
-/// (the golden's RECORD=3/4 records share the layout).
-fn encode_text(text: &Text, index: usize) -> String {
+/// Encodes an IEEE symbol record (`RECORD=3`). Key order as the `IEEESYM`
+/// golden stores it: `Symbol`, the location, `ScaleFactor`, `Orientation`,
+/// `LineWidth`, `Mirror`, `Color` — and no `UniqueID`, which Altium never
+/// gives this record.
+fn encode_ieee_symbol(symbol: &IeeeSymbol, index: usize) -> String {
     #[allow(clippy::cast_possible_truncation)]
-    let orientation = (text.rotation / 90.0).round() as i32 % 4;
-    let justification = justification_to_id(text.justification);
-    // Altium emits IsMirrored / IsHidden only when true — never `=F`.
-    let is_mirrored = if text.is_mirrored {
-        "|IsMirrored=T"
-    } else {
-        ""
-    };
-    let is_hidden = if text.is_hidden { "|IsHidden=T" } else { "" };
-    #[allow(clippy::cast_sign_loss)] // orientation is %4-bounded, non-negative
-    let orientation_token = nonzero("Orientation", orientation.rem_euclid(4) as u32);
+    let orientation = ((symbol.rotation / 90.0).round() as i32).rem_euclid(4);
+    #[allow(clippy::cast_sign_loss)] // rem_euclid(4) is non-negative
+    let orientation_token = nonzero("Orientation", orientation as u32);
+    let mirror = if symbol.is_mirrored { "|Mirror=T" } else { "" };
     format!(
-        // RECORD=3 is the Text-annotation id (the reader dispatches 3 -> parse_text,
-        // 4 -> parse_label); emitting 4 here made a Text round-trip back as a Label.
-        "|RECORD=3|IsNotAccesible=T{}|OwnerPartId={}{}{}{}{}{}|FontID={}|{}{}{}|UniqueID={}",
+        "|RECORD=3|IsNotAccesible=T{}|OwnerPartId={}{}|Symbol={}{}{}{}{}|LineWidth={}{}{}",
         index_in_sheet(index),
-        text.owner_part_id,
-        coord_param("Location.X", text.x),
-        coord_param("Location.Y", text.y),
+        symbol.owner_part_id,
+        write_display_flags(symbol.display_flags),
+        symbol.symbol,
+        coord_param("Location.X", symbol.x),
+        coord_param("Location.Y", symbol.y),
+        coord_param("ScaleFactor", symbol.scale_factor),
         orientation_token,
-        nonzero("Justification", u32::from(justification)),
-        nonzero("Color", text.color),
-        text.font_id,
-        text_field("Text", &text.text),
-        is_hidden,
-        is_mirrored,
-        text.unique_id.clone().unwrap_or_else(generate_unique_id)
+        symbol.line_width,
+        mirror,
+        nonzero("Color", symbol.color),
     )
 }
 
@@ -1166,29 +1545,50 @@ fn count_records(data: &[u8]) -> usize {
 /// Encodes a footprint model record (`RECORD=45`).
 ///
 /// `owner_index` is the stream-index of the owning `RECORD=44` implementation list.
-/// `is_current` marks the default footprint (`IsCurrent=T`, set on one model).
+/// `is_current` marks the default footprint (`IsCurrent=T` on that model; a
+/// UI-authored library omits the key on every other one, like any false
+/// boolean, rather than writing `IsCurrent=F`).
 ///
 /// `DatafileCount=1` plus `ModelDatafileEntity0` is what lets Altium *resolve*
 /// the model to an actual footprint in a `PcbLib` (rendering the preview and
 /// finding it on placement); a name-only record with `DatafileCount=0` shows in
 /// the list but reports "model not found".
 fn encode_footprint_model(model: &FootprintModel, owner_index: usize, is_current: bool) -> String {
-    // ModelDatafile0 (the .PcbLib path) is what lets Altium resolve the footprint
-    // directly; omitted when no path is known (falls back to name search).
-    let datafile = model
-        .library_path
-        .as_deref()
-        .map(|p| format!("|ModelDatafile0={p}"))
-        .unwrap_or_default();
+    // The datafile group — DatafileCount=1, the optional ModelDatafile0 path,
+    // ModelDatafileEntity0 and ModelDatafileKind0 — is what lets Altium resolve
+    // the footprint; a link built from scratch gets it. Altium itself omits the
+    // whole group on a name-only link (the IMPLCHAIN golden), so a read link
+    // keeps the group only when it had one or a path was given since.
+    let linked = model.library_path.is_some()
+        || model.raw_params.is_empty()
+        || model
+            .raw_params
+            .iter()
+            .any(|(key, _)| key.eq_ignore_ascii_case("DatafileCount"));
+    let datafiles = if linked {
+        let path = model
+            .library_path
+            .as_deref()
+            .map(|p| format!("|ModelDatafile0={p}"))
+            .unwrap_or_default();
+        format!(
+            "|DatafileCount=1{path}|ModelDatafileEntity0={}|ModelDatafileKind0=PCBLib",
+            model.name
+        )
+    } else {
+        String::new()
+    };
+    // The read UniqueID is re-emitted verbatim (deterministic RMW); only a
+    // from-scratch model gets a fresh one.
+    let unique_id = model.unique_id.clone().unwrap_or_else(generate_unique_id);
     format!(
-        "|RECORD=45|OwnerIndex={}|IndexInSheet=-1|Description={}|ModelName={}|ModelType=PCBLIB|DatafileCount=1{}|ModelDatafileEntity0={}|ModelDatafileKind0=PCBLib|IsCurrent={}|UniqueID={}",
+        "|RECORD=45|OwnerIndex={}|IndexInSheet=-1|Description={}|ModelName={}|ModelType=PCBLIB{}{}|UniqueID={}",
         owner_index,
         model.description,
         model.name,
-        datafile,
-        model.name,
-        if is_current { "T" } else { "F" },
-        generate_unique_id()
+        datafiles,
+        if is_current { "|IsCurrent=T" } else { "" },
+        unique_id
     )
 }
 
@@ -1230,126 +1630,91 @@ pub fn encode_data_stream(symbol: &Symbol) -> crate::altium::error::AltiumResult
     let header = encode_component_header(symbol);
     write_text_record(&mut data, &header)?;
 
-    // 3. Rectangles — written before the pins so the body shape sits at the
-    //    back. Emitting pins first lets a solid-filled body paint over the pin
-    //    names that sit inside it (names vanish). This matches Altium's own
-    //    ordering (body rectangle precedes pins in its symbol records).
-    for rect in &symbol.rectangles {
-        let record = encode_rectangle(rect, index_counter);
-        write_text_record(&mut data, &record)?;
-        index_counter += 1;
-    }
-
-    // 4. Pins (binary format)
-    for pin in &symbol.pins {
-        write_binary_pin(&mut data, pin)?;
-        // Pins consume an IndexInSheet counter slot even though the binary pin
-        // record stores no such field — confirmed against real Altium-authored
-        // libraries, where a symbol with parameters 0..2, two pins, then a
-        // rectangle stores IndexInSheet=5 on the rectangle (slots 3 and 4 are
-        // the pins).
-        index_counter += 1;
-    }
-
-    // 5. Lines
-    for line in &symbol.lines {
-        let record = encode_line(line, index_counter);
-        write_text_record(&mut data, &record)?;
-        index_counter += 1;
-    }
-
-    // 6. Polylines
-    for polyline in &symbol.polylines {
-        let record = encode_polyline(polyline, index_counter);
-        write_text_record(&mut data, &record)?;
-        index_counter += 1;
-    }
-
-    // 7. Polygons
-    for polygon in &symbol.polygons {
-        let record = encode_polygon(polygon, index_counter);
-        write_text_record(&mut data, &record)?;
-        index_counter += 1;
-    }
-
-    // 8. Arcs
-    for arc in &symbol.arcs {
-        let record = encode_arc(arc, index_counter);
-        write_text_record(&mut data, &record)?;
-        index_counter += 1;
-    }
-
-    // 8b. Pies (filled sectors, RECORD=9)
-    for pie in &symbol.pies {
-        let record = encode_pie(pie, index_counter);
-        write_text_record(&mut data, &record)?;
-        index_counter += 1;
-    }
-
-    // 8c. Images (RECORD=30)
-    for image in &symbol.images {
-        let record = encode_image(image, index_counter);
-        write_text_record(&mut data, &record)?;
-        index_counter += 1;
-    }
-
-    // 8d. Text frames (RECORD=28) share the content counter like every other
-    // shape (the golden frame carries no token only because it sits at slot 0,
-    // which the shared 0-omitted rule drops).
-    for text_frame in &symbol.text_frames {
-        let record = encode_text_frame(text_frame, index_counter);
-        write_text_record(&mut data, &record)?;
-        index_counter += 1;
-    }
-
-    // 9. Bezier curves
-    for bezier in &symbol.beziers {
-        let record = encode_bezier(bezier, index_counter);
-        write_text_record(&mut data, &record)?;
-        index_counter += 1;
-    }
-
-    // 10. Ellipses
-    for ellipse in &symbol.ellipses {
-        let record = encode_ellipse(ellipse, index_counter);
-        write_text_record(&mut data, &record)?;
-        index_counter += 1;
-    }
-
-    // 11. Rounded rectangles
-    for round_rect in &symbol.round_rects {
-        let record = encode_round_rect(round_rect, index_counter);
-        write_text_record(&mut data, &record)?;
-        index_counter += 1;
-    }
-
-    // 12. Elliptical arcs
-    for elliptical_arc in &symbol.elliptical_arcs {
-        let record = encode_elliptical_arc(elliptical_arc, index_counter);
-        write_text_record(&mut data, &record)?;
-        index_counter += 1;
-    }
-
-    // 13. Labels
-    for label in &symbol.labels {
-        let record = encode_label(label, index_counter);
-        write_text_record(&mut data, &record)?;
-        index_counter += 1;
-    }
-
-    // 14. Text annotations
-    for text in &symbol.text {
-        let record = encode_text(text, index_counter);
-        write_text_record(&mut data, &record)?;
-        index_counter += 1;
-    }
-
-    // 14b. USER parameters (owner_part_id >= 1) — emitted after the graphic
-    // content, matching the golden stream order (JUSTIFY stores its labels at
-    // content slots 0..3 and its user parameters at 4..5). Each consumes a
-    // shared-counter slot like any other content record.
-    for param in symbol.parameters.iter().filter(|p| p.owner_part_id != -1) {
-        let record = encode_parameter(param, index_counter);
+    // 3. Content records, in the symbol's own order — Altium's authoring
+    //    order for anything read from a file (see `Symbol::primitive_order`)
+    //    and the canonical kind order otherwise, which leads with the
+    //    rectangles so a solid-filled body sits behind the pins.
+    //
+    //    System parameters (owner_part_id == -1, the Altium-authored
+    //    Comment-class records) are skipped here: they belong after the
+    //    designator and carry the IndexInSheet=-1 sentinel instead of a
+    //    counter slot.
+    for (kind, index) in symbol.write_sequence() {
+        let record = match kind {
+            SchPrimitiveKind::Pin => {
+                // A binary pin record has no IndexInSheet field of its own but
+                // still consumes a counter slot — confirmed against real
+                // Altium-authored libraries, where a symbol with parameters
+                // 0..2, two pins, then a rectangle stores IndexInSheet=5 on the
+                // rectangle.
+                write_binary_pin(&mut data, &symbol.pins[index])?;
+                index_counter += 1;
+                continue;
+            }
+            SchPrimitiveKind::Parameter => {
+                let param = &symbol.parameters[index];
+                if is_system_parameter(param) {
+                    continue;
+                }
+                replay_record(&encode_parameter(param, index_counter), &param.raw_params)
+            }
+            SchPrimitiveKind::Rectangle => replay_record(
+                &encode_rectangle(&symbol.rectangles[index], index_counter),
+                &symbol.rectangles[index].raw_params,
+            ),
+            SchPrimitiveKind::Line => replay_record(
+                &encode_line(&symbol.lines[index], index_counter),
+                &symbol.lines[index].raw_params,
+            ),
+            SchPrimitiveKind::Polyline => replay_record(
+                &encode_polyline(&symbol.polylines[index], index_counter),
+                &symbol.polylines[index].raw_params,
+            ),
+            SchPrimitiveKind::Polygon => replay_record(
+                &encode_polygon(&symbol.polygons[index], index_counter),
+                &symbol.polygons[index].raw_params,
+            ),
+            SchPrimitiveKind::Arc => replay_record(
+                &encode_arc(&symbol.arcs[index], index_counter),
+                &symbol.arcs[index].raw_params,
+            ),
+            SchPrimitiveKind::Pie => replay_record(
+                &encode_pie(&symbol.pies[index], index_counter),
+                &symbol.pies[index].raw_params,
+            ),
+            SchPrimitiveKind::Image => replay_record(
+                &encode_image(&symbol.images[index], index_counter),
+                &symbol.images[index].raw_params,
+            ),
+            SchPrimitiveKind::TextFrame => replay_record(
+                &encode_text_frame(&symbol.text_frames[index], index_counter),
+                &symbol.text_frames[index].raw_params,
+            ),
+            SchPrimitiveKind::Bezier => replay_record(
+                &encode_bezier(&symbol.beziers[index], index_counter),
+                &symbol.beziers[index].raw_params,
+            ),
+            SchPrimitiveKind::Ellipse => replay_record(
+                &encode_ellipse(&symbol.ellipses[index], index_counter),
+                &symbol.ellipses[index].raw_params,
+            ),
+            SchPrimitiveKind::RoundRect => replay_record(
+                &encode_round_rect(&symbol.round_rects[index], index_counter),
+                &symbol.round_rects[index].raw_params,
+            ),
+            SchPrimitiveKind::EllipticalArc => replay_record(
+                &encode_elliptical_arc(&symbol.elliptical_arcs[index], index_counter),
+                &symbol.elliptical_arcs[index].raw_params,
+            ),
+            SchPrimitiveKind::Label => replay_record(
+                &encode_label(&symbol.labels[index], index_counter),
+                &symbol.labels[index].raw_params,
+            ),
+            SchPrimitiveKind::IeeeSymbol => replay_record(
+                &encode_ieee_symbol(&symbol.ieee_symbols[index], index_counter),
+                &symbol.ieee_symbols[index].raw_params,
+            ),
+        };
         write_text_record(&mut data, &record)?;
         index_counter += 1;
     }
@@ -1360,15 +1725,17 @@ pub fn encode_data_stream(symbol: &Symbol) -> crate::altium::error::AltiumResult
         write_text_record(&mut data, &record)?;
     }
 
-    // 15b. SYSTEM parameters (owner_part_id == -1, the Altium-authored
-    // Comment-class records): golden order puts them after the designator, and
-    // they carry the IndexInSheet=-1 sentinel WITHOUT consuming a counter slot
-    // (the golden DISPMODE system Comment stores
-    // `|RECORD=41|IndexInSheet=-1|OwnerPartId=-1|` while the rectangles keep
-    // slots 0 and 1). Regressing them onto the counter destroyed the -1 and
-    // shifted every later content index by one on read-modify-write.
-    for param in symbol.parameters.iter().filter(|p| p.owner_part_id == -1) {
-        let record = encode_parameter(param, 0);
+    // 15b. The SYSTEM parameter — Altium's own Comment record: golden order
+    // puts it after the designator, and it carries the IndexInSheet=-1
+    // sentinel WITHOUT consuming a counter slot (the golden DISPMODE system
+    // Comment stores `|RECORD=41|IndexInSheet=-1|OwnerPartId=-1|` while the
+    // rectangles keep slots 0 and 1). Regressing it onto the counter destroyed
+    // the -1 and shifted every later content index by one on
+    // read-modify-write. Only the Comment is system: a UI-authored Value or
+    // Part Number carries OwnerPartId=-1 too and is still a content record
+    // with a counter slot, stored before the graphics in authoring order.
+    for param in symbol.parameters.iter().filter(|p| is_system_parameter(p)) {
+        let record = replay_record(&encode_parameter(param, 0), &param.raw_params);
         write_text_record(&mut data, &record)?;
     }
 
@@ -1380,13 +1747,26 @@ pub fn encode_data_stream(symbol: &Symbol) -> crate::altium::error::AltiumResult
     // model after the first).
     let impl_index = count_records(&data);
     write_text_record(&mut data, &encode_implementation_list())?;
+    // IsCurrent is the model's own read state, not its list position: a symbol
+    // whose current footprint is the second model must keep it there through a
+    // read-modify-write. Only when NO model claims currency (a from-scratch
+    // list, where the field defaults false) does the first model take it, which
+    // is what Altium's own editor does on the first assignment.
+    let has_current = symbol.footprints.iter().any(|m| m.is_current);
     for (i, model) in symbol.footprints.iter().enumerate() {
         // The RECORD=45 is owned by the RECORD=44; its RECORD=46/48 children are
         // in turn owned by the RECORD=45 (its own stream-index).
         let model_index = count_records(&data);
         write_text_record(
             &mut data,
-            &encode_footprint_model(model, impl_index, i == 0),
+            &replay_record(
+                &encode_footprint_model(
+                    model,
+                    impl_index,
+                    model.is_current || (!has_current && i == 0),
+                ),
+                &model.raw_params,
+            ),
         )?;
         write_text_record(&mut data, &encode_model_datafile_link(model_index))?;
         write_text_record(&mut data, &encode_implementation(model_index))?;
@@ -1405,13 +1785,14 @@ pub fn encode_data_stream(symbol: &Symbol) -> crate::altium::error::AltiumResult
 ///
 /// * `symbols` - The symbols to encode
 /// * `ole_names` - OLE-safe storage names for each symbol (≤31 chars, unique)
+/// * `unique_id` - The library's own identity, kept across saves
 #[must_use]
-pub fn encode_file_header(symbols: &[&Symbol], ole_names: &[String]) -> Vec<u8> {
+pub fn encode_file_header(symbols: &[&Symbol], ole_names: &[String], unique_id: &str) -> Vec<u8> {
     let mut parts = vec![
         "HEADER=Protel for Windows - Schematic Library Editor Binary File Version 5.0".to_string(),
         "Weight=47".to_string(),
         "MinorVersion=9".to_string(),
-        format!("UniqueID={}", generate_unique_id()),
+        format!("UniqueID={unique_id}"),
         "FontIdCount=1".to_string(),
         "Size1=10".to_string(),
         "FontName1=Times New Roman".to_string(),
@@ -1433,11 +1814,16 @@ pub fn encode_file_header(symbols: &[&Symbol], ole_names: &[String]) -> Vec<u8> 
         format!("CompCount={}", symbols.len()),
     ];
 
-    // Add component references using OLE-safe names for storage lookup
-    for (i, (symbol, ole_name)) in symbols.iter().zip(ole_names.iter()).enumerate() {
-        // LibRef uses the OLE-safe name (for storage path lookup)
-        parts.push(format!("LibRef{i}={ole_name}"));
-        parts.push(format!("CompDescr{}={}", i, symbol.description));
+    // LibRef{i} is the component's REAL name — the golden stores the full
+    // 33-byte Khmer name here while its storage name is cut at 31 — with a
+    // %UTF8% twin when the name leaves Windows-1252. The root SectionKeys
+    // stream, not this list, is what maps a truncated storage name back.
+    // `ole_names` still decides which entries need that map; it is unused here
+    // beyond keeping the two lists in lockstep by construction.
+    debug_assert_eq!(symbols.len(), ole_names.len());
+    for (i, symbol) in symbols.iter().enumerate() {
+        parts.push(text_field(&format!("LibRef{i}"), &symbol.name));
+        parts.push(text_field(&format!("CompDescr{i}"), &symbol.description));
         parts.push(format!("PartCount{}={}", i, symbol.part_count + 1));
     }
 
@@ -1459,6 +1845,216 @@ pub fn encode_file_header(symbols: &[&Symbol], ole_names: &[String]) -> Vec<u8> 
 mod tests {
     use super::super::primitives::PinOrientation;
     use super::*;
+
+    // ==================== encoder rejections and flag arms ==================
+    //
+    // The writer refuses anything the on-disk record cannot hold. Every one of
+    // these limits is a silent-corruption guard: the field it protects is
+    // length-prefixed or fixed-width, so an oversize value would not fail at
+    // the write, it would truncate and desync every record after it.
+
+    mod rejections {
+        use super::*;
+
+        /// A pin that encodes cleanly, so a test can push one field past its
+        /// limit and leave the rest valid.
+        fn pin() -> Pin {
+            Pin::new("NAME", "1", 0, 0, 10, PinOrientation::Left)
+        }
+
+        /// Asserts the encode failed and named `field`.
+        fn rejects(result: crate::altium::error::AltiumResult<()>, field: &str) {
+            let err = result.expect_err("expected the encoder to refuse this pin");
+            let message = err.to_string();
+            assert!(
+                message.contains(field),
+                "expected the error to name {field:?}, got: {message}"
+            );
+        }
+
+        #[test]
+        fn a_record_larger_than_the_header_can_describe_is_refused() {
+            // The record length is a 24-bit field. A u32 cast would truncate it
+            // and every following record would be read from the wrong offset,
+            // so the whole library after this point would decode as garbage.
+            let mut data = Vec::new();
+            let oversize = vec![0_u8; 0x0100_0000];
+            let err = write_record_frame(&mut data, &oversize, 0)
+                .expect_err("a 16 MiB record must be refused");
+            assert!(err.to_string().contains("16 MiB"), "{err}");
+            assert!(data.is_empty(), "nothing should be written on refusal");
+
+            // One byte under the limit still writes, header included.
+            let mut ok = Vec::new();
+            let at_limit = vec![0_u8; 0x00FF_FFFF];
+            write_record_frame(&mut ok, &at_limit, 0).expect("the limit itself is writable");
+            assert_eq!(ok.len(), at_limit.len() + 4);
+        }
+
+        #[test]
+        fn pin_coordinates_past_the_i16_range_are_refused_by_name() {
+            // Coordinates are stored as i16. A cast would wrap a far-off-sheet
+            // pin round to the opposite side of the symbol rather than failing.
+            for (field, mutate) in [
+                ("pin.x", (|p: &mut Pin| p.x = 40_000) as fn(&mut Pin)),
+                ("pin.y", |p: &mut Pin| p.y = -40_000),
+                ("pin.length", |p: &mut Pin| p.length = 40_000),
+                ("pin.owner_part_id", |p: &mut Pin| {
+                    p.owner_part_id = 40_000;
+                }),
+            ] {
+                let mut subject = pin();
+                mutate(&mut subject);
+                rejects(write_binary_pin(&mut Vec::new(), &subject), field);
+            }
+        }
+
+        #[test]
+        fn pin_strings_longer_than_the_length_prefix_are_refused_by_field() {
+            // Each string is a Pascal short string: one byte of length. Over
+            // 255 the prefix wraps and the reader takes the wrong byte count,
+            // desyncing the rest of the record.
+            let long = "x".repeat(256);
+            for (field, mutate) in [
+                (
+                    "pin.name",
+                    (|p: &mut Pin, s: String| p.name = s) as fn(&mut Pin, String),
+                ),
+                ("pin.designator", |p: &mut Pin, s: String| p.designator = s),
+                ("pin.description", |p: &mut Pin, s: String| {
+                    p.description = s;
+                }),
+                ("pin.swap_id_group", |p: &mut Pin, s: String| {
+                    p.swap_id_group = s;
+                }),
+                ("pin.part_and_sequence", |p: &mut Pin, s: String| {
+                    p.part_and_sequence = s;
+                }),
+                ("pin.default_value", |p: &mut Pin, s: String| {
+                    p.default_value = s;
+                }),
+            ] {
+                let mut subject = pin();
+                mutate(&mut subject, long.clone());
+                rejects(write_binary_pin(&mut Vec::new(), &subject), field);
+            }
+        }
+
+        #[test]
+        fn the_limit_is_encoded_bytes_not_characters() {
+            // The description is Windows-1252 (single-byte), so 255 non-ASCII
+            // characters fit where a UTF-8 length check would have wrongly
+            // rejected them.
+            let mut subject = pin();
+            subject.description = "\u{b5}".repeat(255); // 255 x MICRO SIGN
+            write_binary_pin(&mut Vec::new(), &subject)
+                .expect("255 encoded bytes is within the prefix");
+            subject.description = "\u{b5}".repeat(256);
+            rejects(
+                write_binary_pin(&mut Vec::new(), &subject),
+                "pin.description",
+            );
+
+            // The name is stored as UTF-8 bytes once it leaves ASCII, as
+            // Altium stores it, so its limit is the UTF-8 length: 127 micro
+            // signs are 254 bytes, 128 are 256.
+            let mut subject = pin();
+            subject.name = "\u{b5}".repeat(127);
+            write_binary_pin(&mut Vec::new(), &subject).expect("254 UTF-8 bytes fit");
+            subject.name = "\u{b5}".repeat(128);
+            rejects(write_binary_pin(&mut Vec::new(), &subject), "pin.name");
+        }
+
+        /// A non-ASCII pin name is stored as its UTF-8 bytes — every one of
+        /// the golden's 52 such pins, `Résistance` included — never the code
+        /// page; an ASCII name stays single-byte.
+        #[test]
+        fn a_non_ascii_pin_name_is_stored_as_utf8_bytes() {
+            let mut subject = pin();
+            subject.name = "R\u{e9}sistance".to_string();
+            let mut data = Vec::new();
+            write_binary_pin(&mut data, &subject).unwrap();
+            let needle = b"\x0bR\xc3\xa9sistance";
+            assert!(
+                data.windows(needle.len()).any(|w| w == needle),
+                "UTF-8 bytes with an 11-byte length prefix: {data:?}"
+            );
+        }
+
+        #[test]
+        fn display_flag_keys_are_pushed_only_when_they_differ_from_the_default() {
+            // These ride in a `|`-joined list, so a key emitted at its default
+            // value is not harmless: it changes the bytes of every shape that
+            // carries it and breaks byte-identity against Altium's own output.
+            let mut parts = Vec::new();
+            push_display_flags(&mut parts, ShapeDisplayFlags::default());
+            assert!(parts.is_empty(), "defaults emit nothing: {parts:?}");
+
+            let flags = ShapeDisplayFlags {
+                owner_part_display_mode: 1,
+                graphically_locked: true,
+                disabled: true,
+                dimmed: true,
+            };
+            let mut parts = Vec::new();
+            push_display_flags(&mut parts, flags);
+            assert_eq!(
+                parts,
+                vec![
+                    "OwnerPartDisplayMode=1",
+                    "GraphicallyLocked=T",
+                    "Disabled=T",
+                    "Dimmed=T",
+                ]
+            );
+        }
+
+        #[test]
+        fn every_justification_maps_to_its_own_altium_id() {
+            // Nine anchors, nine ids: a duplicated arm would silently re-anchor
+            // a label to a different corner on save.
+            let ids: Vec<u8> = [
+                TextJustification::BottomLeft,
+                TextJustification::BottomCenter,
+                TextJustification::BottomRight,
+                TextJustification::MiddleLeft,
+                TextJustification::MiddleCenter,
+                TextJustification::MiddleRight,
+                TextJustification::TopLeft,
+                TextJustification::TopCenter,
+                TextJustification::TopRight,
+            ]
+            .into_iter()
+            .map(justification_to_id)
+            .collect();
+            assert_eq!(ids, (0..=8).collect::<Vec<u8>>());
+        }
+
+        #[test]
+        fn pin_display_flags_ride_in_their_own_bits() {
+            // The flag byte packs four independent booleans; a shared or
+            // swapped bit would turn "locked" into "hidden" on the next save.
+            let encoded = |mutate: fn(&mut Pin)| {
+                let mut subject = pin();
+                mutate(&mut subject);
+                let mut data = Vec::new();
+                write_binary_pin(&mut data, &subject).expect("pin should encode");
+                data
+            };
+
+            let plain = encoded(|_| {});
+            for mutate in [
+                (|p: &mut Pin| p.graphically_locked = true) as fn(&mut Pin),
+                |p: &mut Pin| p.is_not_accessible = true,
+            ] {
+                assert_ne!(
+                    encoded(mutate),
+                    plain,
+                    "a display flag left no trace in the record"
+                );
+            }
+        }
+    }
 
     #[test]
     fn single_part_symbol_emits_partcount_one() {
@@ -1639,10 +2235,10 @@ mod tests {
         // Golden-confirmed against real Altium-authored libraries: binary pins
         // store no IndexInSheet token but DO consume counter slots (a real
         // symbol with parameters 0..2, two pins, then a rectangle stores
-        // IndexInSheet=5 on the rectangle). Emission order here is rectangle
-        // (slot 0, omitted), two pins (1, 2), line (3), then the user
-        // parameter (4) — user parameters follow the graphic content,
-        // matching the golden stream order (JUSTIFY).
+        // IndexInSheet=5 on the rectangle). The records go out in the order
+        // they were added — parameter (slot 0, token omitted), rectangle (1),
+        // two pins (2, 3), line (4) — because `add_*` records the order, the
+        // same way reading a symbol records the file's.
         let mut symbol = Symbol::new("PINSLOTS");
         symbol.add_parameter(Parameter::new("Value", "10k"));
         symbol.add_rectangle(Rectangle::new(-5, -5, 5, 5));
@@ -1652,29 +2248,362 @@ mod tests {
 
         let data = encode_data_stream(&symbol).expect("encode");
         let records = stream_records(&data);
+        let param = records
+            .iter()
+            .find(|t| t.starts_with("|RECORD=41") && !t.contains("OwnerPartId=-1"))
+            .expect("user parameter present");
+        assert!(
+            !param.contains("IndexInSheet"),
+            "the parameter was added first, so it holds slot 0: {param}"
+        );
         let rect = records
             .iter()
             .find(|t| t.starts_with("|RECORD=14"))
             .expect("rectangle present");
         assert!(
-            !rect.contains("IndexInSheet"),
-            "slot-0 rectangle omits the token: {rect}"
+            rect.contains("|IndexInSheet=1|"),
+            "rectangle takes slot 1: {rect}"
         );
         let line = records
             .iter()
             .find(|t| t.starts_with("|RECORD=13"))
             .expect("line present");
         assert!(
-            line.contains("|IndexInSheet=3|"),
-            "line after two pins takes slot 3 (pins consumed 1 and 2): {line}"
+            line.contains("|IndexInSheet=4|"),
+            "line after two pins takes slot 4 (pins consumed 2 and 3): {line}"
         );
-        let param = records
-            .iter()
-            .find(|t| t.starts_with("|RECORD=41") && !t.contains("OwnerPartId=-1"))
-            .expect("user parameter present");
+    }
+
+    /// A UI-authored header comes back segment for segment: the twin-first
+    /// `%UTF8%Key=<UTF-8>|||Key=<Windows-1252>` description, the omitted
+    /// `LibraryPath`/`SheetPartFileName`, the unmodelled
+    /// `COMPONENTKINDVERSION2`, the stale `AllPinCount` — and an edited field
+    /// takes the canonical form in its own slot.
+    #[test]
+    fn a_read_header_is_replayed_verbatim_until_a_field_is_edited() {
+        use super::super::reader;
+
+        // Exactly what a UI-drawn 32-pin MCU stores (AllPinCount=1 and all).
+        let record = concat!(
+            "|RECORD=1|LibReference=STM32G0C1KET6N",
+            "|%UTF8%ComponentDescription=STM32G0, Arm\u{c2}\u{ae} Cortex\u{c2}\u{ae}-M0+",
+            "|||ComponentDescription=STM32G0, Arm\u{ae} Cortex\u{ae}-M0+",
+            "|PartCount=2|DisplayModeCount=1|IndexInSheet=-1|OwnerPartId=-1|CurrentPartId=1",
+            "|SourceLibraryName=*|TargetFileName=*|AllPinCount=1|AreaColor=11599871|Color=128",
+            "|PartIDLocked=F|COMPONENTKINDVERSION2=5"
+        );
+        let mut symbol = Symbol::new("placeholder");
+        reader::parse_text_record_from_string_for_test(&mut symbol, record);
+        assert_eq!(symbol.name, "STM32G0C1KET6N");
+        assert_eq!(symbol.description, "STM32G0, Arm\u{ae} Cortex\u{ae}-M0+");
+        assert_eq!(symbol.all_pin_count, Some(1));
+        assert_eq!(symbol.header_params.len(), 18, "{:?}", symbol.header_params);
+        for _ in 0..32 {
+            symbol.add_pin(Pin::new("P", "1", 0, 0, 10, PinOrientation::Left));
+        }
+
+        // Unchanged: byte-identical, stale count and all.
+        assert_eq!(encode_component_header(&symbol), record);
+
+        // An edit to the description replaces its two segments with the
+        // canonical form (ASCII here, so no twin) at the plain key's slot.
+        symbol.description = "CAN transceiver".to_string();
+        let edited = encode_component_header(&symbol);
         assert!(
-            param.contains("|IndexInSheet=4|"),
-            "user parameter follows the shapes at slot 4: {param}"
+            edited.contains(
+                "|LibReference=STM32G0C1KET6N|||ComponentDescription=CAN transceiver|PartCount=2|"
+            ),
+            "{edited}"
+        );
+        assert!(!edited.contains("%UTF8%"), "{edited}");
+        assert!(
+            edited.ends_with("|PartIDLocked=F|COMPONENTKINDVERSION2=5"),
+            "{edited}"
+        );
+
+        // A field the header never carried is appended when set; the
+        // constant keys it omitted stay omitted.
+        symbol.part_id_locked = true;
+        let locked = encode_component_header(&symbol);
+        assert!(locked.contains("|PartIDLocked=T|"), "{locked}");
+        assert!(!locked.contains("LibraryPath"), "{locked}");
+    }
+
+    /// From scratch the canonical header is unchanged: every constant key,
+    /// the pin count, and the scripted `%UTF8%` form for a non-ASCII value.
+    #[test]
+    fn a_fresh_header_is_canonical() {
+        let mut symbol = Symbol::new("R\u{e9}sistance");
+        symbol.add_pin(Pin::new("1", "1", 0, 0, 10, PinOrientation::Left));
+        let header = encode_component_header(&symbol);
+        let bytes = crate::altium::encode_utf8_param_value("R\u{e9}sistance");
+        assert!(
+            header.starts_with(&format!(
+                "|RECORD=1|LibReference={bytes}|%UTF8%LibReference={bytes}|ComponentDescription=|"
+            )),
+            "{header}"
+        );
+        assert!(header.contains("|LibraryPath=*|SourceLibraryName=*|SheetPartFileName=*|TargetFileName=*|AllPinCount=1|"), "{header}");
+        symbol.all_pin_count = Some(7);
+        assert!(encode_component_header(&symbol).contains("|AllPinCount=7|"));
+    }
+
+    /// Only Altium's own `Comment` is the system parameter: a user parameter
+    /// stored with `OwnerPartId=-1` — the UI's habit — is a content record
+    /// with a counter slot, in authoring order before the graphics.
+    #[test]
+    fn user_parameters_with_owner_minus_one_keep_their_slots_and_order() {
+        let mut symbol = Symbol::new("PESD1CAN");
+        symbol.designator = "U?".to_string();
+        for (name, value) in [("Value", "PESD1CAN"), ("Part Number", "PESD1CAN")] {
+            let mut p = Parameter::new(name, value);
+            p.owner_part_id = -1;
+            symbol.add_parameter(p);
+        }
+        symbol.add_rectangle(Rectangle::new(-20, -10, 30, 20));
+        let mut comment = Parameter::new("Comment", "=VALUE");
+        comment.owner_part_id = -1;
+        symbol.add_parameter(comment);
+
+        let data = encode_data_stream(&symbol).expect("encode");
+        let records = stream_records(&data);
+        let kinds: Vec<String> = records
+            .iter()
+            .map(|r| {
+                let kind = r.split('|').nth(1).unwrap_or("").to_string();
+                let index = r
+                    .split('|')
+                    .find_map(|t| t.strip_prefix("IndexInSheet="))
+                    .unwrap_or("(absent)")
+                    .to_string();
+                format!("{kind} {index}")
+            })
+            .collect();
+        assert_eq!(
+            &kinds[..5],
+            [
+                "RECORD=1 -1",
+                "RECORD=41 (absent)", // Value: slot 0, key omitted
+                "RECORD=41 1",        // Part Number
+                "RECORD=14 2",        // the rectangle
+                "RECORD=34 -1",       // the designator
+            ],
+            "{kinds:?}"
+        );
+        assert_eq!(
+            kinds[5], "RECORD=41 -1",
+            "the system Comment, after the designator"
+        );
+    }
+
+    /// A footprint model that is not the current one carries no `IsCurrent`
+    /// key at all, like every false boolean.
+    #[test]
+    fn is_current_is_written_only_when_true() {
+        let model = FootprintModel::new("SOT-23");
+        assert!(encode_footprint_model(&model, 1, true).contains("|IsCurrent=T|UniqueID="));
+        let other = encode_footprint_model(&model, 1, false);
+        assert!(!other.contains("IsCurrent"), "{other}");
+        assert!(
+            other.contains("|ModelDatafileKind0=PCBLib|UniqueID="),
+            "{other}"
+        );
+    }
+
+    /// Every key any golden record carries is one an encoder can emit (or a
+    /// vertex key), so the replay's "a read key the canonical form lacks was
+    /// edited to its default" rule never mistakes an Altium key for one of
+    /// ours — and `MODELLED_RECORD_KEYS` cannot silently fall behind.
+    #[test]
+    fn every_golden_record_key_is_modelled() {
+        let lib = crate::altium::SchLib::open("scripts/samples/symbols.SchLib").unwrap();
+        let mut unmodelled = std::collections::BTreeSet::new();
+        for symbol in lib.iter() {
+            let records: Vec<&Vec<(String, String)>> = symbol
+                .rectangles
+                .iter()
+                .map(|r| &r.raw_params)
+                .chain(symbol.lines.iter().map(|r| &r.raw_params))
+                .chain(symbol.polylines.iter().map(|r| &r.raw_params))
+                .chain(symbol.polygons.iter().map(|r| &r.raw_params))
+                .chain(symbol.arcs.iter().map(|r| &r.raw_params))
+                .chain(symbol.pies.iter().map(|r| &r.raw_params))
+                .chain(symbol.images.iter().map(|r| &r.raw_params))
+                .chain(symbol.text_frames.iter().map(|r| &r.raw_params))
+                .chain(symbol.beziers.iter().map(|r| &r.raw_params))
+                .chain(symbol.ellipses.iter().map(|r| &r.raw_params))
+                .chain(symbol.round_rects.iter().map(|r| &r.raw_params))
+                .chain(symbol.elliptical_arcs.iter().map(|r| &r.raw_params))
+                .chain(symbol.labels.iter().map(|r| &r.raw_params))
+                .chain(symbol.ieee_symbols.iter().map(|r| &r.raw_params))
+                .chain(symbol.parameters.iter().map(|r| &r.raw_params))
+                .collect();
+            assert!(
+                !records.is_empty(),
+                "{}: every record carries its raw segments",
+                symbol.name
+            );
+            for raw in records {
+                assert!(
+                    !raw.is_empty(),
+                    "{}: a read record has raw segments",
+                    symbol.name
+                );
+                for (key, _) in raw {
+                    if !key.is_empty() && !is_modelled_record_key(key) {
+                        unmodelled.insert(key.clone());
+                    }
+                }
+            }
+        }
+        assert!(
+            unmodelled.is_empty(),
+            "golden keys no encoder emits: {unmodelled:?}"
+        );
+    }
+
+    /// The replay's four rules on one rectangle read from a UI-authored
+    /// library: verbatim while unchanged (no `LineWidth` invented), the
+    /// canonical value for an edited field, a cleared flag's key dropped, an
+    /// unmodelled Altium key kept in place, and the positional index renumbered.
+    #[test]
+    fn a_read_record_is_replayed_verbatim_until_edited() {
+        // As the UI stores it: no LineWidth, an unmodelled key in the middle.
+        let raw: Vec<(String, String)> = [
+            ("RECORD", "14"),
+            ("IsNotAccesible", "T"),
+            ("IndexInSheet", "3"),
+            ("OwnerPartId", "1"),
+            ("Location.X", "-20"),
+            ("Location.Y", "-10"),
+            ("Corner.X", "30"),
+            ("Corner.Y", "20"),
+            ("FUTUREKEY", "7"),
+            ("Color", "128"),
+            ("AreaColor", "11599871"),
+            ("IsSolid", "T"),
+            ("UniqueID", "GOHQXBJE"),
+        ]
+        .iter()
+        .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+        .collect();
+        let mut rect = Rectangle::new(-20, -10, 30, 20);
+        rect.filled = true;
+        rect.unique_id = Some("GOHQXBJE".to_string());
+        rect.raw_params = raw;
+
+        let verbatim = replay_record(&encode_rectangle(&rect, 3), &rect.raw_params);
+        assert_eq!(
+            verbatim,
+            "|RECORD=14|IsNotAccesible=T|IndexInSheet=3|OwnerPartId=1|Location.X=-20|Location.Y=-10|Corner.X=30|Corner.Y=20|FUTUREKEY=7|Color=128|AreaColor=11599871|IsSolid=T|UniqueID=GOHQXBJE"
+        );
+
+        // Moved to slot 0, corner edited, fill cleared, line width set.
+        rect.x2 = 35.0;
+        rect.filled = false;
+        rect.line_width = 2;
+        let edited = replay_record(&encode_rectangle(&rect, 0), &rect.raw_params);
+        assert_eq!(
+            edited,
+            "|RECORD=14|IsNotAccesible=T|OwnerPartId=1|Location.X=-20|Location.Y=-10|Corner.X=35|Corner.Y=20|FUTUREKEY=7|Color=128|AreaColor=11599871|UniqueID=GOHQXBJE|LineWidth=2"
+        );
+
+        // No raw segments: the canonical form, LineWidth and all.
+        rect.raw_params.clear();
+        assert!(
+            replay_record(&encode_rectangle(&rect, 0), &rect.raw_params).contains("|LineWidth=2|")
+        );
+        rect.line_width = 1;
+        assert!(
+            replay_record(&encode_rectangle(&rect, 0), &rect.raw_params).contains("|LineWidth=1|")
+        );
+    }
+
+    /// A `%UTF8%` twin goes back with the bytes it was read with — a locale
+    /// artefact of the writing machine — for as long as its plain key is
+    /// unchanged, and in the canonical form once the text is edited.
+    #[test]
+    fn a_utf8_twin_follows_its_plain_key() {
+        let raw: Vec<(String, String)> = [
+            ("RECORD", "4"),
+            ("OwnerPartId", "1"),
+            ("FontID", "1"),
+            ("%UTF8%Text", "R\u{c4}\u{82}\u{c2}\u{a9}sistance"),
+            ("", ""),
+            ("", ""),
+            ("Text", "R\u{c3}\u{a9}sistance"),
+            ("UniqueID", "ADKXLEQV"),
+        ]
+        .iter()
+        .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+        .collect();
+        let mut label = Label {
+            x: 0.0,
+            y: 0.0,
+            text: "R\u{e9}sistance".to_string(),
+            font_id: 1,
+            color: 0,
+            justification: TextJustification::BottomLeft,
+            rotation: 0.0,
+            is_mirrored: false,
+            is_hidden: false,
+            owner_part_id: 1,
+            display_flags: ShapeDisplayFlags::default(),
+            unique_id: Some("ADKXLEQV".to_string()),
+            raw_params: raw,
+        };
+        let replayed = replay_record(&encode_label(&label, 0), &label.raw_params);
+        assert!(
+            replayed.contains(
+                "|%UTF8%Text=R\u{c4}\u{82}\u{c2}\u{a9}sistance|||Text=R\u{c3}\u{a9}sistance|"
+            ),
+            "{replayed}"
+        );
+
+        label.text = "R2".to_string();
+        let edited = replay_record(&encode_label(&label, 0), &label.raw_params);
+        assert!(edited.contains("|||Text=R2|UniqueID=ADKXLEQV"), "{edited}");
+        assert!(
+            !edited.contains("%UTF8%"),
+            "an ASCII edit drops the twin: {edited}"
+        );
+    }
+
+    #[test]
+    fn a_symbol_with_no_recorded_order_leads_with_the_rectangles() {
+        // Populating the lists directly leaves `primitive_order` empty, which is
+        // what a symbol deserialised from a `write_schlib` call looks like. The
+        // canonical order applies, and it puts the rectangles first so a
+        // solid-filled body sits behind the pins rather than painting over the
+        // pin names inside it.
+        let symbol = Symbol {
+            pins: vec![Pin::new("A", "1", -10, 0, 5, PinOrientation::Left)],
+            rectangles: vec![Rectangle::new(-5, -5, 5, 5)],
+            lines: vec![Line::new(-5, 0, 5, 0)],
+            ..Symbol::new("CANONICAL")
+        };
+        assert!(
+            symbol.primitive_order.is_empty(),
+            "direct construction records no order"
+        );
+
+        let data = encode_data_stream(&symbol).expect("encode");
+        let records = stream_records(&data);
+        let kinds: Vec<&str> = records
+            .iter()
+            .filter_map(|t| t.strip_prefix("|RECORD="))
+            .filter_map(|t| t.split('|').next())
+            .collect();
+        // 1 = header, 14 = rectangle, 13 = line; the pin is binary and does not
+        // appear among the text records.
+        assert_eq!(
+            kinds.iter().position(|k| *k == "14"),
+            Some(1),
+            "the rectangle is the first content record: {kinds:?}"
+        );
+        assert!(
+            kinds.iter().position(|k| *k == "13") > kinds.iter().position(|k| *k == "14"),
+            "the line follows it: {kinds:?}"
         );
     }
 
@@ -1788,6 +2717,7 @@ mod tests {
         symbol.add_pin(Pin::new("B", "2", 15, 0, 5, PinOrientation::Right));
         symbol.add_line(Line::new(-10, 0, 10, 0));
         symbol.add_label(Label {
+            raw_params: Vec::new(),
             x: 0.0,
             y: 12.0,
             text: "hello".to_string(),
@@ -1936,7 +2866,7 @@ mod tests {
         let symbols = vec![&symbol];
         let ole_names = vec!["TEST_SYMBOL".to_string()];
 
-        let data = encode_file_header(&symbols, &ole_names);
+        let data = encode_file_header(&symbols, &ole_names, "ABCDEFGH");
 
         // Should start with length
         assert!(data.len() > 4);
@@ -1952,17 +2882,22 @@ mod tests {
 
     #[test]
     fn test_encode_file_header_long_name() {
+        // LibRef carries the REAL name however long — the golden stores the
+        // full 33-byte Khmer name here against a 31-unit storage. The map from
+        // name to truncated storage lives in the root SectionKeys stream, not
+        // in this list.
         let long_name = "A".repeat(64);
         let symbol = Symbol::new(&long_name);
         let symbols = vec![&symbol];
-        // OLE name is truncated
-        let ole_names = vec!["AAAAAAAAAAAAAAAAAAAAAAAAAAA~001".to_string()];
+        let ole_names = vec!["A".repeat(31)];
 
-        let data = encode_file_header(&symbols, &ole_names);
+        let data = encode_file_header(&symbols, &ole_names, "ABCDEFGH");
 
-        // LibRef should use the OLE-safe name
         let text = String::from_utf8_lossy(&data[4..]);
-        assert!(text.contains("LibRef0=AAAAAAAAAAAAAAAAAAAAAAAAAAA~001"));
+        assert!(
+            text.contains(&format!("LibRef0={long_name}")),
+            "LibRef must hold the untruncated name"
+        );
     }
 
     #[test]
@@ -2009,6 +2944,27 @@ mod tests {
             s.contains("|UniqueID=ABCD1234"),
             "preserve read UniqueID: {s}"
         );
+
+        // Display properties: emitted only when non-default, and each with the
+        // Altium key spelling the reader matches case-insensitively.
+        let mut d = Parameter::new("Rule", "Width");
+        assert!(!encode_parameter(&d, 1).contains("NotAutoPosition"));
+        assert!(!encode_parameter(&d, 1).contains("IsRule"));
+        d.auto_position = false;
+        d.is_rule = true;
+        d.is_system_parameter = true;
+        d.text_horz_anchor = 2;
+        d.text_vert_anchor = 1;
+        let ds = encode_parameter(&d, 1);
+        for key in [
+            "|NotAutoPosition=T",
+            "|IsRule=T",
+            "|IsSystemParameter=T",
+            "|TextHorzAnchor=2",
+            "|TextVertAnchor=1",
+        ] {
+            assert!(ds.contains(key), "emit {key}: {ds}");
+        }
 
         // Non-default EE-meaningful fields are each emitted with the Altium key.
         p.orientation = 2;
@@ -2099,6 +3055,7 @@ mod tests {
     #[test]
     fn test_label_booleans_only_when_true() {
         let mut label = Label {
+            raw_params: Vec::new(),
             x: 0.0,
             y: 0.0,
             text: "R".to_string(),
@@ -2130,6 +3087,7 @@ mod tests {
     #[test]
     fn test_arc_tags_is_not_accessible() {
         let arc = Arc {
+            raw_params: Vec::new(),
             x: 0.0,
             y: 0.0,
             radius: 10.0,
@@ -2154,6 +3112,7 @@ mod tests {
     fn test_colour_omitted_when_zero() {
         // Altium omits Color / AreaColor when 0 (AddNonZero); emits them otherwise.
         let mut arc = Arc {
+            raw_params: Vec::new(),
             x: 0.0,
             y: 0.0,
             radius: 10.0,
@@ -2177,24 +3136,28 @@ mod tests {
             "non-zero arc Color must be emitted"
         );
 
-        let s = encode_text(
-            &Text {
-                x: 0.0,
-                y: 0.0,
-                text: "hi".to_string(),
-                font_id: 1,
-                color: 0,
-                justification: TextJustification::BottomLeft,
-                rotation: 0.0,
-                is_mirrored: false,
-                is_hidden: false,
-                owner_part_id: 1,
-                unique_id: Some("ABCD1234".to_string()),
-            },
-            1,
+        // An IEEE symbol as the IEEESYM golden stores a plain dot: no
+        // Orientation, Mirror or Color at their defaults, and no UniqueID ever.
+        let s = encode_ieee_symbol(&IeeeSymbol::new(1, -10.0, 0.0), 0);
+        assert_eq!(
+            s,
+            "|RECORD=3|IsNotAccesible=T|OwnerPartId=1|Symbol=1|Location.X=-10|ScaleFactor=10|LineWidth=1"
         );
-        assert!(!s.contains("Color="), "zero text Color omitted: {s}");
-        assert!(!s.contains("=F"), "text never emits a boolean =F: {s}");
+        let mut clock = IeeeSymbol::new(3, 0.0, 0.0);
+        clock.rotation = 90.0;
+        clock.is_mirrored = true;
+        assert_eq!(
+            encode_ieee_symbol(&clock, 1),
+            "|RECORD=3|IsNotAccesible=T|IndexInSheet=1|OwnerPartId=1|Symbol=3|ScaleFactor=10|Orientation=1|LineWidth=1|Mirror=T"
+        );
+        let mut locked = IeeeSymbol::new(4, 10.0, 0.0);
+        locked.scale_factor = 20.0;
+        locked.color = 16_711_680;
+        locked.display_flags.graphically_locked = true;
+        assert_eq!(
+            encode_ieee_symbol(&locked, 2),
+            "|RECORD=3|IsNotAccesible=T|IndexInSheet=2|OwnerPartId=1|GraphicallyLocked=T|Symbol=4|Location.X=10|ScaleFactor=20|LineWidth=1|Color=16711680"
+        );
     }
 
     #[test]
@@ -2229,6 +3192,7 @@ mod tests {
         let line = encode_line(&Line::new(-5, 0, 5, 0), 1);
         let poly_line = encode_polyline(
             &Polyline {
+                raw_params: Vec::new(),
                 points: vec![(0.0, 0.0), (5.0, 5.0)],
                 line_width: 1,
                 color: 0,
@@ -2246,6 +3210,7 @@ mod tests {
         );
         let poly = encode_polygon(
             &Polygon {
+                raw_params: Vec::new(),
                 points: vec![(0.0, 0.0), (5.0, 0.0), (2.5, 5.0)],
                 line_width: 1,
                 line_color: 0,
@@ -2262,6 +3227,7 @@ mod tests {
         );
         let arc = encode_arc(
             &Arc {
+                raw_params: Vec::new(),
                 x: 0.0,
                 y: 0.0,
                 radius: 10.0,
@@ -2279,6 +3245,7 @@ mod tests {
         );
         let label = encode_label(
             &Label {
+                raw_params: Vec::new(),
                 x: 0.0,
                 y: 0.0,
                 text: "R".to_string(),
@@ -2368,6 +3335,7 @@ mod tests {
         // non-zero (the FRACSHAPES golden arc carries `Location.X_Frac=5000`
         // with no `Location.X` key); an on-grid zero still emits `=0`.
         let arc = Arc {
+            raw_params: Vec::new(),
             x: 0.05,
             y: 0.05,
             radius: 4.05,
@@ -2397,24 +3365,30 @@ mod tests {
     }
 
     #[test]
-    fn win1252_text_stays_byte_identical_no_utf8_key() {
-        // A pure-Windows-1252 value (the common case, and everything in the golden
-        // library) must emit the plain `Text=` key exactly as before the UTF-8 fix
-        // — no `%UTF8%Text` key, so the record bytes are unchanged (oracle-clean).
-        // `µ` (U+00B5) is representable in Windows-1252, so it stays plain.
+    fn ascii_text_stays_plain_and_non_ascii_promotes() {
+        // The promotion gate is ASCII, not Windows-1252-representability. The
+        // golden's `Résistance_L1` record stores its LibReference and labels as
+        // raw UTF-8 bytes with a `%UTF8%` twin even though `é` has a
+        // single-byte Windows-1252 form, so `µ`/`é` values promote too; only a
+        // pure-ASCII value keeps the bare single key.
         let mut p = Parameter::new("Value", "10\u{00B5}F"); // "10µF"
         p.unique_id = Some("ABCD1234".to_string());
         let s = encode_parameter(&p, 1);
-        assert!(s.contains("|Text=10\u{00B5}F|"), "plain Text key: {s}");
+        let expected = crate::altium::encode_utf8_param_value("10\u{00B5}F");
         assert!(
-            !s.contains("%UTF8%"),
-            "no %UTF8% key for Win-1252 value: {s}"
+            s.contains(&format!("|Text={expected}|")),
+            "plain Text carries the UTF-8 bytes: {s}"
+        );
+        assert!(
+            s.contains(&format!("%UTF8%Text={expected}")),
+            "non-ASCII value gets the %UTF8% twin: {s}"
         );
 
         let mut label = Label {
+            raw_params: Vec::new(),
             x: 0.0,
             y: 0.0,
-            text: "caf\u{00E9}".to_string(), // "café" — all Windows-1252
+            text: "caf\u{00E9}".to_string(), // "café" — non-ASCII, so promoted
             font_id: 1,
             color: 0,
             justification: TextJustification::BottomLeft,
@@ -2426,13 +3400,9 @@ mod tests {
             unique_id: Some("ABCD1234".to_string()),
         };
         let s = encode_label(&label, 1);
-        assert!(s.contains("|Text=caf\u{00E9}|"), "plain Text key: {s}");
-        assert!(
-            !s.contains("%UTF8%"),
-            "no %UTF8% key for Win-1252 label: {s}"
-        );
+        assert!(s.contains("%UTF8%Text="), "café promotes: {s}");
 
-        // And an ASCII label is byte-identical to the pre-change output.
+        // An ASCII label is byte-identical to the historical output.
         label.text = "R".to_string();
         let s = encode_label(&label, 1);
         assert!(s.contains("|Text=R|"), "plain ASCII Text: {s}");
@@ -2440,24 +3410,26 @@ mod tests {
     }
 
     #[test]
-    fn non_win1252_text_emits_only_utf8_key() {
-        // Greek Ω (U+03A9) is NOT in Windows-1252. The writer must emit the value
-        // behind `%UTF8%Text` (never a lossy plain `Text=10k?`), matching Altium.
-        let mut p = Parameter::new("Value", "10k\u{03A9}"); // "10kΩ"
+    fn non_win1252_text_emits_both_keys_carrying_utf8_bytes() {
+        // Greek omega (U+03A9) is NOT in Windows-1252. Altium writes such a value
+        // twice — the plain key holding its raw UTF-8 bytes, plus a `%UTF8%`
+        // companion — and reads the plain one, so emitting only the companion
+        // leaves the value `?`-mangled in Altium.
+        let mut p = Parameter::new("Value", "10k\u{03A9}");
         p.unique_id = Some("ABCD1234".to_string());
         let s = encode_parameter(&p, 1);
-        assert!(s.contains("|%UTF8%Text="), "emit %UTF8%Text key: {s}");
-        // Exactly one Text key, and no lossy plain `Text=...?`.
-        assert!(
-            !s.contains("|Text="),
-            "must not also emit a lossy plain Text: {s}"
-        );
-        // The stored value is the UTF-8 byte sequence mapped one-char-per-byte.
+
+        // Both keys, carrying the same UTF-8 bytes mapped one char per byte.
         let expected = crate::altium::encode_utf8_param_value("10k\u{03A9}");
         assert!(
-            s.contains(&format!("|%UTF8%Text={expected}|")),
-            "stored UTF-8 form: {s}"
+            s.contains(&format!("|Text={expected}|")),
+            "plain Text must carry the UTF-8 bytes: {s}"
         );
+        assert!(
+            s.contains(&format!("|%UTF8%Text={expected}|")),
+            "%UTF8%Text companion: {s}"
+        );
+        assert!(!s.contains("10k?"), "no `?`-mangled value anywhere: {s}");
     }
 
     #[test]
@@ -2476,6 +3448,7 @@ mod tests {
             p.unique_id = Some("WXYZ7890".to_string());
             symbol.add_parameter(p);
             symbol.add_label(Label {
+                raw_params: Vec::new(),
                 x: 0.0,
                 y: 0.0,
                 text: value.to_string(),
@@ -2518,5 +3491,86 @@ mod tests {
                 "designator must survive UTF-8 round-trip intact"
             );
         }
+    }
+
+    #[test]
+    fn a_read_footprint_link_is_replayed_verbatim() {
+        // As the UI stores it: IntegratedModel and DatabaseModel, which this
+        // crate does not model, and no Description while it is empty.
+        let raw: Vec<(String, String)> = [
+            ("RECORD", "45"),
+            ("OwnerIndex", "1"),
+            ("IndexInSheet", "-1"),
+            ("ModelName", "MOUNTING_HOLE"),
+            ("ModelType", "PCBLIB"),
+            ("DatafileCount", "1"),
+            ("ModelDatafileEntity0", "MOUNTING_HOLE"),
+            ("ModelDatafileKind0", "PCBLib"),
+            ("IsCurrent", "T"),
+            ("IntegratedModel", "T"),
+            ("DatabaseModel", "T"),
+            ("UniqueID", "ABCDEFGH"),
+        ]
+        .iter()
+        .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+        .collect();
+        let mut model = FootprintModel::new("MOUNTING_HOLE");
+        model.unique_id = Some("ABCDEFGH".to_string());
+        model.raw_params = raw;
+
+        let verbatim = replay_record(&encode_footprint_model(&model, 1, true), &model.raw_params);
+        assert_eq!(
+            verbatim,
+            "|RECORD=45|OwnerIndex=1|IndexInSheet=-1|ModelName=MOUNTING_HOLE|ModelType=PCBLIB|DatafileCount=1|ModelDatafileEntity0=MOUNTING_HOLE|ModelDatafileKind0=PCBLib|IsCurrent=T|IntegratedModel=T|DatabaseModel=T|UniqueID=ABCDEFGH"
+        );
+
+        // A name-only link as Altium stores it — no datafile group — keeps
+        // that shape; giving it a path adds the whole group.
+        let raw: Vec<(String, String)> = [
+            ("RECORD", "45"),
+            ("OwnerIndex", "4"),
+            ("IndexInSheet", "-1"),
+            ("ModelName", "SOIC-8-WIDE"),
+            ("ModelType", "PCBLIB"),
+            ("UniqueID", "IQFACTUZ"),
+        ]
+        .iter()
+        .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+        .collect();
+        let mut plain = FootprintModel::new("SOIC-8-WIDE");
+        plain.unique_id = Some("IQFACTUZ".to_string());
+        plain.raw_params = raw;
+        assert_eq!(
+            replay_record(&encode_footprint_model(&plain, 4, false), &plain.raw_params),
+            "|RECORD=45|OwnerIndex=4|IndexInSheet=-1|ModelName=SOIC-8-WIDE|ModelType=PCBLIB|UniqueID=IQFACTUZ"
+        );
+        plain.library_path = Some("Lib.PcbLib".to_string());
+        assert_eq!(
+            replay_record(&encode_footprint_model(&plain, 4, false), &plain.raw_params),
+            "|RECORD=45|OwnerIndex=4|IndexInSheet=-1|ModelName=SOIC-8-WIDE|ModelType=PCBLIB|UniqueID=IQFACTUZ|DatafileCount=1|ModelDatafile0=Lib.PcbLib|ModelDatafileEntity0=SOIC-8-WIDE|ModelDatafileKind0=PCBLib"
+        );
+
+        // No longer current, a description given: the unmodelled keys stay,
+        // IsCurrent goes, the description is appended.
+        model.description = "M3".to_string();
+        let edited = replay_record(&encode_footprint_model(&model, 1, false), &model.raw_params);
+        assert_eq!(
+            edited,
+            "|RECORD=45|OwnerIndex=1|IndexInSheet=-1|ModelName=MOUNTING_HOLE|ModelType=PCBLIB|DatafileCount=1|ModelDatafileEntity0=MOUNTING_HOLE|ModelDatafileKind0=PCBLib|IntegratedModel=T|DatabaseModel=T|UniqueID=ABCDEFGH|Description=M3"
+        );
+    }
+    /// A replayed header that names only some keys still writes every
+    /// canonical key: the ones the replay list omits are appended, never
+    /// dropped.
+    #[test]
+    fn a_partial_header_replay_still_writes_every_canonical_key() {
+        let mut symbol = Symbol::new("PARTIAL_HEADER");
+        symbol.header_params = vec![("LibReference".to_string(), "PARTIAL_HEADER".to_string())];
+        let data = encode_data_stream(&symbol).expect("encode");
+        let text = String::from_utf8_lossy(&data);
+        assert!(
+            text.contains("PartCount="),
+            "canonical keys the replay omits are appended: {text}"
+        );
     }
 }

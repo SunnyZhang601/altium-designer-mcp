@@ -1,7 +1,7 @@
 # Sample libraries
 
 Altium-authored reference libraries — the ground truth for the reader and round-trip
-tests. **Generated on-site, never hand-edited:** run `scripts\Generate-Samples.ps1`,
+tests. **Generated on-site, not hand-edited** (one exception, in `manual/` — see below): run `scripts\Generate-Samples.ps1`,
 which drives a real Altium Designer (via `altium\generate\GenerateSamples.pas`) to
 author the libraries, then moves them here to be committed.
 
@@ -10,6 +10,120 @@ so CI can read them without Altium. Regenerate and re-commit whenever the author
 
 > Building these is iterative — generate, read back with the Rust tests, extend the
 > primitive set, regenerate. Coverage grows component by component.
+
+[`COVERAGE.md`](COVERAGE.md) is the map of what each fixture exercises, the enrichment
+backlog, and the Altium behaviours verified not to persist.
+
+[`golden_expectations.json`](golden_expectations.json) holds the component names and
+per-component primitive counts this repo's reader finds in the two generated goldens, in
+the shape `scripts\Verify-Libraries.ps1 -Expect` consumes — so an on-site Altium can
+assert it resolves exactly the same, not merely that the files open. It is generated,
+not hand-edited: `tests/golden_expectations.rs` fails when it drifts, and
+`UPDATE_GOLDEN_EXPECTATIONS=1 cargo test --test golden_expectations` refreshes it after
+a regeneration. Two Altium behaviours are baked in (evidence in
+[`../README.md`](../README.md) § library iterators): the five damaged i18n names are
+excused via `fixture_inconsistent` (Altium decodes those bytes differently by design),
+and the parameter counts predict Altium's iterator, which skips a hidden `Comment`.
+
+## NEVER open-and-save a committed golden in Altium
+
+An AD load+save cycle silently damages fixtures (measured 2026-08-16 by resaving
+`symbols.SchLib` through AD and diffing all 84 symbols with our reader):
+
+- the five known-damaged i18n symbols (`_JV`, `_BN`, `_CR`, `_IU`, `_SB`) degrade
+  *further* — AD's reader is the broken component, and each cycle compounds it;
+- `ꆈꌠ_YI` (Yi) is a sixth, slower victim: intact in the committed golden, but one
+  load+save turns its pin/label/parameter texts to mojibake;
+- `PARAMS` loses a parameter value outright: `100nF` comes back as `*` — not an
+  encoding issue, AD's own parameter handling.
+
+Regeneration via `Generate-Samples.ps1` is fine (it authors from scratch); opening a
+committed golden in the AD UI to "just fix one thing" and saving is not. Hand-fix work
+happens in a fresh library committed under `manual/` instead.
+
+## `manual/` — hand-authored, do NOT regenerate
+
+`Generate-Samples.ps1` cannot produce everything: a few properties exist only in Altium's
+UI and are not exposed on the scripting interfaces, so no DelphiScript can author them.
+Those live in `manual/`, made by hand and committed as-is.
+
+**`Generate-Samples.ps1` never touches this folder** — it only copies its own outputs over
+the two top-level libraries. Equally, nothing regenerates these files: if one is deleted,
+it has to be rebuilt by hand from the recipe below.
+
+### `manual/i18n5.SchLib`
+
+Five symbols, one per script whose *generated* fixture is internally inconsistent
+(`FIXTURE_INCONSISTENT` in `tests/golden_fidelity.rs`): Javanese `ꦗꦮ_JV`, Bengali
+`রোধক_BN`, Cherokee `ᏣᎳᎩ_CR`, Inuktitut `ᐃᓄᒃᑎᑐᑦ_IU` and beyond-BMP Han `𠮷野_SB`. Each
+carries its word in the component name, the description suffix, one pin's name, a text
+label and a `Value` parameter — the same shape as the generated i18n symbols.
+
+Hand-authored in the AD24 UI (2026-08-16) because that is the only route that bypasses
+AD's broken decode of these byte sequences (four scripted attempts failed differently —
+see the `DOCUMENTED NEGATIVE` in `GenerateSamples.pas`). The file is also ground truth
+for the **UI-authoring convention**: plain record keys are ANSI `?` husks, the real names
+live in `%UTF8%` twins as raw UTF-8 bytes, the CFB storage names are real UTF-16
+(surrogate pair included), and pin names travel only in `PinWideText`.
+
+**To rebuild it:** File → New → Library → Schematic Library; for each of the five,
+rename the component by pasting the name, paste the description, place one pin
+(designator `1`) with the word pasted as its Name, place a text string with the word,
+and add a parameter `Value` with the word. Save ONCE as `i18n5.SchLib` and never re-open
+it in Altium (see the load+save warning above).
+
+### `manual/identifier.PcbLib`
+
+One footprint, `BODY_IDENT`, with two extruded 3D bodies authored in the AD24 UI
+(2026-08-16). It settles three things no scripted fixture could:
+
+- **`IDENTIFIER` encoding**: comma-separated decimal Unicode code points — `BodyA` is
+  `66,111,100,121,65` and `µΩ电` is `181,937,30005`.
+- **UI-authored extruded bodies carry a `MODEL.*` group** (stable `MODELID`, checksum, real
+  `MODEL.2D.X/Y` placement, `MODEL.MODELTYPE=0` + `MODEL.EXTRUDED.MINZ/MAXZ`, and
+  `TEXTURESIZEX/Y=0.0001mil`), unlike script-authored ones, which carry none.
+- **Per-save ID stability**: the library was saved twice from one unchanged in-memory state,
+  and the twin files differ only in `DATE`/`TIME`/viewport — `MODELID`, `MODEL.CHECKSUM`,
+  `ITEMGUID`, `REVISIONGUID` are stable, which is what let `golden_fidelity` stop excusing
+  them. (The twin also showed AD reorders bodies between saves — match bodies by identifier,
+  never index.)
+
+**To rebuild it:** new PCB Library; rename the component `BODY_IDENT`; place two extruded
+3D bodies (Place → 3D Body, type Extruded, draw a rectangle each); set Identifier `BodyA`
+with Overall Height 1mm on one and Identifier `µΩ电` with 0.5mm on the other; save ONCE.
+
+### `manual/parameters.SchLib`
+
+One component, `PARAMPROPS`, carrying three `RECORD=41` parameters that between them cover
+the parameter properties the generated golden cannot reach:
+
+| Parameter | Carries | Why it is here |
+|-----------|---------|----------------|
+| `TestParam` = `123` | `Justification=7`, `NotAutoPosition=T` | the generated golden omits both, because Altium omits a property left at its default |
+| `Rule` | `Text=UNIONINDEX=0¦RULEKIND=Width¦…`, `Description`, `IsHidden=T` | a PCB design-rule directive parameter — proves a rule is identified by `Name=Rule` plus that payload, **not** by an `IsRule` flag |
+| `Comment` = `*` | the default set only | the control: it shows which keys Altium omits when nothing is changed |
+
+**To rebuild it:**
+
+1. **File → New → Library → Schematic Library**, save as `parameters.SchLib`.
+2. Rename the component to `PARAMPROPS` and draw anything (a rectangle and one pin);
+   the graphics are irrelevant.
+3. Add a parameter `TestParam` = `123`, **visible**. In its Properties:
+   - **untick Autoposition** — ticked is the default and Altium then writes nothing;
+   - set **Justification** to top-centre (the up arrow), which stores `Justification=7`.
+4. Add a second parameter via the parameter list's **Add → Rule**, choose a
+   *Max-Min Width* rule, leave the widths at 10 mil, and click **OK** (not Cancel — a
+   cancelled dialog writes nothing).
+5. Save, and copy the file here.
+
+**To check it before committing** — prints every key Altium actually wrote per parameter:
+
+```powershell
+python -c "import olefile,re,sys;f=olefile.OleFileIO(sys.argv[1]);d=b''.join(f.openstream('/'.join(e)).read() for e in f.listdir() if e[-1]=='Data');r=[x for x in re.split(rb'(?=\|RECORD=)',d) if b'RECORD=41' in x];[print('---',sorted(set(k.decode() for k in re.findall(rb'\|([A-Za-z0-9._%]+)=',x)))) for x in r]" scripts\samples\manual\parameters.SchLib
+```
+
+`NotAutoPosition` and `Justification` must both appear on `TestParam`, or step 3 did not
+take.
 
 ## Contents
 

@@ -306,7 +306,108 @@ begin
                                   PCBM_BoardRegisteration, Body.I_ObjectAddress);
 end;
 
+{ Extruded body whose outline is OFF-GRID by raw internal units (1 unit =
+  0.0001 mil): AD24 keeps the exact units through save (2026-09-01 enrich
+  probe), so the golden pins the reader's full outline precision. Same proven
+  contour route as AddExtrudedBox. }
+procedure AddExtrudedBoxOffGrid(Comp : IPCB_LibComponent);
+var
+    Body : IPCB_ComponentBody;
+    Cont : IPCB_Contour;
+begin
+    Body := PCBServer.PCBObjectFactory(eComponentBodyObject, eNoDimension, eCreate_Default);
+    if Body = nil then Exit;
+    Body.BodyProjection := eBoardSide_Top;
+    Body.Layer          := LayerUtils.MechanicalLayer(13);
+    Body.StandoffHeight := 0;
+    Body.OverallHeight  := MilsToCoord(40);
+    Cont := Body.MainContour.Replicate;
+    Cont.Count := 4;
+    Cont.X[1] := MilsToCoord(-50) + 1;   Cont.Y[1] := MilsToCoord(-25) + 3;
+    Cont.X[2] := MilsToCoord(50) + 7;    Cont.Y[2] := MilsToCoord(-25) - 1;
+    Cont.X[3] := MilsToCoord(50) - 3;    Cont.Y[3] := MilsToCoord(25) + 9;
+    Cont.X[4] := MilsToCoord(-50) - 9;   Cont.Y[4] := MilsToCoord(25) - 7;
+    Body.SetOutlineContour(Cont);
+    Comp.AddPCBObject(Body);
+    PCBServer.SendMessageToRobots(Comp.I_ObjectAddress, c_Broadcast,
+                                  PCBM_BoardRegisteration, Body.I_ObjectAddress);
+end;
+
 { ==== PcbLib COVERAGE-ENRICHMENT HELPERS (verified AD24 names) ============== }
+
+{ SMD pad on an explicit layer (batch 5): the only pad helper whose layer is a
+  parameter, for a pad on a mechanical layer past the legacy sixteen. }
+procedure AddPadOnLayer(Comp : IPCB_LibComponent; X : Integer; Y : Integer;
+                        Nm : String; Lay : TLayer);
+var
+    Pad : IPCB_Pad;
+begin
+    Pad := PCBServer.PCBObjectFactory(ePadObject, eNoDimension, eCreate_Default);
+    if Pad = nil then Exit;
+    Pad.Name     := Nm;
+    Pad.X        := MilsToCoord(X);
+    Pad.Y        := MilsToCoord(Y);
+    Pad.Mode     := ePadMode_Simple;
+    Pad.Layer    := Lay;
+    Pad.HoleSize := 0;
+    Pad.TopShape := eRectangular;
+    Pad.TopXSize := MilsToCoord(40);
+    Pad.TopYSize := MilsToCoord(40);
+    Comp.AddPCBObject(Pad);
+    PCBServer.SendMessageToRobots(Comp.I_ObjectAddress, c_Broadcast,
+                                  PCBM_BoardRegisteration, Pad.I_ObjectAddress);
+end;
+
+{ Extruded body on an explicit layer (batch 5), otherwise AddExtrudedBox. }
+procedure AddExtrudedBoxOnLayer(Comp : IPCB_LibComponent; CX : Integer; CY : Integer;
+                                WMils : Integer; HMils : Integer; OverallMils : Integer;
+                                Lay : TLayer);
+var
+    Body  : IPCB_ComponentBody;
+    Cont  : IPCB_Contour;
+    HalfW : Integer;
+    HalfH : Integer;
+begin
+    HalfW := WMils div 2;
+    HalfH := HMils div 2;
+    Body := PCBServer.PCBObjectFactory(eComponentBodyObject, eNoDimension, eCreate_Default);
+    if Body = nil then Exit;
+    Body.BodyProjection := eBoardSide_Top;
+    Body.Layer          := Lay;
+    Body.StandoffHeight := 0;
+    Body.OverallHeight  := MilsToCoord(OverallMils);
+    Cont := Body.MainContour.Replicate;
+    Cont.Count := 4;
+    Cont.X[1] := MilsToCoord(CX - HalfW);  Cont.Y[1] := MilsToCoord(CY - HalfH);
+    Cont.X[2] := MilsToCoord(CX + HalfW);  Cont.Y[2] := MilsToCoord(CY - HalfH);
+    Cont.X[3] := MilsToCoord(CX + HalfW);  Cont.Y[3] := MilsToCoord(CY + HalfH);
+    Cont.X[4] := MilsToCoord(CX - HalfW);  Cont.Y[4] := MilsToCoord(CY + HalfH);
+    Body.SetOutlineContour(Cont);
+    Comp.AddPCBObject(Body);
+    PCBServer.SendMessageToRobots(Comp.I_ObjectAddress, c_Broadcast,
+                                  PCBM_BoardRegisteration, Body.I_ObjectAddress);
+end;
+
+{ Body whose STEP model is REFERENCED, not embedded (batch 5): IPCB_Model.Embed
+  (a documented Boolean member) cleared before the model is attached, so the
+  golden pins the form a UI-authored library showed for a non-embedded model
+  (empty MODELID, MODEL.EMBED=FALSE, MODEL.NAME carrying the path). }
+procedure AddBodyStepRef(Comp : IPCB_LibComponent; AFilePath : String);
+var
+    Body  : IPCB_ComponentBody;
+    Model : IPCB_Model;
+begin
+    Body := PCBServer.PCBObjectFactory(eComponentBodyObject, eNoDimension, eCreate_Default);
+    if Body = nil then Exit;
+    Model := Body.ModelFactory_FromFilename(AFilePath, False);
+    if Model = nil then Exit;
+    Model.Embed := False;
+    Body.SetState_FromModel;
+    Body.Model := Model;
+    Comp.AddPCBObject(Body);
+    PCBServer.SendMessageToRobots(Comp.I_ObjectAddress, c_Broadcast,
+                                  PCBM_BoardRegisteration, Body.I_ObjectAddress);
+end;
 
 { TrueType text with Bold + Italic + Mirror. VERIFIED IPCB_Text members:
   UseTTFonts (True=TrueType), FontName, Bold, Italic, MirrorFlag. }
@@ -330,6 +431,29 @@ begin
     Comp.AddPCBObject(Txt);
     PCBServer.SendMessageToRobots(Comp.I_ObjectAddress, c_Broadcast,
                                   PCBM_BoardRegisteration, Txt.I_ObjectAddress);
+end;
+
+{ A pad in a jumper group. VERIFIED: JumperID is present in Advpcb.dll (the native
+  Delphi engine), which is the test that decides whether a name resolves in
+  DelphiScript — a Set* counterpart is not required and its absence proves nothing. }
+procedure AddPadJumper(Comp : IPCB_LibComponent; X : Integer; Y : Integer;
+                       Nm : String; Jumper : Integer);
+var Pad : IPCB_Pad;
+begin
+    Pad := PCBServer.PCBObjectFactory(ePadObject, eNoDimension, eCreate_Default);
+    if Pad = nil then Exit;
+    Pad.Name     := Nm;
+    Pad.X        := MilsToCoord(X);
+    Pad.Y        := MilsToCoord(Y);
+    Pad.TopXSize := MilsToCoord(60);
+    Pad.TopYSize := MilsToCoord(60);
+    Pad.TopShape := eRounded;
+    Pad.HoleSize := MilsToCoord(30);
+    Pad.Layer    := eMultiLayer;
+    Pad.JumperID := Jumper;
+    Comp.AddPCBObject(Pad);
+    PCBServer.SendMessageToRobots(Comp.I_ObjectAddress, c_Broadcast,
+                                  PCBM_BoardRegisteration, Pad.I_ObjectAddress);
 end;
 
 { A board-cutout region. VERIFIED: IPCB_Region.Kind : TRegionKind, direct
@@ -449,6 +573,76 @@ begin
                                   PCBM_BoardRegisteration, Txt.I_ObjectAddress);
 end;
 
+{ A second barcode whose every sizing field differs from AddTextBarcode's, so
+  diffing the two records isolates each field's offset by its authored value.
+  All ten BarCode* names are present in Advpcb.dll (the native Delphi engine),
+  which is the check that matters — a name found only in the Altium.*.dll .NET
+  assemblies (TextJustification, for one) does NOT resolve in DelphiScript. }
+procedure AddTextBarcode2(Comp : IPCB_LibComponent; X : Integer; Y : Integer;
+                          Content : String);
+var Txt : IPCB_Text;
+begin
+    Txt := PCBServer.PCBObjectFactory(eTextObject, eNoDimension, eCreate_Default);
+    if Txt = nil then Exit;
+    Txt.XLocation := MilsToCoord(X);
+    Txt.YLocation := MilsToCoord(Y);
+    Txt.Layer     := eTopOverlay;
+    Txt.Size      := MilsToCoord(60);
+    Txt.Rotation  := 0.0;
+    Txt.Text      := Content;
+    Txt.TextKind          := eText_BarCode;
+    Txt.BarCodeKind       := eBarCode128;
+    Txt.BarCodeFullWidth  := MilsToCoord(600);
+    Txt.BarCodeFullHeight := MilsToCoord(150);
+    Txt.BarCodeXMargin    := MilsToCoord(30);
+    Txt.BarCodeYMargin    := MilsToCoord(40);
+    Txt.BarCodeMinWidth   := MilsToCoord(5);
+    Txt.BarCodeInverted   := True;
+    Txt.BarCodeShowText   := True;
+    Txt.BarCodeFontName   := 'Courier New';
+    Comp.AddPCBObject(Txt);
+    PCBServer.SendMessageToRobots(Comp.I_ObjectAddress, c_Broadcast,
+                                  PCBM_BoardRegisteration, Txt.I_ObjectAddress);
+end;
+
+{ Barcode variants that differ from AddTextBarcode2 in exactly ONE field each, so
+  the remaining offsets can be isolated: BC3 turns Inverted off (@159), BC4 turns
+  ShowText off (@225). Everything else is held identical on purpose.
+
+  DOCUMENTED NEGATIVE: BarCodeRenderMode and BarCodeMinWidth are not recoverable this
+  way. A BC5 varying only RenderMode moved no byte except @115, which reads 4/3/2/1
+  across the barcodes in creation order — an ordinal, not the property. MinWidth@153
+  reads 39604/88235 against an authored 5 mil, so Altium computes it from the content
+  and width rather than storing what was asked for. }
+procedure AddTextBarcodeVariant(Comp : IPCB_LibComponent; X : Integer; Y : Integer;
+                                Content : String; Inverted : Boolean;
+                                ShowText : Boolean; RenderMode : Integer);
+var Txt : IPCB_Text;
+begin
+    Txt := PCBServer.PCBObjectFactory(eTextObject, eNoDimension, eCreate_Default);
+    if Txt = nil then Exit;
+    Txt.XLocation := MilsToCoord(X);
+    Txt.YLocation := MilsToCoord(Y);
+    Txt.Layer     := eTopOverlay;
+    Txt.Size      := MilsToCoord(60);
+    Txt.Rotation  := 0.0;
+    Txt.Text      := Content;
+    Txt.TextKind          := eText_BarCode;
+    Txt.BarCodeKind       := eBarCode128;
+    Txt.BarCodeFullWidth  := MilsToCoord(600);
+    Txt.BarCodeFullHeight := MilsToCoord(150);
+    Txt.BarCodeXMargin    := MilsToCoord(30);
+    Txt.BarCodeYMargin    := MilsToCoord(40);
+    Txt.BarCodeMinWidth   := MilsToCoord(5);
+    Txt.BarCodeInverted   := Inverted;
+    Txt.BarCodeShowText   := ShowText;
+    Txt.BarCodeFontName   := 'Courier New';
+    Txt.BarCodeRenderMode := RenderMode;
+    Comp.AddPCBObject(Txt);
+    PCBServer.SendMessageToRobots(Comp.I_ObjectAddress, c_Broadcast,
+                                  PCBM_BoardRegisteration, Txt.I_ObjectAddress);
+end;
+
 { Inverted (knockout) TrueType text in an inverted rectangle. Names VERIFIED from
   the AD24 IDE dump: Inverted, UseInvertedRectangle, InvertedTTTextBorder,
   TTFOffsetFromInvertedRect. }
@@ -469,6 +663,11 @@ begin
     Txt.Inverted   := True;
     Txt.UseInvertedRectangle := True;
     Txt.InvertedTTTextBorder := MilsToCoord(10);
+    { Explicit inverted-rect size. AD computes it lazily from the rendered
+      text extent, so a headless save can catch it at 0 (the 2026-09-01
+      regeneration did) — author it deterministically instead. }
+    Txt.InvRectWidth  := MilsToCoord(120);
+    Txt.InvRectHeight := MilsToCoord(70);
     Comp.AddPCBObject(Txt);
     PCBServer.SendMessageToRobots(Comp.I_ObjectAddress, c_Broadcast,
                                   PCBM_BoardRegisteration, Txt.I_ObjectAddress);
@@ -496,18 +695,180 @@ begin
                                   PCBM_BoardRegisteration, Body.I_ObjectAddress);
 end;
 
+{ Region carrying the descriptive properties a plain copper pour never sets:
+  a name, a union index and an explicit Kind. Every other region in the
+  library is an unnamed copper box, so these reader arms have no golden
+  coverage, and the numeric value behind each TRegionKind is only pinned by
+  authoring one region per kind.
+  DOCUMENTED NEGATIVE (AD24): ArcResolution is NOT on IPCB_Region —
+  `Rgn.ArcResolution` is a compile error, "Undeclared identifier". The name
+  is real in the scripting identifier table, but on another interface. }
+procedure AddRegionNamed(Comp : IPCB_LibComponent; X1 : Integer; Y1 : Integer;
+                         X2 : Integer; Y2 : Integer; RName : String;
+                         K : TRegionKind);
+var
+    Rgn  : IPCB_Region;
+    Cont : IPCB_Contour;
+begin
+    Rgn := PCBServer.PCBObjectFactory(eRegionObject, eNoDimension, eCreate_Default);
+    if Rgn = nil then Exit;
+    Rgn.Layer         := eTopLayer;
+    Rgn.Name          := RName;
+    Rgn.Kind          := K;
+    Rgn.UnionIndex    := 7;
+    Cont := Rgn.MainContour.Replicate;
+    Cont.Count := 4;
+    Cont.X[1] := MilsToCoord(X1);  Cont.Y[1] := MilsToCoord(Y1);
+    Cont.X[2] := MilsToCoord(X2);  Cont.Y[2] := MilsToCoord(Y1);
+    Cont.X[3] := MilsToCoord(X2);  Cont.Y[3] := MilsToCoord(Y2);
+    Cont.X[4] := MilsToCoord(X1);  Cont.Y[4] := MilsToCoord(Y2);
+    Rgn.SetOutlineContour(Cont);
+    Comp.AddPCBObject(Rgn);
+    PCBServer.SendMessageToRobots(Comp.I_ObjectAddress, c_Broadcast,
+                                  PCBM_BoardRegisteration, Rgn.I_ObjectAddress);
+end;
+
+{ Component body with a non-zero standoff, cavity height, colour and opacity.
+  The plain AddExtrudedBox sits flat in the default grey, so all four are
+  unexercised by any other footprint. }
+procedure AddBodyProps(Comp : IPCB_LibComponent; CX : Integer; CY : Integer;
+                       WMils : Integer; HMils : Integer);
+var
+    Body  : IPCB_ComponentBody;
+    Cont  : IPCB_Contour;
+    HalfW : Integer;
+    HalfH : Integer;
+begin
+    HalfW := WMils div 2;
+    HalfH := HMils div 2;
+    Body := PCBServer.PCBObjectFactory(eComponentBodyObject, eNoDimension, eCreate_Default);
+    if Body = nil then Exit;
+    Body.BodyProjection := eBoardSide_Top;
+    Body.Layer          := LayerUtils.MechanicalLayer(13);
+    Body.StandoffHeight := MilsToCoord(10);
+    Body.OverallHeight  := MilsToCoord(50);
+    Body.CavityHeight   := MilsToCoord(5);
+    Body.BodyColor3D    := $0000FF;           { red, against the grey default }
+    Body.BodyOpacity3D  := 0.5;
+    Cont := Body.MainContour.Replicate;
+    Cont.Count := 4;
+    Cont.X[1] := MilsToCoord(CX - HalfW);  Cont.Y[1] := MilsToCoord(CY - HalfH);
+    Cont.X[2] := MilsToCoord(CX + HalfW);  Cont.Y[2] := MilsToCoord(CY - HalfH);
+    Cont.X[3] := MilsToCoord(CX + HalfW);  Cont.Y[3] := MilsToCoord(CY + HalfH);
+    Cont.X[4] := MilsToCoord(CX - HalfW);  Cont.Y[4] := MilsToCoord(CY + HalfH);
+    Body.SetOutlineContour(Cont);
+    Comp.AddPCBObject(Body);
+    PCBServer.SendMessageToRobots(Comp.I_ObjectAddress, c_Broadcast,
+                                  PCBM_BoardRegisteration, Body.I_ObjectAddress);
+end;
+
+{ Via with manual mask expansions, set through TPadCache (GetState_Cache ->
+  SetState_Cache) — the same route the pad mask helper uses.
+  DOCUMENTED NEGATIVE (AD24): the DIRECT setters
+  Via.SolderMaskExpansionMode / .SolderMaskExpansion / .PasteMaskExpansionMode /
+  .PasteMaskExpansion compile, then take AD24 down with a native access
+  violation in ScriptingSystem.DLL, exactly like the pad thermal-relief
+  setters. Always go through the cache. }
+procedure AddViaMask(Comp : IPCB_LibComponent; X : Integer; Y : Integer;
+                     PadDia : Integer; HoleDia : Integer);
+var
+    Via   : IPCB_Via;
+    Cache : TPadCache;
+begin
+    Via := PCBServer.PCBObjectFactory(eViaObject, eNoDimension, eCreate_Default);
+    if Via = nil then Exit;
+    Via.X         := MilsToCoord(X);
+    Via.Y         := MilsToCoord(Y);
+    Via.Size      := MilsToCoord(PadDia);
+    Via.HoleSize  := MilsToCoord(HoleDia);
+    Via.LowLayer  := eTopLayer;
+    Via.HighLayer := eBottomLayer;
+    Via.Mode      := ePadMode_Simple;
+    Cache := Via.GetState_Cache;
+    Cache.SolderMaskExpansionValid := eCacheManual;
+    Cache.SolderMaskExpansion      := MilsToCoord(7);
+    Cache.PasteMaskExpansionValid  := eCacheManual;
+    Cache.PasteMaskExpansion       := MilsToCoord(3);
+    Via.SetState_Cache             := Cache;
+    Comp.AddPCBObject(Via);
+    PCBServer.SendMessageToRobots(Comp.I_ObjectAddress, c_Broadcast,
+                                  PCBM_BoardRegisteration, Via.I_ObjectAddress);
+end;
+
+{ Stroke text selecting a non-default stroke font and a non-default stroke
+  width. Every other stroke text in the library leaves both at the factory
+  value, so the reader's font-id arm (geometry @25, only surfaced above 1) and
+  the stroke-width arm have no golden coverage. FontID 2 = Sans Serif,
+  3 = Serif. }
+procedure AddTextStrokeFont(Comp : IPCB_LibComponent; X : Integer; Y : Integer;
+                            Content : String; Height : Integer; AFontID : Integer;
+                            WidthMils : Integer);
+var
+    Txt : IPCB_Text;
+begin
+    Txt := PCBServer.PCBObjectFactory(eTextObject, eNoDimension, eCreate_Default);
+    if Txt = nil then Exit;
+    Txt.XLocation  := MilsToCoord(X);
+    Txt.YLocation  := MilsToCoord(Y);
+    Txt.Layer      := eTopOverlay;
+    Txt.Size       := MilsToCoord(Height);
+    Txt.Rotation   := 0;
+    Txt.UseTTFonts := False;      { stroke, not TrueType }
+    Txt.FontID     := AFontID;
+    Txt.Width      := MilsToCoord(WidthMils);
+    Txt.Text       := Content;
+    Comp.AddPCBObject(Txt);
+    PCBServer.SendMessageToRobots(Comp.I_ObjectAddress, c_Broadcast,
+                                  PCBM_BoardRegisteration, Txt.I_ObjectAddress);
+end;
+
+{ Slotted through-hole pad with a rotated slot and no plating. Every hole in the
+  library is unrotated and plated, so HoleRotation and Plated read nothing but
+  their defaults. }
+procedure AddPadSlotRotated(Comp : IPCB_LibComponent; X : Integer; Nm : String);
+var
+    Pad : IPCB_Pad;
+begin
+    Pad := PCBServer.PCBObjectFactory(ePadObject, eNoDimension, eCreate_Default);
+    if Pad = nil then Exit;
+    Pad.X            := MilsToCoord(X);
+    Pad.Y            := 0;
+    Pad.Name         := Nm;
+    Pad.Layer        := eMultiLayer;
+    Pad.TopShape     := eRounded;
+    Pad.TopXSize     := MilsToCoord(70);
+    Pad.TopYSize     := MilsToCoord(50);
+    Pad.HoleType     := eSlotHole;
+    Pad.HoleSize     := MilsToCoord(20);
+    Pad.HoleWidth    := MilsToCoord(40);
+    Pad.HoleRotation := 30;
+    Pad.Plated       := False;
+    Comp.AddPCBObject(Pad);
+    PCBServer.SendMessageToRobots(Comp.I_ObjectAddress, c_Broadcast,
+                                  PCBM_BoardRegisteration, Pad.I_ObjectAddress);
+end;
+
 { ---- PcbLib authoring -------------------------------------------------------
 
   Footprints: PAD_SHAPES, PAD_HOLES, VIAS, TRACKS, ARCS, REGIONS, FILLS, TEXT_STROKE,
-  TEXT_WIN1252. Each new footprint is wrapped in try/except so one failing primitive
+  TEXT_WIN1252, TEXT_LONG. Each new footprint is wrapped in try/except so one failing primitive
   doesn't abort the whole script (a missing footprint then shows up as a failed read
   test). Blind/buried vias, stacks and 3D bodies follow in later batches. }
 procedure GeneratePcbLib;
 var
-    Lib   : IPCB_Library;
-    DefFP : IPCB_LibComponent;
-    Comp  : IPCB_LibComponent;
-    Doc   : IServerDocument;
+    Lib      : IPCB_Library;
+    DefFP    : IPCB_LibComponent;
+    Comp     : IPCB_LibComponent;
+    Doc      : IServerDocument;
+    LongText : String;
+    I        : Integer;
+    Pad      : IPCB_Pad;
+    Cache    : TPadCache;
+    Trk      : IPCB_Track;
+    Via      : IPCB_Via;
+    Arc      : IPCB_Arc;
+    Fill     : IPCB_Fill;
+    M20      : Integer;
 begin
     // CreateNewDocumentFromDocumentKind creates + focuses a blank doc and returns its
     // IServerDocument (Client.OpenNewDocumentOfKind, used in the v0, does not exist).
@@ -655,6 +1016,372 @@ begin
     except
     end;
 
+    // TEXT_LONG: a text longer than 255 characters. Block 1 of a Text record is a Pascal
+    // SHORT string, so anything past 255 bytes cannot be stored inline and Altium has to
+    // use the out-of-line /{component}/WideStrings stream. Every other text in these
+    // samples is short and Win1252-representable, and Altium duplicates those inline, so
+    // the reader's WideStrings path has never been proven against a real Altium file
+    // (issue #314). 260 'A's plus a marker tail makes the boundary unambiguous.
+    //
+    // DOCUMENTED NEGATIVE (do not retry): authoring genuine Unicode via Chr(N) for N > 255
+    // does NOT work in AD24 DelphiScript — the codepoint is truncated modulo 256. A first
+    // attempt with Chr(937)/Chr(956)/Chr(1050)/Chr(20013) (Greek omega and mu, Cyrillic,
+    // CJK) produced bytes 169, 188, 26 and 45 instead: '(c)', '1/4' and two control
+    // characters. Non-Win1252 text is therefore not authorable by script here.
+    try
+        Comp := PCBServer.CreatePCBLibComp;
+        Comp.Name := 'TEXT_LONG';
+        Lib.RegisterComponent(Comp);
+        PCBServer.PreProcess;
+        LongText := '';
+        for I := 1 to 260 do
+            LongText := LongText + 'A';
+        AddText(Comp, 0, 0, LongText + '_END', 50, 0, eTopOverlay);
+        // A short one alongside it, so the component exercises both paths at once.
+        AddText(Comp, 0, 100, 'SHORT', 50, 0, eTopOverlay);
+        PCBServer.PostProcess;
+    except
+    end;
+
+    // UNINAME: a footprint whose NAME is outside Windows-1252 (issue #327). The
+    // SchLib side of this is UNINAME's symbol counterpart; both are ground truth for
+    // which encoding Altium uses for the storage name, the Library/Data component
+    // list and the component's own name block. Literal, because Chr(N) truncates
+    // modulo 256 (see TEXT_LONG).
+    try
+        Comp := PCBServer.CreatePCBLibComp;
+        Comp.Name := 'Резистор_0402';
+        Lib.RegisterComponent(Comp);
+        PCBServer.PreProcess;
+        AddPadFull(Comp, -25, 0, 0, eRounded, 60, 40, '1');
+        AddPadFull(Comp,  25, 0, 0, eRounded, 60, 40, '2');
+        PCBServer.PostProcess;
+    except
+    end;
+
+    // PADMASK: manual paste / solder-mask expansion on a pad — one of the fields the
+    // fixture map lists as exercised only by a self-round-trip.
+    //
+    // These are NOT direct properties. They live behind the pad's cache record, and
+    // the enum is eCacheManual (there is no eMaskExpansion_* identifier). Only names
+    // verified against shipping AD24 scripts are used here, because DelphiScript
+    // resolves identifiers at COMPILE time: one unknown name aborts the entire
+    // script, and a try/except around the assignment does not help.
+    //
+    // Thermal-relief and power-plane setters stay out permanently — see the Pad row
+    // in scripts/samples/COVERAGE.md; they crash AD24's scripting DLL.
+    try
+        Comp := PCBServer.CreatePCBLibComp;
+        Comp.Name := 'PADMASK';
+        Lib.RegisterComponent(Comp);
+        PCBServer.PreProcess;
+
+        Pad := PCBServer.PCBObjectFactory(ePadObject, eNoDimension, eCreate_Default);
+        if Pad <> nil then
+        begin
+            Pad.Name     := '1';
+            Pad.X        := MilsToCoord(-40);
+            Pad.Y        := MilsToCoord(0);
+            Pad.TopXSize := MilsToCoord(70);
+            Pad.TopYSize := MilsToCoord(70);
+            Pad.TopShape := eRounded;
+            Pad.HoleSize := MilsToCoord(30);
+            Pad.Layer    := eMultiLayer;
+
+            Cache := Pad.GetState_Cache;
+            Cache.PasteMaskExpansionValid  := eCacheManual;
+            Cache.PasteMaskExpansion       := MilsToCoord(3);
+            Cache.SolderMaskExpansionValid := eCacheManual;
+            Cache.SolderMaskExpansion      := MilsToCoord(7);
+            Pad.SetState_Cache             := Cache;
+
+            Comp.AddPCBObject(Pad);
+            PCBServer.SendMessageToRobots(Comp.I_ObjectAddress, c_Broadcast,
+                                          PCBM_BoardRegisteration, Pad.I_ObjectAddress);
+        end;
+
+        // A second, plain SMD pad so the first can be compared against a default.
+        AddPadFull(Comp, 40, 0, 0, eRectangular, 60, 40, '2');
+
+        // Pad 3: solder-mask expansion measured from the HOLE edge rather than the pad
+        // edge. AltiumSharp reads this as a boolean (via SubRecord-1 @258); the name is
+        // in the Advpcb.dll RTTI but with no Set* counterpart, so the pad cache is the
+        // candidate route — the same record the mask expansions above go through.
+        // One unknown identifier this run.
+        Pad := PCBServer.PCBObjectFactory(ePadObject, eNoDimension, eCreate_Default);
+        if Pad <> nil then
+        begin
+            Pad.Name     := '3';
+            Pad.X        := MilsToCoord(0);
+            Pad.Y        := MilsToCoord(60);
+            Pad.TopXSize := MilsToCoord(70);
+            Pad.TopYSize := MilsToCoord(70);
+            Pad.TopShape := eRounded;
+            Pad.HoleSize := MilsToCoord(40);
+            Pad.Layer    := eMultiLayer;
+
+            Cache := Pad.GetState_Cache;
+            Cache.SolderMaskExpansionValid := eCacheManual;
+            Cache.SolderMaskExpansion      := MilsToCoord(5);
+            Pad.SetState_Cache             := Cache;
+            Pad.SolderMaskExpansionFromHoleEdge := True;
+
+            Comp.AddPCBObject(Pad);
+            PCBServer.SendMessageToRobots(Comp.I_ObjectAddress, c_Broadcast,
+                                          PCBM_BoardRegisteration, Pad.I_ObjectAddress);
+        end;
+
+        PCBServer.PostProcess;
+    except
+    end;
+
+    // LOCKFLAGS_PCB: the locked / keepout flag word, one of the fields the fixture map
+    // lists as self-round-trip only. Both flags live in the shared common-header flag
+    // word, so a pad and a track between them cover every primitive that carries it.
+    // One field family per run: an unknown identifier aborts the whole script.
+    try
+        Comp := PCBServer.CreatePCBLibComp;
+        Comp.Name := 'LOCKFLAGS_PCB';
+        Lib.RegisterComponent(Comp);
+        PCBServer.PreProcess;
+
+        Pad := PCBServer.PCBObjectFactory(ePadObject, eNoDimension, eCreate_Default);
+        if Pad <> nil then
+        begin
+            Pad.Name     := '1';
+            Pad.X        := MilsToCoord(-40);
+            Pad.Y        := MilsToCoord(0);
+            Pad.TopXSize := MilsToCoord(60);
+            Pad.TopYSize := MilsToCoord(40);
+            Pad.TopShape := eRounded;
+            Pad.Layer    := eTopLayer;
+            Pad.Moveable := False;
+            Comp.AddPCBObject(Pad);
+            PCBServer.SendMessageToRobots(Comp.I_ObjectAddress, c_Broadcast,
+                                          PCBM_BoardRegisteration, Pad.I_ObjectAddress);
+        end;
+
+        // An unlocked pad as the control.
+        AddPadFull(Comp, 40, 0, 0, eRounded, 60, 40, '2');
+
+        // Pad 4: drill tolerances (extended-tail i32 @162/@166). Both are modelled
+        // by the reader, unlike the testpoint and jumper fields, so there is
+        // something to assert. One identifier family per run.
+        Pad := PCBServer.PCBObjectFactory(ePadObject, eNoDimension, eCreate_Default);
+        if Pad <> nil then
+        begin
+            Pad.Name     := '4';
+            Pad.X        := MilsToCoord(0);
+            Pad.Y        := MilsToCoord(30);
+            Pad.TopXSize := MilsToCoord(60);
+            Pad.TopYSize := MilsToCoord(60);
+            Pad.TopShape := eRounded;
+            Pad.HoleSize := MilsToCoord(30);
+            Pad.Layer    := eMultiLayer;
+            Pad.HolePositiveTolerance := MilsToCoord(3);
+            Pad.HoleNegativeTolerance := MilsToCoord(2);
+            Comp.AddPCBObject(Pad);
+            PCBServer.SendMessageToRobots(Comp.I_ObjectAddress, c_Broadcast,
+                                          PCBM_BoardRegisteration, Pad.I_ObjectAddress);
+        end;
+
+        // DOCUMENTED NEGATIVE (do not retry): DrillType is not stored on a library
+        // pad. The name IS in Advpcb.dll and `Pad.DrillType := 1` compiles and runs
+        // without error — but the saved pad is byte-identical to a plain through-hole
+        // pad apart from its coordinates, so AD24 keeps the press-fit/simple
+        // classification somewhere other than the library record. The probe pad was
+        // removed again rather than left asserting nothing.
+
+        // Pads 7-8: a jumper pair. JumperID is in Advpcb.dll and links pads sharing
+        // a non-zero id as a 0-ohm net; pad 2 above keeps the default 0 as the control.
+        AddPadJumper(Comp,  60, -60, '7', 4);
+        AddPadJumper(Comp, 120, -60, '8', 4);
+
+        // Pad 3 carries the keepout flag, the other bit of the same word.
+        Pad := PCBServer.PCBObjectFactory(ePadObject, eNoDimension, eCreate_Default);
+        if Pad <> nil then
+        begin
+            Pad.Name     := '3';
+            Pad.X        := MilsToCoord(0);
+            Pad.Y        := MilsToCoord(-30);
+            Pad.TopXSize := MilsToCoord(60);
+            Pad.TopYSize := MilsToCoord(40);
+            Pad.TopShape := eRounded;
+            Pad.Layer    := eTopLayer;
+            Pad.IsKeepout := True;
+            Comp.AddPCBObject(Pad);
+            PCBServer.SendMessageToRobots(Comp.I_ObjectAddress, c_Broadcast,
+                                          PCBM_BoardRegisteration, Pad.I_ObjectAddress);
+        end;
+
+        Trk := PCBServer.PCBObjectFactory(eTrackObject, eNoDimension, eCreate_Default);
+        if Trk <> nil then
+        begin
+            Trk.X1 := MilsToCoord(-40); Trk.Y1 := MilsToCoord(30);
+            Trk.X2 := MilsToCoord(40);  Trk.Y2 := MilsToCoord(30);
+            Trk.Width := MilsToCoord(6);
+            Trk.Layer := eTopOverlay;
+            Trk.Moveable := False;
+            Comp.AddPCBObject(Trk);
+            PCBServer.SendMessageToRobots(Comp.I_ObjectAddress, c_Broadcast,
+                                          PCBM_BoardRegisteration, Trk.I_ObjectAddress);
+        end;
+
+        // Pads 5-8: the fabrication and assembly test-point flags, one per pad so each
+        // bit of the shared flag word can be read off in isolation. The AD24 spelling
+        // is IsTestPoint_Top / IsAssyTestPoint_Top (capital P), confirmed against the
+        // Advpcb.dll RTTI alongside their SetIsTestPoint_* setters.
+        //
+        // Marking a pad as a test point also clears its unlocked bit, so these pads
+        // read back locked as well. That is Altium's own behaviour, not a decode
+        // defect — see issue #334.
+        //
+        // DOCUMENTED NEGATIVE (do not retry): the ASSEMBLY test-point flags are not
+        // persisted in a PcbLib. IsAssyTestPoint_Top / _Bottom are valid AD24
+        // identifiers and author without error, but the saved pad's flag word comes
+        // back as a plain 0x000C — no bit set, unlocked still set — where the
+        // fabrication flags above give 0x0080 / 0x0100. Those pads were removed
+        // again: a fixture that asserts nothing is not coverage.
+
+        Pad := PCBServer.PCBObjectFactory(ePadObject, eNoDimension, eCreate_Default);
+        if Pad <> nil then
+        begin
+            Pad.Name     := '5';
+            Pad.X        := MilsToCoord(0);
+            Pad.Y        := MilsToCoord(60);
+            Pad.TopXSize := MilsToCoord(60);
+            Pad.TopYSize := MilsToCoord(60);
+            Pad.TopShape := eRounded;
+            Pad.HoleSize := MilsToCoord(30);
+            Pad.Layer    := eMultiLayer;
+            Pad.IsTestPoint_Top := True;
+            Comp.AddPCBObject(Pad);
+            PCBServer.SendMessageToRobots(Comp.I_ObjectAddress, c_Broadcast,
+                                          PCBM_BoardRegisteration, Pad.I_ObjectAddress);
+        end;
+
+        Pad := PCBServer.PCBObjectFactory(ePadObject, eNoDimension, eCreate_Default);
+        if Pad <> nil then
+        begin
+            Pad.Name     := '6';
+            Pad.X        := MilsToCoord(0);
+            Pad.Y        := MilsToCoord(75);
+            Pad.TopXSize := MilsToCoord(60);
+            Pad.TopYSize := MilsToCoord(60);
+            Pad.TopShape := eRounded;
+            Pad.HoleSize := MilsToCoord(30);
+            Pad.Layer    := eMultiLayer;
+            Pad.IsTestPoint_Bottom := True;
+            Comp.AddPCBObject(Pad);
+            PCBServer.SendMessageToRobots(Comp.I_ObjectAddress, c_Broadcast,
+                                          PCBM_BoardRegisteration, Pad.I_ObjectAddress);
+        end;
+
+        // DOCUMENTED NEGATIVE (do not retry): none of the remaining fabrication flags
+        // is stored on a library pad.
+        //
+        // TearDrop and UserRouted are the only two AD24 exposes as settable (each has
+        // a Set* counterpart in the Advpcb.dll RTTI). Both author without error — the
+        // script compiles and the pads appear — but the saved flag word comes back as
+        // a plain 0x000C, exactly like an untouched pad, where the fabrication test
+        // points above give 0x0080 / 0x0100. The two pads were removed again.
+        //
+        // IsBackDrill, IsCounterHole and IsPreRoute have no Set* counterpart at all:
+        // they are derived board state (layer-stack backdrills, counter-hole params,
+        // routing) rather than per-pad properties, so there is nothing to author.
+
+        // A keepout track, the second bit of the same word on the same primitive.
+        Trk := PCBServer.PCBObjectFactory(eTrackObject, eNoDimension, eCreate_Default);
+        if Trk <> nil then
+        begin
+            Trk.X1 := MilsToCoord(-40); Trk.Y1 := MilsToCoord(45);
+            Trk.X2 := MilsToCoord(40);  Trk.Y2 := MilsToCoord(45);
+            Trk.Width := MilsToCoord(6);
+            Trk.Layer := eTopOverlay;
+            Trk.IsKeepout := True;
+            Comp.AddPCBObject(Trk);
+            PCBServer.SendMessageToRobots(Comp.I_ObjectAddress, c_Broadcast,
+                                          PCBM_BoardRegisteration, Trk.I_ObjectAddress);
+        end;
+
+        // Arc and Fill carry the same shared flag word. Moveable/IsKeepout are the
+        // identifiers already proven on the pad and track above, so both primitives
+        // stay inside this run's one identifier family. Each is authored twice, once
+        // per bit, and the plain arcs and fills in ARCS/FILLS are the controls.
+        Arc := PCBServer.PCBObjectFactory(eArcObject, eNoDimension, eCreate_Default);
+        if Arc <> nil then
+        begin
+            Arc.XCenter    := MilsToCoord(-40);
+            Arc.YCenter    := MilsToCoord(-60);
+            Arc.Radius     := MilsToCoord(20);
+            Arc.LineWidth  := MilsToCoord(6);
+            Arc.StartAngle := 0;
+            Arc.EndAngle   := 360;
+            Arc.Layer      := eTopOverlay;
+            Arc.Moveable   := False;
+            Comp.AddPCBObject(Arc);
+            PCBServer.SendMessageToRobots(Comp.I_ObjectAddress, c_Broadcast,
+                                          PCBM_BoardRegisteration, Arc.I_ObjectAddress);
+        end;
+
+        Arc := PCBServer.PCBObjectFactory(eArcObject, eNoDimension, eCreate_Default);
+        if Arc <> nil then
+        begin
+            Arc.XCenter    := MilsToCoord(40);
+            Arc.YCenter    := MilsToCoord(-60);
+            Arc.Radius     := MilsToCoord(20);
+            Arc.LineWidth  := MilsToCoord(6);
+            Arc.StartAngle := 0;
+            Arc.EndAngle   := 360;
+            Arc.Layer      := eTopOverlay;
+            Arc.IsKeepout  := True;
+            Comp.AddPCBObject(Arc);
+            PCBServer.SendMessageToRobots(Comp.I_ObjectAddress, c_Broadcast,
+                                          PCBM_BoardRegisteration, Arc.I_ObjectAddress);
+        end;
+
+        Fill := PCBServer.PCBObjectFactory(eFillObject, eNoDimension, eCreate_Default);
+        if Fill <> nil then
+        begin
+            Fill.X1Location := MilsToCoord(-70);
+            Fill.Y1Location := MilsToCoord(-100);
+            Fill.X2Location := MilsToCoord(-30);
+            Fill.Y2Location := MilsToCoord(-80);
+            Fill.Layer      := eTopLayer;
+            Fill.Rotation   := 0;
+            Fill.Moveable   := False;
+            Comp.AddPCBObject(Fill);
+            PCBServer.SendMessageToRobots(Comp.I_ObjectAddress, c_Broadcast,
+                                          PCBM_BoardRegisteration, Fill.I_ObjectAddress);
+        end;
+
+        Fill := PCBServer.PCBObjectFactory(eFillObject, eNoDimension, eCreate_Default);
+        if Fill <> nil then
+        begin
+            Fill.X1Location := MilsToCoord(30);
+            Fill.Y1Location := MilsToCoord(-100);
+            Fill.X2Location := MilsToCoord(70);
+            Fill.Y2Location := MilsToCoord(-80);
+            Fill.Layer      := eTopLayer;
+            Fill.Rotation   := 0;
+            Fill.IsKeepout  := True;
+            Comp.AddPCBObject(Fill);
+            PCBServer.SendMessageToRobots(Comp.I_ObjectAddress, c_Broadcast,
+                                          PCBM_BoardRegisteration, Fill.I_ObjectAddress);
+        end;
+
+        PCBServer.PostProcess;
+    except
+    end;
+
+    // DOCUMENTED NEGATIVE (do not retry): via tenting is not persisted in a PcbLib.
+    // IsTenting_Top / IsTenting_Bottom are valid AD24 identifiers — a VIAFLAGS
+    // footprint setting both compiles and authors the via — but the saved library
+    // carries no tenting bits, and the via reads back with an empty flag word. The
+    // reader decodes ALT_FLAG_TENTING_TOP/BOTTOM correctly (a text round-trip test
+    // covers it), so this is Altium's behaviour: tenting on a library via is not
+    // stored per-primitive. Nothing to assert, so no fixture was added.
+
     // EDGE: boundary-case pads — a 45-deg rotated rectangle, a negative-coord pad, a far-out pad.
     try
         Comp := PCBServer.CreatePCBLibComp;
@@ -743,6 +1470,88 @@ begin
     except
     end;
 
+    // STEP_REF (batch 5): the same STEP model referenced by path, not embedded.
+    try
+        Comp := PCBServer.CreatePCBLibComp;
+        Comp.Name := 'STEP_REF';
+        Lib.RegisterComponent(Comp);
+        PCBServer.PreProcess;
+        AddBodyStepRef(Comp, OUT_DIR + 'minimal.step');
+        PCBServer.PostProcess;
+    except
+    end;
+
+    // MECH20 (batch 5): one primitive of every layered kind on Mechanical 20, a
+    // layer past the sixteen the legacy header byte can name. AD has no
+    // eMechanical17..32 constants; LayerUtils.MechanicalLayer(N) (proven in
+    // AddExtrudedBox for 13) returns the layer id that IPCB_Primitive.Layer takes.
+    // Hand-authored tracks showed byte 72 + V7 id 0x01020014; this settles the
+    // pair for pads, arcs, text, fills, regions and bodies too.
+    try
+        Comp := PCBServer.CreatePCBLibComp;
+        Comp.Name := 'MECH20';
+        Lib.RegisterComponent(Comp);
+        PCBServer.PreProcess;
+        M20 := LayerUtils.MechanicalLayer(20);
+        AddTrack(Comp, -50, 0, 50, 0, 10, M20);
+        AddArc(Comp, 0, 60, 20, 0, 180, 10, M20);
+        AddText(Comp, 0, 100, 'M20', 50, 0, M20);
+        AddFill(Comp, -50, 140, 50, 160, M20, 0);
+        AddRegionBox(Comp, -50, 180, 50, 220, M20);
+        AddPadOnLayer(Comp, 100, 0, 'M', M20);
+        AddExtrudedBoxOnLayer(Comp, 100, 100, 40, 40, 20, M20);
+        PCBServer.PostProcess;
+    except
+    end;
+
+    // TEXT_WIDE_ONLY (batch 5): a text whose WideStrings carries a code unit
+    // the Data stream cannot — the shape a UI-typed Ω has (Data byte '?',
+    // ENCODEDTEXT 937) — so a golden pins WideStrings as the authoritative
+    // form and ENCODEDTEXT as UTF-16 code units of the text as Altium holds
+    // it (AltiumSharp and the Latin-1 10µF of TEXT_WIN1252 were the only
+    // witnesses). Chr(N) yields the Unicode character N, not a byte: Chr(148)
+    // is U+0094, which every ANSI page narrows to '?' while WideStrings keeps
+    // 148. DOCUMENTED NEGATIVES (two runs, 2026-08-23): (1) a source LITERAL
+    // beyond Latin-1 in a TEXT reaches Altium as its UTF-8 bytes widened
+    // through the machine's page ('10 Ω' -> 49,48,32,206,169), assigned
+    // directly or through a String parameter alike, unlike a component NAME;
+    // (2) Chr(N) for N > 255 truncates modulo 256 (TEXT_LONG); (3) a control
+    // the writing page leaves undefined (Chr(152) on a Windows-1250 machine)
+    // narrows to its IDENTITY byte there but to '?' elsewhere — page-dependent,
+    // so it is not authored. Text beyond U+00FF needs a hand-authored fixture.
+    try
+        Comp := PCBServer.CreatePCBLibComp;
+        Comp.Name := 'TEXT_WIDE_ONLY';
+        Lib.RegisterComponent(Comp);
+        PCBServer.PreProcess;
+        AddText(Comp, 0,   0, '10 ' + Chr(206) + Chr(169), 50, 0, eTopOverlay);
+        AddText(Comp, 0, 100, Chr(148) + 'Q' + Chr(187), 50, 0, eTopOverlay);
+        PCBServer.PostProcess;
+    except
+    end;
+
+    // PRIMPROPS: the descriptive properties the plain primitives never set.
+    // Only the named region is authored today; the body and via probes are
+    // staged behind comments so a crash or a compile error names one interface
+    // rather than leaving the whole run ambiguous.
+    try
+        Comp := PCBServer.CreatePCBLibComp;
+        Comp.Name := 'PRIMPROPS';
+        Lib.RegisterComponent(Comp);
+        PCBServer.PreProcess;
+        AddRegionNamed(Comp, -100, -50,   0,  50, 'NamedPour', eRegionKind_NamedRegion);
+        AddPadSlotRotated(Comp, -300, 'S1');
+        AddTextStrokeFont(Comp, -100, 120, 'SANS',  40, 2, 12);
+        AddTextStrokeFont(Comp,  100, 120, 'SERIF', 40, 3, 12);
+        AddRegionNamed(Comp,   20, -50, 120,  50, 'CavityRgn', eRegionKind_Cavity);
+        AddRegionNamed(Comp,  140, -50, 240,  50, 'BoardCut',  eRegionKind_BoardCutout);
+        AddRegionNamed(Comp,  260, -50, 360,  50, 'PlainCut',  eRegionKind_Cutout);
+        AddBodyProps(Comp, 200, 0, 80, 60);
+        AddViaMask(Comp, 400, 0, 50, 25);
+        PCBServer.PostProcess;
+    except
+    end;
+
     // TEXT_SPECIAL: a Code-128 barcode text and an inverted (knockout) TrueType
     // text in an inverted rectangle (batch 4a).
     try
@@ -751,7 +1560,23 @@ begin
         Lib.RegisterComponent(Comp);
         PCBServer.PreProcess;
         AddTextBarcode(Comp, 0, 100, 'BC128');
+        AddTextBarcode2(Comp, 0, -150, 'BC2');
+        AddTextBarcodeVariant(Comp, 0, -300, 'BC3', False, True,  0);
+        AddTextBarcodeVariant(Comp, 0, -450, 'BC4', True,  False, 0);
         AddTextInverted(Comp, 0, -100, 'INV');
+        PCBServer.PostProcess;
+    except
+    end;
+
+    // BODYPREC: an extruded body whose outline is off-grid by raw internal
+    // units, pinning the reader's full outline precision against AD24's own
+    // save (enrich probe, 2026-09-01).
+    try
+        Comp := PCBServer.CreatePCBLibComp;
+        Comp.Name := 'BODYPREC';
+        Lib.RegisterComponent(Comp);
+        PCBServer.PreProcess;
+        AddExtrudedBoxOffGrid(Comp);
         PCBServer.PostProcess;
     except
     end;
@@ -777,6 +1602,233 @@ begin
     // documented "Save As to a path" (the second arg is the document kind).
     Doc.SetModified(True);
     Doc.DoSafeChangeFileNameAndSave(OUT_DIR + 'footprints.PcbLib', 'PCBLIB');
+end;
+
+{ IEEE symbol (RECORD=3, batch 6): factory eSymbol (TObjectId 34 — the constant
+  is not spelled "IEEE"); ISch_Symbol carries Symbol (TIeeeSymbol: eDot=1,
+  eRightLeftSignalFlow=2, eClock=3, eActiveLowInput=4, ...), ScaleFactor (a
+  TCoord), IsMirrored, Orientation and LineWidth over the graphical base. The
+  record this crate read as a "text annotation" — settled by authoring one. }
+procedure AddIeeeSymbol(Comp : ISch_Component; X : Integer; Y : Integer;
+                        AKind : TIeeeSymbol; AScale : Integer; AMirror : Boolean;
+                        ARotate : TRotationBy90; AColor : TColor; Locked : Boolean);
+var
+    Sym : ISch_Symbol;
+begin
+    Sym := SchServer.SchObjectFactory(eSymbol, eCreate_Default);
+    if Sym = nil then Exit;
+    Sym.Location    := Point(MilsToCoord(X), MilsToCoord(Y));
+    Sym.Symbol      := AKind;
+    Sym.ScaleFactor := MilsToCoord(AScale);
+    Sym.IsMirrored  := AMirror;
+    Sym.Orientation := ARotate;
+    Sym.LineWidth   := eSmall;
+    Sym.Color       := AColor;
+    Sym.GraphicallyLocked    := Locked;
+    Sym.OwnerPartId          := 1;
+    Sym.OwnerPartDisplayMode := Comp.DisplayMode;
+    Comp.AddSchObject(Sym);
+    SchServer.RobotManager.SendMessage(Comp.I_ObjectAddress, c_BroadCast,
+                                       SCHM_PrimitiveRegistration, Sym.I_ObjectAddress);
+end;
+
+{ Elliptical arc (RECORD=11, batch 5): factory eEllipticalArc; ISch_EllipticalArc
+  carries Radius + SecondaryRadius + StartAngle/EndAngle + LineWidth over the
+  graphical base. Off-grid when Frac is set (the +5000 idiom of AddRectFrac),
+  so the record carries Location/Radius/SecondaryRadius _Frac keys. }
+procedure AddEllipticalArc(Comp : ISch_Component; CX : Integer; CY : Integer;
+                           RX : Integer; RY : Integer; AStart : Double; AEnd : Double;
+                           Frac : Boolean; Locked : Boolean);
+var
+    EA  : ISch_EllipticalArc;
+    Off : Integer;
+begin
+    EA := SchServer.SchObjectFactory(eEllipticalArc, eCreate_Default);
+    if EA = nil then Exit;
+    Off := 0;
+    if Frac then Off := 5000;
+    EA.Location        := Point(MilsToCoord(CX) + Off, MilsToCoord(CY) + Off);
+    EA.Radius          := MilsToCoord(RX) + Off;
+    EA.SecondaryRadius := MilsToCoord(RY) + Off;
+    EA.StartAngle      := AStart;
+    EA.EndAngle        := AEnd;
+    EA.LineWidth       := eSmall;
+    EA.Color           := $000000;
+    EA.GraphicallyLocked := Locked;
+    EA.OwnerPartId          := 1;
+    EA.OwnerPartDisplayMode := Comp.DisplayMode;
+    Comp.AddSchObject(EA);
+    SchServer.RobotManager.SendMessage(Comp.I_ObjectAddress, c_BroadCast,
+                                       SCHM_PrimitiveRegistration, EA.I_ObjectAddress);
+end;
+
+{ Footprint model link (RECORD=45 with its 44/46/48 chain, batch 5). The
+  component's own AddSchImplementation returns the registered ISch_Implementation;
+  AddDataFileLink(EntityName, Location, FileKind) is what gives it DatafileCount=1
+  and the ModelDatafile*0 keys. IntegratedModel/DatabaseModel are the two flags a
+  UI-authored link carries (`IntegratedModel=T|DatabaseModel=T`). }
+procedure AddImplementation(Comp : ISch_Component; AName : String; ADesc : String;
+                            APath : String; ACurrent : Boolean; AIntegrated : Boolean);
+var
+    Impl : ISch_Implementation;
+begin
+    Impl := Comp.AddSchImplementation;
+    if Impl = nil then Exit;
+    Impl.ModelName   := AName;
+    Impl.ModelType   := 'PCBLIB';
+    Impl.Description := ADesc;
+    Impl.IsCurrent   := ACurrent;
+    if AIntegrated then
+    begin
+        Impl.IntegratedModel := True;
+        Impl.DatabaseModel   := True;
+    end;
+    if APath <> '' then
+        Impl.AddDataFileLink(AName, APath, 'PCBLib');
+end;
+
+{ Off-grid shapes of every kind that FRACSHAPES (rect + arc) did not cover, each
+  carrying the +5000 internal-unit remainder (0.5 mil) on every coordinate so
+  the record emits the corresponding _Frac keys: ellipse, pie, round rectangle,
+  line, polyline, polygon, bezier and label. }
+procedure AddFracShapes(Comp : ISch_Component);
+var
+    E   : ISch_Ellipse;
+    Pie : ISch_Pie;
+    RR  : ISch_RoundRectangle;
+    L   : ISch_Line;
+    PL  : ISch_Polyline;
+    Pol : ISch_Polygon;
+    Bez : ISch_Bezier;
+    Txt : ISch_Label;
+begin
+    E := SchServer.SchObjectFactory(eEllipse, eCreate_Default);
+    if E <> nil then
+    begin
+        E.Location        := Point(MilsToCoord(-150) + 5000, MilsToCoord(100) + 5000);
+        E.Radius          := MilsToCoord(30) + 5000;
+        E.SecondaryRadius := MilsToCoord(20) + 5000;
+        E.LineWidth       := eSmall;
+        E.Color           := $000000;
+        E.AreaColor       := $B0FFFF;
+        E.IsSolid         := True;
+        E.Transparent     := False;
+        E.OwnerPartId     := 1;
+        E.OwnerPartDisplayMode := Comp.DisplayMode;
+        Comp.AddSchObject(E);
+        SchServer.RobotManager.SendMessage(Comp.I_ObjectAddress, c_BroadCast, SCHM_PrimitiveRegistration, E.I_ObjectAddress);
+    end;
+
+    Pie := SchServer.SchObjectFactory(ePie, eCreate_Default);
+    if Pie <> nil then
+    begin
+        Pie.Location   := Point(MilsToCoord(-50) + 5000, MilsToCoord(100) + 5000);
+        Pie.Radius     := MilsToCoord(30) + 5000;
+        Pie.LineWidth  := eSmall;
+        Pie.Color      := $000000;
+        Pie.StartAngle := 30;
+        Pie.EndAngle   := 210;
+        Pie.AreaColor  := $00FFFF;
+        Pie.IsSolid    := True;
+        Pie.OwnerPartId := 1;
+        Pie.OwnerPartDisplayMode := Comp.DisplayMode;
+        Comp.AddSchObject(Pie);
+        SchServer.RobotManager.SendMessage(Comp.I_ObjectAddress, c_BroadCast, SCHM_PrimitiveRegistration, Pie.I_ObjectAddress);
+    end;
+
+    RR := SchServer.SchObjectFactory(eRoundRectangle, eCreate_Default);
+    if RR <> nil then
+    begin
+        RR.Location      := Point(MilsToCoord(50) + 5000, MilsToCoord(80) + 5000);
+        RR.Corner        := Point(MilsToCoord(150) + 5000, MilsToCoord(130) + 5000);
+        RR.CornerXRadius := MilsToCoord(10) + 5000;
+        RR.CornerYRadius := MilsToCoord(10) + 5000;
+        RR.LineWidth     := eSmall;
+        RR.Color         := $000000;
+        RR.AreaColor     := $B0FFFF;
+        RR.IsSolid       := True;
+        RR.Transparent   := False;
+        RR.OwnerPartId   := 1;
+        RR.OwnerPartDisplayMode := Comp.DisplayMode;
+        Comp.AddSchObject(RR);
+        SchServer.RobotManager.SendMessage(Comp.I_ObjectAddress, c_BroadCast, SCHM_PrimitiveRegistration, RR.I_ObjectAddress);
+    end;
+
+    L := SchServer.SchObjectFactory(eLine, eCreate_Default);
+    if L <> nil then
+    begin
+        L.Location  := Point(MilsToCoord(-150) + 5000, MilsToCoord(0) + 5000);
+        L.Corner    := Point(MilsToCoord(-50) + 5000, MilsToCoord(30) + 5000);
+        L.LineWidth := eSmall;
+        L.Color     := $000000;
+        L.OwnerPartId := 1;
+        L.OwnerPartDisplayMode := Comp.DisplayMode;
+        Comp.AddSchObject(L);
+        SchServer.RobotManager.SendMessage(Comp.I_ObjectAddress, c_BroadCast, SCHM_PrimitiveRegistration, L.I_ObjectAddress);
+    end;
+
+    PL := SchServer.SchObjectFactory(ePolyline, eCreate_Default);
+    if PL <> nil then
+    begin
+        PL.LineWidth := eSmall;
+        PL.Color     := $000000;
+        PL.ClearAllVertices;
+        PL.InsertVertex(1);  PL.Vertex[1] := Point(MilsToCoord(-30) + 5000, MilsToCoord(0) + 5000);
+        PL.InsertVertex(2);  PL.Vertex[2] := Point(MilsToCoord(0) + 5000,   MilsToCoord(30) + 5000);
+        PL.InsertVertex(3);  PL.Vertex[3] := Point(MilsToCoord(30) + 5000,  MilsToCoord(0) + 5000);
+        PL.OwnerPartId := 1;
+        PL.OwnerPartDisplayMode := Comp.DisplayMode;
+        Comp.AddSchObject(PL);
+        SchServer.RobotManager.SendMessage(Comp.I_ObjectAddress, c_BroadCast, SCHM_PrimitiveRegistration, PL.I_ObjectAddress);
+    end;
+
+    Pol := SchServer.SchObjectFactory(ePolygon, eCreate_Default);
+    if Pol <> nil then
+    begin
+        Pol.ClearAllVertices;
+        Pol.InsertVertex(1);  Pol.Vertex[1] := Point(MilsToCoord(50) + 5000,  MilsToCoord(0) + 5000);
+        Pol.InsertVertex(2);  Pol.Vertex[2] := Point(MilsToCoord(150) + 5000, MilsToCoord(0) + 5000);
+        Pol.InsertVertex(3);  Pol.Vertex[3] := Point(MilsToCoord(100) + 5000, MilsToCoord(40) + 5000);
+        Pol.LineWidth   := eSmall;
+        Pol.Color       := $000000;
+        Pol.AreaColor   := $B0FFFF;
+        Pol.IsSolid     := True;
+        Pol.OwnerPartId := 1;
+        Pol.OwnerPartDisplayMode := Comp.DisplayMode;
+        Comp.AddSchObject(Pol);
+        SchServer.RobotManager.SendMessage(Comp.I_ObjectAddress, c_BroadCast, SCHM_PrimitiveRegistration, Pol.I_ObjectAddress);
+    end;
+
+    Bez := SchServer.SchObjectFactory(eBezier, eCreate_Default);
+    if Bez <> nil then
+    begin
+        Bez.LineWidth := eSmall;
+        Bez.Color     := $000000;
+        Bez.ClearAllVertices;
+        Bez.InsertVertex(1);  Bez.SetState_Vertex(1, Point(MilsToCoord(-150) + 5000, MilsToCoord(-80) + 5000));
+        Bez.InsertVertex(2);  Bez.SetState_Vertex(2, Point(MilsToCoord(-120) + 5000, MilsToCoord(-40) + 5000));
+        Bez.InsertVertex(3);  Bez.SetState_Vertex(3, Point(MilsToCoord(-80) + 5000,  MilsToCoord(-120) + 5000));
+        Bez.InsertVertex(4);  Bez.SetState_Vertex(4, Point(MilsToCoord(-50) + 5000,  MilsToCoord(-80) + 5000));
+        Bez.OwnerPartId := 1;
+        Bez.OwnerPartDisplayMode := Comp.DisplayMode;
+        Comp.AddSchObject(Bez);
+        SchServer.RobotManager.SendMessage(Comp.I_ObjectAddress, c_BroadCast, SCHM_PrimitiveRegistration, Bez.I_ObjectAddress);
+    end;
+
+    Txt := SchServer.SchObjectFactory(eLabel, eCreate_Default);
+    if Txt <> nil then
+    begin
+        Txt.Location      := Point(MilsToCoord(50) + 5000, MilsToCoord(-80) + 5000);
+        Txt.Orientation   := eRotate0;
+        Txt.FontID        := 1;
+        Txt.Justification := eJustify_BottomLeft;
+        Txt.Color         := $000000;
+        Txt.Text          := 'FRAC';
+        Txt.OwnerPartId   := 1;
+        Txt.OwnerPartDisplayMode := Comp.DisplayMode;
+        Comp.AddSchObject(Txt);
+        SchServer.RobotManager.SendMessage(Comp.I_ObjectAddress, c_BroadCast, SCHM_PrimitiveRegistration, Txt.I_ObjectAddress);
+    end;
 end;
 
 { Adds one pin to a symbol at (0, Y) mils, pointing left (body to the right), with the
@@ -877,7 +1929,8 @@ end;
 
 { Pie (filled circular sector, RECORD=9). VERIFIED: factory ePie (=12, NOT the
   record id 9); ISch_Pie inherits ISch_Arc geometry (Location/Radius/Start/End
-  angle) and adds IsSolid + Transparent + AreaColor. }
+  angle) and adds IsSolid + AreaColor. It has NO Transparent — see the
+  documented negative below. }
 procedure AddPie(Comp : ISch_Component; CX : Integer; CY : Integer; R : Integer;
                  AStart : Double; AEnd : Double; FillCol : TColor);
 var
@@ -994,6 +2047,82 @@ begin
     R.IsSolid              := True;
     R.OwnerPartId          := 1;
     R.OwnerPartDisplayMode := Mode;
+    Comp.AddSchObject(R);
+    SchServer.RobotManager.SendMessage(Comp.I_ObjectAddress, c_BroadCast,
+                                       SCHM_PrimitiveRegistration, R.I_ObjectAddress);
+end;
+
+{ Pin assigned to an EXPLICIT display mode (for the DisplayModeCount=2
+  symbol): the pin RECORD's own alternate-view byte, which stayed
+  self-round-trip only until authored here. ISch_Pin.OwnerPartDisplayMode is
+  the same proven member AddPin sets on every pin; the non-default VALUE is
+  what the 2026-09-01 enrich probe settled (persists as byte 1 in the saved
+  pin record). }
+procedure AddPinMode(Comp : ISch_Component; Y : Integer; Desig : String;
+                     Nm : String; Mode : Integer);
+var
+    Pin : ISch_Pin;
+begin
+    Pin := SchServer.SchObjectFactory(ePin, eCreate_Default);
+    if Pin = nil then Exit;
+    Pin.Location             := Point(MilsToCoord(0), MilsToCoord(Y));
+    Pin.Orientation          := eRotate180;
+    Pin.PinLength            := MilsToCoord(200);
+    Pin.Electrical           := eElectricPassive;
+    Pin.Designator           := Desig;
+    Pin.Name                 := Nm;
+    Pin.ShowDesignator       := True;
+    Pin.ShowName             := True;
+    Pin.OwnerPartId          := 1;
+    Pin.OwnerPartDisplayMode := Mode;
+    Comp.AddSchObject(Pin);
+    SchServer.RobotManager.SendMessage(Comp.I_ObjectAddress, c_BroadCast,
+                                       SCHM_PrimitiveRegistration, Pin.I_ObjectAddress);
+end;
+
+{ Graphically locked pin. ISch_Pin.GraphicallyLocked proven by the 2026-09-01
+  enrich probe; persists as flag bit 0x40 in the saved pin record. }
+procedure AddPinLocked(Comp : ISch_Component; Y : Integer; Desig : String;
+                       Nm : String);
+var
+    Pin : ISch_Pin;
+begin
+    Pin := SchServer.SchObjectFactory(ePin, eCreate_Default);
+    if Pin = nil then Exit;
+    Pin.Location             := Point(MilsToCoord(0), MilsToCoord(Y));
+    Pin.Orientation          := eRotate180;
+    Pin.PinLength            := MilsToCoord(200);
+    Pin.Electrical           := eElectricPassive;
+    Pin.Designator           := Desig;
+    Pin.Name                 := Nm;
+    Pin.ShowDesignator       := True;
+    Pin.ShowName             := True;
+    Pin.OwnerPartId          := 1;
+    Pin.OwnerPartDisplayMode := Comp.DisplayMode;
+    Pin.GraphicallyLocked    := True;
+    Comp.AddSchObject(Pin);
+    SchServer.RobotManager.SendMessage(Comp.I_ObjectAddress, c_BroadCast,
+                                       SCHM_PrimitiveRegistration, Pin.I_ObjectAddress);
+end;
+
+{ Rectangle with an explicit LineStyle. Persists as `LineStyleExt` placed
+  between Corner.Y and LineWidth (2026-09-01 enrich probe) — unlike the
+  round-rect, which accepts the property and drops the key. }
+procedure AddRectStyled(Comp : ISch_Component; X1 : Integer; Y1 : Integer;
+                        X2 : Integer; Y2 : Integer; Style : TLineStyle);
+var R : ISch_Rectangle;
+begin
+    R := SchServer.SchObjectFactory(eRectangle, eCreate_Default);
+    if R = nil then Exit;
+    R.Location             := Point(MilsToCoord(X1), MilsToCoord(Y1));
+    R.Corner               := Point(MilsToCoord(X2), MilsToCoord(Y2));
+    R.LineWidth            := eSmall;
+    R.LineStyle            := Style;
+    R.Color                := $000000;
+    R.AreaColor            := $B0FFFF;
+    R.IsSolid              := False;
+    R.OwnerPartId          := 1;
+    R.OwnerPartDisplayMode := Comp.DisplayMode;
     Comp.AddSchObject(R);
     SchServer.RobotManager.SendMessage(Comp.I_ObjectAddress, c_BroadCast,
                                        SCHM_PrimitiveRegistration, R.I_ObjectAddress);
@@ -1475,6 +2604,519 @@ begin
     SchServer.RobotManager.SendMessage(Comp.I_ObjectAddress, c_BroadCast, SCHM_PrimitiveRegistration, Bez.I_ObjectAddress);
 end;
 
+{ One of every shape type carrying a DISTINCT non-black Color. Every helper
+  above authors Color := $000000, which is the Altium default and is therefore
+  omitted from the saved record — so no shape parser's colour arm has ever been
+  exercised against a real file. The colours differ from each other so an
+  assertion cannot pass by matching the wrong primitive. TColor is $00BBGGRR. }
+procedure AddColourShapes(Comp : ISch_Component);
+var
+    Lin : ISch_Line;
+    Rct : ISch_Rectangle;
+    RRe : ISch_RoundRectangle;
+    Arc : ISch_Arc;
+    Ell : ISch_Ellipse;
+    Ply : ISch_Polyline;
+    Pgn : ISch_Polygon;
+    Pwe : ISch_Pie;
+    Bez : ISch_Bezier;
+    Lbl : ISch_Label;
+begin
+    Lin := SchServer.SchObjectFactory(eLine, eCreate_Default);
+    if Lin <> nil then
+    begin
+        Lin.Location := Point(MilsToCoord(-200), MilsToCoord(100));
+        Lin.Corner   := Point(MilsToCoord(-100), MilsToCoord(100));
+        Lin.LineWidth := eSmall;
+        Lin.Color     := $0000FF;                { red }
+        Lin.OwnerPartId := 1;
+        Lin.OwnerPartDisplayMode := Comp.DisplayMode;
+        Comp.AddSchObject(Lin);
+        SchServer.RobotManager.SendMessage(Comp.I_ObjectAddress, c_BroadCast, SCHM_PrimitiveRegistration, Lin.I_ObjectAddress);
+    end;
+
+    Rct := SchServer.SchObjectFactory(eRectangle, eCreate_Default);
+    if Rct <> nil then
+    begin
+        Rct.Location := Point(MilsToCoord(-200), MilsToCoord(40));
+        Rct.Corner   := Point(MilsToCoord(-100), MilsToCoord(80));
+        Rct.LineWidth := eSmall;
+        Rct.Color     := $00FF00;                { green }
+        Rct.AreaColor := $FFFF00;
+        Rct.IsSolid   := True;
+        Rct.OwnerPartId := 1;
+        Rct.OwnerPartDisplayMode := Comp.DisplayMode;
+        Comp.AddSchObject(Rct);
+        SchServer.RobotManager.SendMessage(Comp.I_ObjectAddress, c_BroadCast, SCHM_PrimitiveRegistration, Rct.I_ObjectAddress);
+    end;
+
+    RRe := SchServer.SchObjectFactory(eRoundRectangle, eCreate_Default);
+    if RRe <> nil then
+    begin
+        RRe.Location := Point(MilsToCoord(-200), MilsToCoord(-20));
+        RRe.Corner   := Point(MilsToCoord(-100), MilsToCoord(20));
+        RRe.CornerXRadius := MilsToCoord(10);
+        RRe.CornerYRadius := MilsToCoord(8);
+        RRe.LineWidth := eSmall;
+        RRe.Color     := $FF0000;                { blue }
+        RRe.OwnerPartId := 1;
+        RRe.OwnerPartDisplayMode := Comp.DisplayMode;
+        Comp.AddSchObject(RRe);
+        SchServer.RobotManager.SendMessage(Comp.I_ObjectAddress, c_BroadCast, SCHM_PrimitiveRegistration, RRe.I_ObjectAddress);
+    end;
+
+    Arc := SchServer.SchObjectFactory(eArc, eCreate_Default);
+    if Arc <> nil then
+    begin
+        Arc.Location := Point(MilsToCoord(-150), MilsToCoord(-80));
+        Arc.Radius   := MilsToCoord(30);
+        Arc.LineWidth := eSmall;
+        Arc.Color     := $00FFFF;                { yellow }
+        Arc.StartAngle := 45.0;                  { non-zero: the plain arcs all start at 0, which is omitted }
+        Arc.EndAngle   := 315.0;
+        Arc.OwnerPartId := 1;
+        Arc.OwnerPartDisplayMode := Comp.DisplayMode;
+        Comp.AddSchObject(Arc);
+        SchServer.RobotManager.SendMessage(Comp.I_ObjectAddress, c_BroadCast, SCHM_PrimitiveRegistration, Arc.I_ObjectAddress);
+    end;
+
+    Ell := SchServer.SchObjectFactory(eEllipse, eCreate_Default);
+    if Ell <> nil then
+    begin
+        Ell.Location := Point(MilsToCoord(0), MilsToCoord(100));
+        Ell.Radius   := MilsToCoord(40);
+        Ell.SecondaryRadius := MilsToCoord(25);
+        Ell.LineWidth := eSmall;
+        Ell.Color     := $FF00FF;                { magenta }
+        Ell.OwnerPartId := 1;
+        Ell.OwnerPartDisplayMode := Comp.DisplayMode;
+        Comp.AddSchObject(Ell);
+        SchServer.RobotManager.SendMessage(Comp.I_ObjectAddress, c_BroadCast, SCHM_PrimitiveRegistration, Ell.I_ObjectAddress);
+    end;
+
+    Ply := SchServer.SchObjectFactory(ePolyline, eCreate_Default);
+    if Ply <> nil then
+    begin
+        Ply.LineWidth := eSmall;
+        Ply.Color     := $808000;                { teal }
+        Ply.ClearAllVertices;
+        Ply.InsertVertex(1);  Ply.Vertex[1] := Point(MilsToCoord(60),  MilsToCoord(60));
+        Ply.InsertVertex(2);  Ply.Vertex[2] := Point(MilsToCoord(110), MilsToCoord(110));
+        Ply.InsertVertex(3);  Ply.Vertex[3] := Point(MilsToCoord(160), MilsToCoord(60));
+        Ply.OwnerPartId := 1;
+        Ply.OwnerPartDisplayMode := Comp.DisplayMode;
+        Comp.AddSchObject(Ply);
+        SchServer.RobotManager.SendMessage(Comp.I_ObjectAddress, c_BroadCast, SCHM_PrimitiveRegistration, Ply.I_ObjectAddress);
+    end;
+
+    Pgn := SchServer.SchObjectFactory(ePolygon, eCreate_Default);
+    if Pgn <> nil then
+    begin
+        Pgn.ClearAllVertices;
+        Pgn.InsertVertex(1);  Pgn.Vertex[1] := Point(MilsToCoord(60),  MilsToCoord(0));
+        Pgn.InsertVertex(2);  Pgn.Vertex[2] := Point(MilsToCoord(160), MilsToCoord(0));
+        Pgn.InsertVertex(3);  Pgn.Vertex[3] := Point(MilsToCoord(160), MilsToCoord(40));
+        Pgn.LineWidth := eSmall;
+        Pgn.Color     := $000080;                { dark red }
+        Pgn.AreaColor := $C0C0C0;
+        Pgn.IsSolid   := True;
+        Pgn.OwnerPartId := 1;
+        Pgn.OwnerPartDisplayMode := Comp.DisplayMode;
+        Comp.AddSchObject(Pgn);
+        SchServer.RobotManager.SendMessage(Comp.I_ObjectAddress, c_BroadCast, SCHM_PrimitiveRegistration, Pgn.I_ObjectAddress);
+    end;
+
+    Pwe := SchServer.SchObjectFactory(ePie, eCreate_Default);
+    if Pwe <> nil then
+    begin
+        Pwe.Location := Point(MilsToCoord(110), MilsToCoord(-60));
+        Pwe.Radius   := MilsToCoord(35);
+        Pwe.StartAngle := 20.0;
+        Pwe.EndAngle   := 160.0;
+        Pwe.LineWidth := eSmall;
+        Pwe.Color     := $008080;                { olive }
+        Pwe.AreaColor := $00A5FF;
+        Pwe.IsSolid   := True;
+        Pwe.OwnerPartId := 1;
+        Pwe.OwnerPartDisplayMode := Comp.DisplayMode;
+        Comp.AddSchObject(Pwe);
+        SchServer.RobotManager.SendMessage(Comp.I_ObjectAddress, c_BroadCast, SCHM_PrimitiveRegistration, Pwe.I_ObjectAddress);
+    end;
+
+    Bez := SchServer.SchObjectFactory(eBezier, eCreate_Default);
+    if Bez <> nil then
+    begin
+        Bez.LineWidth := eMedium;                { non-default width, alongside the colour }
+        Bez.Color     := $804000;                { navy-ish }
+        Bez.ClearAllVertices;
+        Bez.InsertVertex(1);  Bez.SetState_Vertex(1, Point(MilsToCoord(-200), MilsToCoord(-140)));
+        Bez.InsertVertex(2);  Bez.SetState_Vertex(2, Point(MilsToCoord(-150), MilsToCoord(-100)));
+        Bez.InsertVertex(3);  Bez.SetState_Vertex(3, Point(MilsToCoord(-100), MilsToCoord(-100)));
+        Bez.InsertVertex(4);  Bez.SetState_Vertex(4, Point(MilsToCoord(-50),  MilsToCoord(-140)));
+        Bez.OwnerPartId := 1;
+        Bez.OwnerPartDisplayMode := Comp.DisplayMode;
+        Comp.AddSchObject(Bez);
+        SchServer.RobotManager.SendMessage(Comp.I_ObjectAddress, c_BroadCast, SCHM_PrimitiveRegistration, Bez.I_ObjectAddress);
+    end;
+
+    Lbl := SchServer.SchObjectFactory(eLabel, eCreate_Default);
+    if Lbl <> nil then
+    begin
+        Lbl.Location := Point(MilsToCoord(60), MilsToCoord(-120));
+        Lbl.Orientation := eRotate0;
+        Lbl.FontID   := 1;
+        Lbl.Justification := eJustify_BottomLeft;
+        Lbl.Color    := $4080FF;                 { orange }
+        Lbl.Text     := 'COLOURED';
+        Lbl.OwnerPartId := 1;
+        Lbl.OwnerPartDisplayMode := Comp.DisplayMode;
+        Comp.AddSchObject(Lbl);
+        SchServer.RobotManager.SendMessage(Comp.I_ObjectAddress, c_BroadCast, SCHM_PrimitiveRegistration, Lbl.I_ObjectAddress);
+    end;
+end;
+
+{ Polyline carrying every styling property it owns: a non-default LineStyle,
+  both end shapes, the end-shape size, and Transparent. All five names resolve
+  in the DelphiScript identifier table (see scripts/samples/COVERAGE.md for how that
+  is checked); whether AD24 persists each is what this fixture establishes. }
+procedure AddPolylineStyled(Comp : ISch_Component; X1 : Integer; Y1 : Integer;
+                            X2 : Integer; Y2 : Integer; X3 : Integer; Y3 : Integer);
+var PL : ISch_Polyline;
+begin
+    PL := SchServer.SchObjectFactory(ePolyline, eCreate_Default);
+    if PL = nil then Exit;
+    PL.LineWidth      := eSmall;
+    PL.Color          := $000000;
+    PL.LineStyle      := eLineStyleDashed;
+    PL.StartLineShape := eLineShapeArrow;
+    PL.EndLineShape   := eLineShapeSolidArrow;
+    PL.LineShapeSize  := eLarge;
+    PL.ClearAllVertices;
+    PL.InsertVertex(1);  PL.Vertex[1] := Point(MilsToCoord(X1), MilsToCoord(Y1));
+    PL.InsertVertex(2);  PL.Vertex[2] := Point(MilsToCoord(X2), MilsToCoord(Y2));
+    PL.InsertVertex(3);  PL.Vertex[3] := Point(MilsToCoord(X3), MilsToCoord(Y3));
+    PL.OwnerPartId := 1;
+    PL.OwnerPartDisplayMode := Comp.DisplayMode;
+    Comp.AddSchObject(PL);
+    SchServer.RobotManager.SendMessage(Comp.I_ObjectAddress, c_BroadCast, SCHM_PrimitiveRegistration, PL.I_ObjectAddress);
+end;
+
+{ DOCUMENTED NEGATIVE (AD24): a round rectangle ACCEPTS LineStyle but does not
+  persist it — unlike ISch_Line and ISch_Polyline, which both save it. The
+  saved RECORD=10 carries no LineStyle key at all, so the read test asserts the
+  0 default. Kept as a living probe in case a later AD version starts writing
+  it; do not assert a non-zero value. }
+procedure AddRoundRectStyled(Comp : ISch_Component; X1 : Integer; Y1 : Integer;
+                             X2 : Integer; Y2 : Integer);
+var RR : ISch_RoundRectangle;
+begin
+    RR := SchServer.SchObjectFactory(eRoundRectangle, eCreate_Default);
+    if RR = nil then Exit;
+    RR.Location      := Point(MilsToCoord(X1), MilsToCoord(Y1));
+    RR.Corner        := Point(MilsToCoord(X2), MilsToCoord(Y2));
+    RR.CornerXRadius := MilsToCoord(12);
+    RR.CornerYRadius := MilsToCoord(12);
+    RR.LineWidth     := eSmall;
+    RR.Color         := $000000;
+    RR.LineStyle     := eLineStyleDotted;
+    RR.OwnerPartId   := 1;
+    RR.OwnerPartDisplayMode := Comp.DisplayMode;
+    Comp.AddSchObject(RR);
+    SchServer.RobotManager.SendMessage(Comp.I_ObjectAddress, c_BroadCast, SCHM_PrimitiveRegistration, RR.I_ObjectAddress);
+end;
+
+{ DOCUMENTED NEGATIVE (AD24): an arc has NO FILL. `Arc.IsSolid := True` is a
+  COMPILE error, "Undeclared identifier: IsSolid" — ISch_Arc is a stroked shape
+  and carries neither IsSolid nor AreaColor. A SchLib arc record can therefore
+  never gain a fill from Altium; the reader keeps the fields for hand-edited
+  files only. Do not reintroduce a filled-arc helper. }
+
+{ DOCUMENTED NEGATIVE (AD24): a pie has NO Transparent. `Pie.Transparent`
+  is a COMPILE error, "Undeclared identifier: Transparent" — the property is
+  real on ISch_Rectangle/RoundRectangle/Ellipse/Polygon but absent from
+  ISch_Pie, which carries only IsSolid + AreaColor. Do not reintroduce a
+  transparent-pie helper. }
+
+{ Label with the mirror flag. AD24 writes IsMirrored BEFORE UniqueID here and
+  AFTER it on a parameter record — the key orders genuinely differ. }
+procedure AddLabelFlagged(Comp : ISch_Component; X : Integer; Y : Integer; AText : String);
+var L : ISch_Label;
+begin
+    L := SchServer.SchObjectFactory(eLabel, eCreate_Default);
+    if L = nil then Exit;
+    L.Location      := Point(MilsToCoord(X), MilsToCoord(Y));
+    L.Orientation   := eRotate0;
+    L.FontID        := 1;
+    L.Justification := eJustify_BottomLeft;
+    L.Color         := $000000;
+    L.Text          := AText;
+    L.IsMirrored    := True;
+    L.OwnerPartId   := 1;
+    L.OwnerPartDisplayMode := Comp.DisplayMode;
+    Comp.AddSchObject(L);
+    SchServer.RobotManager.SendMessage(Comp.I_ObjectAddress, c_BroadCast, SCHM_PrimitiveRegistration, L.I_ObjectAddress);
+end;
+
+{ Parameter display properties the plain AddParameter never sets: the name shown
+  beside the value, a read-only state and mirroring. All three persist. }
+procedure AddParameterProps(Comp : ISch_Component; AName : String; AValue : String;
+                            X : Integer; Y : Integer);
+var Par : ISch_Parameter;
+begin
+    Par := SchServer.SchObjectFactory(eParameter, eCreate_Default);
+    if Par = nil then Exit;
+    Par.Location      := Point(MilsToCoord(X), MilsToCoord(Y));
+    Par.Name          := AName;
+    Par.Text          := AValue;
+    Par.FontID        := 1;
+    Par.Color         := $000000;
+    Par.IsHidden      := False;
+    Par.ShowName      := True;
+    Par.ReadOnlyState := 1;
+    Par.IsMirrored    := True;
+    Par.ParamType     := eParameterType_Integer;
+    Par.OwnerPartId   := 1;
+    Par.OwnerPartDisplayMode := Comp.DisplayMode;
+    Comp.AddSchObject(Par);
+    SchServer.RobotManager.SendMessage(Comp.I_ObjectAddress, c_BroadCast, SCHM_PrimitiveRegistration, Par.I_ObjectAddress);
+end;
+
+{ DOCUMENTED NEGATIVE (AD24): a polyline's fill properties are accepted and
+  then dropped. AreaColor / IsSolid / Transparent all compile on ISch_Polyline
+  but the saved RECORD=6 carries none of them, unlike the rectangle and
+  polygon records that do persist theirs. Kept as a living probe: the read
+  test asserts the defaults, so a later AD version that starts writing them
+  shows up as a failure. }
+procedure AddPolylineTransparent(Comp : ISch_Component; X1 : Integer; Y1 : Integer;
+                                 X2 : Integer; Y2 : Integer; X3 : Integer; Y3 : Integer);
+var PL : ISch_Polyline;
+begin
+    PL := SchServer.SchObjectFactory(ePolyline, eCreate_Default);
+    if PL = nil then Exit;
+    PL.LineWidth   := eSmall;
+    PL.Color       := $000000;
+    PL.AreaColor   := $00FFFF;
+    PL.IsSolid     := True;
+    PL.Transparent := True;
+    PL.ClearAllVertices;
+    PL.InsertVertex(1);  PL.Vertex[1] := Point(MilsToCoord(X1), MilsToCoord(Y1));
+    PL.InsertVertex(2);  PL.Vertex[2] := Point(MilsToCoord(X2), MilsToCoord(Y2));
+    PL.InsertVertex(3);  PL.Vertex[3] := Point(MilsToCoord(X3), MilsToCoord(Y3));
+    PL.OwnerPartId := 1;
+    PL.OwnerPartDisplayMode := Comp.DisplayMode;
+    Comp.AddSchObject(PL);
+    SchServer.RobotManager.SendMessage(Comp.I_ObjectAddress, c_BroadCast, SCHM_PrimitiveRegistration, PL.I_ObjectAddress);
+end;
+
+{ DOCUMENTED NEGATIVE (AD24): an image has NO ShowBorder. `Img.ShowBorder` is a
+  compile error, "Undeclared identifier" — the property is real on
+  ISch_TextFrame but not on ISch_Image, and no authored image record carries
+  the key. The reader keeps the field for hand-edited files only. }
+
+{ Text frame with a whole-mil text margin, which is the point: the plain frame's
+  margin is sub-mil, so the record carries only TextMargin_Frac and the integer
+  key is never exercised.
+  DOCUMENTED NEGATIVE (AD24): Transparent is accepted on a text frame and then
+  not written — the saved RECORD=28 has no Transparent key.
+  DOCUMENTED NEGATIVE (AD24): a text frame has NO Orientation.
+  `Frm.Orientation` is a compile error, "Undeclared identifier"; the property
+  is real on ISch_Label / ISch_Parameter / ISch_Pin but not on ISch_TextFrame,
+  and no authored frame record carries the key. }
+procedure AddTextFrameStyled(Comp : ISch_Component; X1 : Integer; Y1 : Integer;
+                             X2 : Integer; Y2 : Integer; AText : String);
+var Frm : ISch_TextFrame;
+begin
+    Frm := SchServer.SchObjectFactory(eTextFrame, eCreate_Default);
+    if Frm = nil then Exit;
+    Frm.Location    := Point(MilsToCoord(X1), MilsToCoord(Y1));
+    Frm.Corner      := Point(MilsToCoord(X2), MilsToCoord(Y2));
+    Frm.Text        := AText;
+    Frm.FontID      := 1;
+    Frm.Color       := $000000;
+    Frm.AreaColor   := $B0FFFF;
+    Frm.TextColor   := $800000;
+    Frm.IsSolid     := True;
+    Frm.ShowBorder  := True;
+    Frm.WordWrap    := True;
+    Frm.ClipToRect  := True;
+    Frm.LineWidth   := eSmall;
+    Frm.TextMargin  := MilsToCoord(30);
+    Frm.Transparent := True;
+    Frm.OwnerPartId := 1;
+    Frm.OwnerPartDisplayMode := Comp.DisplayMode;
+    Comp.AddSchObject(Frm);
+    SchServer.RobotManager.SendMessage(Comp.I_ObjectAddress, c_BroadCast, SCHM_PrimitiveRegistration, Frm.I_ObjectAddress);
+end;
+
+
+{ One of each remaining shape type with GraphicallyLocked := True. The flag lives
+  on ISch_GraphicalObject so it should reach every shape, but AD24 has already
+  shown that whether a property is WRITTEN varies per record: Disabled and Dimmed
+  are dropped, a polyline's fill is dropped, a text frame's transparency is
+  dropped. Authoring one per shape is the only way to know which persist. }
+procedure AddLockedShapes(Comp : ISch_Component);
+var
+    Lin : ISch_Line;
+    Arc : ISch_Arc;
+    Ell : ISch_Ellipse;
+    RRe : ISch_RoundRectangle;
+    Ply : ISch_Polyline;
+    Pgn : ISch_Polygon;
+    Pwe : ISch_Pie;
+    Bez : ISch_Bezier;
+    Lbl : ISch_Label;
+begin
+    Lin := SchServer.SchObjectFactory(eLine, eCreate_Default);
+    if Lin <> nil then
+    begin
+        Lin.Location  := Point(MilsToCoord(-200), MilsToCoord(100));
+        Lin.Corner    := Point(MilsToCoord(-120), MilsToCoord(100));
+        Lin.LineWidth := eSmall;
+        Lin.GraphicallyLocked := True;
+        Lin.OwnerPartId := 1;
+        Lin.OwnerPartDisplayMode := Comp.DisplayMode;
+        Comp.AddSchObject(Lin);
+        SchServer.RobotManager.SendMessage(Comp.I_ObjectAddress, c_BroadCast, SCHM_PrimitiveRegistration, Lin.I_ObjectAddress);
+    end;
+    Arc := SchServer.SchObjectFactory(eArc, eCreate_Default);
+    if Arc <> nil then
+    begin
+        Arc.Location   := Point(MilsToCoord(-200), MilsToCoord(40));
+        Arc.Radius     := MilsToCoord(20);
+        Arc.StartAngle := 0;
+        Arc.EndAngle   := 180;
+        Arc.LineWidth  := eSmall;
+        Arc.GraphicallyLocked := True;
+        Arc.OwnerPartId := 1;
+        Arc.OwnerPartDisplayMode := Comp.DisplayMode;
+        Comp.AddSchObject(Arc);
+        SchServer.RobotManager.SendMessage(Comp.I_ObjectAddress, c_BroadCast, SCHM_PrimitiveRegistration, Arc.I_ObjectAddress);
+    end;
+    Ell := SchServer.SchObjectFactory(eEllipse, eCreate_Default);
+    if Ell <> nil then
+    begin
+        Ell.Location        := Point(MilsToCoord(-120), MilsToCoord(40));
+        Ell.Radius          := MilsToCoord(25);
+        Ell.SecondaryRadius := MilsToCoord(15);
+        Ell.LineWidth       := eSmall;
+        Ell.GraphicallyLocked := True;
+        Ell.OwnerPartId := 1;
+        Ell.OwnerPartDisplayMode := Comp.DisplayMode;
+        Comp.AddSchObject(Ell);
+        SchServer.RobotManager.SendMessage(Comp.I_ObjectAddress, c_BroadCast, SCHM_PrimitiveRegistration, Ell.I_ObjectAddress);
+    end;
+    RRe := SchServer.SchObjectFactory(eRoundRectangle, eCreate_Default);
+    if RRe <> nil then
+    begin
+        RRe.Location      := Point(MilsToCoord(-200), MilsToCoord(-20));
+        RRe.Corner        := Point(MilsToCoord(-120), MilsToCoord(10));
+        RRe.CornerXRadius := MilsToCoord(8);
+        RRe.CornerYRadius := MilsToCoord(8);
+        RRe.LineWidth     := eSmall;
+        RRe.GraphicallyLocked := True;
+        RRe.OwnerPartId := 1;
+        RRe.OwnerPartDisplayMode := Comp.DisplayMode;
+        Comp.AddSchObject(RRe);
+        SchServer.RobotManager.SendMessage(Comp.I_ObjectAddress, c_BroadCast, SCHM_PrimitiveRegistration, RRe.I_ObjectAddress);
+    end;
+    Ply := SchServer.SchObjectFactory(ePolyline, eCreate_Default);
+    if Ply <> nil then
+    begin
+        Ply.LineWidth := eSmall;
+        Ply.ClearAllVertices;
+        Ply.InsertVertex(1);  Ply.Vertex[1] := Point(MilsToCoord(-100), MilsToCoord(-20));
+        Ply.InsertVertex(2);  Ply.Vertex[2] := Point(MilsToCoord(-60),  MilsToCoord(10));
+        Ply.InsertVertex(3);  Ply.Vertex[3] := Point(MilsToCoord(-20),  MilsToCoord(-20));
+        Ply.GraphicallyLocked := True;
+        Ply.OwnerPartId := 1;
+        Ply.OwnerPartDisplayMode := Comp.DisplayMode;
+        Comp.AddSchObject(Ply);
+        SchServer.RobotManager.SendMessage(Comp.I_ObjectAddress, c_BroadCast, SCHM_PrimitiveRegistration, Ply.I_ObjectAddress);
+    end;
+    Pgn := SchServer.SchObjectFactory(ePolygon, eCreate_Default);
+    if Pgn <> nil then
+    begin
+        Pgn.ClearAllVertices;
+        Pgn.InsertVertex(1);  Pgn.Vertex[1] := Point(MilsToCoord(0),  MilsToCoord(-20));
+        Pgn.InsertVertex(2);  Pgn.Vertex[2] := Point(MilsToCoord(60), MilsToCoord(-20));
+        Pgn.InsertVertex(3);  Pgn.Vertex[3] := Point(MilsToCoord(60), MilsToCoord(10));
+        Pgn.LineWidth := eSmall;
+        Pgn.GraphicallyLocked := True;
+        Pgn.OwnerPartId := 1;
+        Pgn.OwnerPartDisplayMode := Comp.DisplayMode;
+        Comp.AddSchObject(Pgn);
+        SchServer.RobotManager.SendMessage(Comp.I_ObjectAddress, c_BroadCast, SCHM_PrimitiveRegistration, Pgn.I_ObjectAddress);
+    end;
+    Pwe := SchServer.SchObjectFactory(ePie, eCreate_Default);
+    if Pwe <> nil then
+    begin
+        Pwe.Location   := Point(MilsToCoord(120), MilsToCoord(-20));
+        Pwe.Radius     := MilsToCoord(25);
+        Pwe.StartAngle := 0;
+        Pwe.EndAngle   := 90;
+        Pwe.LineWidth  := eSmall;
+        Pwe.GraphicallyLocked := True;
+        Pwe.OwnerPartId := 1;
+        Pwe.OwnerPartDisplayMode := Comp.DisplayMode;
+        Comp.AddSchObject(Pwe);
+        SchServer.RobotManager.SendMessage(Comp.I_ObjectAddress, c_BroadCast, SCHM_PrimitiveRegistration, Pwe.I_ObjectAddress);
+    end;
+    Bez := SchServer.SchObjectFactory(eBezier, eCreate_Default);
+    if Bez <> nil then
+    begin
+        Bez.LineWidth := eSmall;
+        Bez.ClearAllVertices;
+        Bez.InsertVertex(1);  Bez.SetState_Vertex(1, Point(MilsToCoord(-200), MilsToCoord(-80)));
+        Bez.InsertVertex(2);  Bez.SetState_Vertex(2, Point(MilsToCoord(-160), MilsToCoord(-50)));
+        Bez.InsertVertex(3);  Bez.SetState_Vertex(3, Point(MilsToCoord(-120), MilsToCoord(-50)));
+        Bez.InsertVertex(4);  Bez.SetState_Vertex(4, Point(MilsToCoord(-80),  MilsToCoord(-80)));
+        Bez.GraphicallyLocked := True;
+        Bez.OwnerPartId := 1;
+        Bez.OwnerPartDisplayMode := Comp.DisplayMode;
+        Comp.AddSchObject(Bez);
+        SchServer.RobotManager.SendMessage(Comp.I_ObjectAddress, c_BroadCast, SCHM_PrimitiveRegistration, Bez.I_ObjectAddress);
+    end;
+    Lbl := SchServer.SchObjectFactory(eLabel, eCreate_Default);
+    if Lbl <> nil then
+    begin
+        Lbl.Location := Point(MilsToCoord(0), MilsToCoord(-80));
+        Lbl.FontID   := 1;
+        Lbl.Text     := 'LOCKED';
+        Lbl.GraphicallyLocked := True;
+        Lbl.OwnerPartId := 1;
+        Lbl.OwnerPartDisplayMode := Comp.DisplayMode;
+        Comp.AddSchObject(Lbl);
+        SchServer.RobotManager.SendMessage(Comp.I_ObjectAddress, c_BroadCast, SCHM_PrimitiveRegistration, Lbl.I_ObjectAddress);
+    end;
+end;
+
+{ One symbol per writing system, each carrying the script in every
+  text-bearing field: the component name (which becomes the OLE storage
+  name), the description, a pin name, a label and a parameter value.
+
+  The list is broad because the project is used well beyond Latin scripts,
+  but the PROTECTION comes from a handful of behaviours rather than from the
+  count. Most entries are ordinary non-Latin1 BMP text taking one code unit
+  per character and exercising the same path. The ones that genuinely differ:
+  Arabic/Hebrew/Syriac/Thaana/N'Ko/Adlam run right to left; Devanagari,
+  Tamil, Khmer and Myanmar carry combining marks, so a character is not a
+  code point; Telugu and Sinhala use zero-width joiners; Thai has no word
+  spacing; Vietnamese appears both precomposed and decomposed, which are
+  different byte sequences for the same word; Mongolian is written
+  vertically; and the last three sit beyond the BMP, so each character needs
+  a SURROGATE PAIR in UTF-16 — the case most likely to break a length or
+  index calculation, since a CFB storage name is UTF-16 and capped at 31
+  code units. The ASCII entry is the control. }
+procedure AddI18nSymbol(Lib : ISch_Lib; ARef : String; ADesc : String; AWord : String);
+var Comp : ISch_Component;
+begin
+    Comp := NewSymbol(Lib, ARef, ADesc, 1);
+    if Comp = nil then Exit;
+    AddPinEx(Comp, -300, 0, 200, eRotate180, eElectricPassive, '1', AWord, True, True, False);
+    AddLabel(Comp, -100, 60, AWord, eJustify_BottomLeft, eRotate0);
+    AddParameter(Comp, 'Value', AWord, -100, -60, True, eJustify_BottomLeft, eRotate0);
+end;
+
 { ---- SchLib authoring -------------------------------------------------------
 
   Build order step 1: PINS_ETYPE — one pin per PinElectricalType, the densest
@@ -1701,13 +3343,14 @@ begin
     end;
 
     { ======================================================================
-      COVERAGE ENRICHMENT (docs/FIXTURE_COVERAGE.md): exercise the non-default
+      COVERAGE ENRICHMENT (scripts/samples/COVERAGE.md): exercise the non-default
       property values that the plain symbols above never set, so the Rust
       READ tests verify them against a REAL Altium file rather than only via a
-      self-round-trip. Each symbol is in its own try/except: an unverified AD24
-      property name fails ONLY that symbol, the rest of the library still saves.
-      Property names not already proven by a helper above are best-effort (from
-      AltiumSharp DTOs); on-site failures are expected to be iterated.
+      self-round-trip. Each symbol is in its own try/except: a runtime failure
+      costs ONLY that symbol, the rest of the library still saves. An unresolved
+      identifier is different — it is a COMPILE error and aborts the whole run,
+      so check every property and enum name against the DelphiScript identifier
+      table first (scripts/samples/COVERAGE.md gives the one-liner).
       ====================================================================== }
 
     { ---- SHAPESTYLE — non-default LineStyle lines + a transparent rectangle + a
@@ -1723,6 +3366,7 @@ begin
             AddRectTransparent(Comp, -100, 50, 100, 100);            { transparent rect }
             AddPolygonTransparent(Comp, -50, 120, 50, 170);          { transparent polygon }
             AddEllipseTransparent(Comp, 150, 100, 30, 20);           { transparent ellipse }
+            AddRectStyled(Comp, 150, -100, 250, -50, eLineStyleDashed); { dashed rectangle - LineStyleExt }
             { RoundRect Transparent is NOT persisted by Altium on a lib round-rect
               (reads back False), so it is not authored here — honest coverage only. }
         end;
@@ -1734,7 +3378,18 @@ begin
     try
         Comp := NewSymbol(Lib, 'LOCKFLAGS', 'Graphically locked / disabled / dimmed shape', 1);
         if Comp <> nil then
+        begin
             AddRectFlagged(Comp, -100, -50, 100, 50);
+            AddPinLocked(Comp, -150, '1', 'LK');
+        end;
+    except
+    end;
+
+    { ---- LOCKFLAGS2 — GraphicallyLocked on every remaining shape type. ---- }
+    try
+        Comp := NewSymbol(Lib, 'LOCKFLAGS2', 'Graphically locked shapes', 1);
+        if Comp <> nil then
+            AddLockedShapes(Comp);
     except
     end;
 
@@ -1834,7 +3489,341 @@ begin
             Comp.DisplayModeCount := 2;
             AddRectMode(Comp, -50, -25, 50, 25, 0);   { normal mode }
             AddRectMode(Comp, -60, -30, 60, 30, 1);   { first alternate (de-Morgan) mode }
+            AddPinMode(Comp, -100, '1', 'M0', 0);     { normal-mode pin }
+            AddPinMode(Comp, -200, '2', 'M1', 1);     { alternate-mode pin: the pin-record byte }
         end;
+    except
+    end;
+
+    { ---- UNINAME — a symbol whose NAME is outside Windows-1252 (issue #323). ----
+
+      Records are stored as Windows-1252, but a CFB storage name is UTF-16, so the
+      component storage and the FileHeader's LibRef entry are written through
+      different encodings. This is the ground truth for what Altium itself does:
+      which storage name it picks, and whether it promotes LibRef / LibReference to
+      a %UTF8% key. Chr(N) truncates modulo 256 (see TEXT_LONG's documented
+      negative), so the name is a literal — this file is UTF-8. If DelphiScript
+      mangles the literal, the generated sample shows that instead, which is also
+      worth knowing. }
+    try
+        Comp := NewSymbol(Lib, 'Резистор', 'описание Ω', 1);
+        if Comp <> nil then
+            AddRect(Comp, -50, -25, 50, 25, False, $FFFFFF);
+    except
+    end;
+
+    { ---- SHAPECOLOR — one of every shape type in a distinct non-black colour.
+      Every other symbol authors black, which Altium omits as the default, so
+      this is the only golden coverage of the shape parsers' colour arms. ---- }
+    try
+        Comp := NewSymbol(Lib, 'SHAPECOLOR', 'Non-default colour on every shape', 1);
+        if Comp <> nil then
+            AddColourShapes(Comp);
+    except
+    end;
+
+    { ---- SHAPESTYLE2 — the styling properties no other symbol reaches. Only the
+      polyline is authored today: it is the single unproven interface/property
+      family this run risks, and an unresolved name would cost every other
+      symbol in the run. The staged probes below follow one run at a time. ---- }
+    try
+        Comp := NewSymbol(Lib, 'SHAPESTYLE2', 'Remaining shape styling properties', 1);
+        if Comp <> nil then
+        begin
+            AddPolylineStyled(Comp, -150, 80, -100, 130, -50, 80);
+            AddPolylineTransparent(Comp, 40, 80, 90, 130, 140, 80);
+            AddTextFrameStyled(Comp, 180, -40, 260, 60, 'FRAME2');
+            AddRoundRectStyled(Comp, -150, 0, -50, 50);
+            AddLabelFlagged(Comp, -150, -80, 'MIRRORED');
+            AddParameterProps(Comp, 'Rating', '10V', 50, -80);
+        end;
+    except
+    end;
+
+    // ELLARC (batch 5): elliptical arcs (RECORD=11), on-grid and off-grid, so the
+    // record kind has a golden at all — its display flags and _Frac keys had
+    // nothing to be verified against.
+    try
+        Comp := NewSymbol(Lib, 'ELLARC', 'Elliptical arcs', 1);
+        if Comp <> nil then
+        begin
+            AddEllipticalArc(Comp, -60, 0, 50, 30, 0, 270, False, False);
+            AddEllipticalArc(Comp,  60, 0, 50, 30, 45, 315, True, True);
+        end;
+    except
+    end;
+
+    // IMPLCHAIN (batch 5): footprint model links (RECORD=44/45/46/48). Three
+    // links: the current one with a datafile path, a plain non-current one,
+    // and one flagged the way a UI-authored link is (IntegratedModel +
+    // DatabaseModel), so the replay of that form has a golden.
+    try
+        Comp := NewSymbol(Lib, 'IMPLCHAIN', 'Footprint model links', 1);
+        if Comp <> nil then
+        begin
+            AddPinEx(Comp, -300, 0, 200, eRotate180, eElectricPassive, '1', 'A', True, True, False);
+            AddImplementation(Comp, 'SOIC-8', 'Narrow body', 'Footprints.PcbLib', True, False);
+            AddImplementation(Comp, 'SOIC-8-WIDE', '', '', False, False);
+            AddImplementation(Comp, 'DIP-8', 'Through-hole', '', False, True);
+        end;
+    except
+    end;
+
+    // IEEESYM (batch 6): IEEE symbols (RECORD=3) — a plain dot, a mirrored and
+    // rotated clock, and a larger, coloured, locked active-low input — so the
+    // record kind has a golden and its keys are Altium's, not this crate's.
+    try
+        Comp := NewSymbol(Lib, 'IEEESYM', 'IEEE symbols', 1);
+        if Comp <> nil then
+        begin
+            AddIeeeSymbol(Comp, -100,  0, eDot,            100, False, eRotate0,   $000000, False);
+            AddIeeeSymbol(Comp,    0,  0, eClock,          100, True,  eRotate90,  $000000, False);
+            AddIeeeSymbol(Comp,  100,  0, eActiveLowInput, 200, False, eRotate0,   $FF0000, True);
+        end;
+    except
+    end;
+
+    // FRACSHAPES2 (batch 5): the off-grid shapes FRACSHAPES did not cover.
+    try
+        Comp := NewSymbol(Lib, 'FRACSHAPES2', 'Off-grid shapes, every other kind', 1);
+        if Comp <> nil then
+            AddFracShapes(Comp);
+    except
+    end;
+
+
+    { DOCUMENTED NEGATIVE (AD24, three runs, 2026-08-16): five of the symbols
+      below (_JV, _BN, _CR, _IU, _SB) are internally inconsistent in the saved
+      library NO MATTER how their words are constructed, and the damage is the
+      script ENGINE's, not this file's:
+
+      1. Source literals (this file's encoding is clean UTF-8): the engine
+         mis-decodes exactly these five sequences -- the CFB storage name comes
+         out correct while the text records hold a shifted string.
+      2. Wide Chr() (Chr($A997) + ...): Chr truncates to its LOW BYTE -- the
+         engine's strings are ANSI -- so every field degrades to byte garbage.
+      3. UTF-8 byte Chr() (Chr($EA) + Chr($A6) + ...): storage names and
+         SectionKeys come out byte-perfect, but every TEXT record re-encodes
+         the byte-chars as UTF-8, double-widening the name.
+
+      There is no scripted construction left to try: the engine either
+      mis-decodes the source or double-encodes the string. Fixing these five
+      requires renaming the symbols once by hand in the AD UI. Until then the
+      Rust side excuses exactly these five, by suffix, in
+      tests/golden_fidelity.rs (FIXTURE_INCONSISTENT). Do NOT retry Chr(). }
+    { ---- I18N — one symbol per writing system, so a non-Latin name is a
+      tested case rather than an assumption. See AddI18nSymbol for why the
+      list is shaped the way it is. ---- }
+    try
+        AddI18nSymbol(Lib, 'Resistor_LA', 'Script: Latin, ASCII control', 'Resistor');
+    except
+    end;
+    try
+        AddI18nSymbol(Lib, 'Résistance_L1', 'Script: Latin-1 supplement, precomposed', 'Résistance');
+    except
+    end;
+    try
+        AddI18nSymbol(Lib, 'Điện trở_VI', 'Script: Latin, Vietnamese diacritic stacking (NFC)', 'Điện trở');
+    except
+    end;
+    try
+        AddI18nSymbol(Lib, 'Điện trở_VD', 'Script: Latin, Vietnamese decomposed (NFD)', 'Điện trở');
+    except
+    end;
+    try
+        AddI18nSymbol(Lib, 'Резистор_RU', 'Script: Cyrillic', 'Резистор');
+    except
+    end;
+    try
+        AddI18nSymbol(Lib, 'Αντίσταση_EL', 'Script: Greek', 'Αντίσταση');
+    except
+    end;
+    try
+        AddI18nSymbol(Lib, 'Դիմադրիչ_HY', 'Script: Armenian', 'Դիմադրիչ');
+    except
+    end;
+    try
+        AddI18nSymbol(Lib, 'რეზისტორი_KA', 'Script: Georgian', 'რეზისტორი');
+    except
+    end;
+    try
+        AddI18nSymbol(Lib, '电阻_ZH', 'Script: Han, simplified', '电阻');
+    except
+    end;
+    try
+        AddI18nSymbol(Lib, '電阻_TW', 'Script: Han, traditional', '電阻');
+    except
+    end;
+    try
+        AddI18nSymbol(Lib, '抵抗器カナ_JA', 'Script: Japanese, kanji and kana', '抵抗器カナ');
+    except
+    end;
+    try
+        AddI18nSymbol(Lib, '저항기_KO', 'Script: Hangul', '저항기');
+    except
+    end;
+    try
+        AddI18nSymbol(Lib, 'ㄉㄧㄢˋㄗㄨˇ_BO', 'Script: Bopomofo', 'ㄉㄧㄢˋㄗㄨˇ');
+    except
+    end;
+    try
+        AddI18nSymbol(Lib, 'مقاومة_AR', 'Script: Arabic, right to left', 'مقاومة');
+    except
+    end;
+    try
+        AddI18nSymbol(Lib, 'مقاومت_FA', 'Script: Arabic, Persian letters', 'مقاومت');
+    except
+    end;
+    try
+        AddI18nSymbol(Lib, 'נגד_HE', 'Script: Hebrew, right to left', 'נגד');
+    except
+    end;
+    try
+        AddI18nSymbol(Lib, 'ܣܘܪܝܝܐ_SY', 'Script: Syriac, right to left', 'ܣܘܪܝܝܐ');
+    except
+    end;
+    try
+        AddI18nSymbol(Lib, 'ދިވެހި_DV', 'Script: Thaana, right to left', 'ދިވެހި');
+    except
+    end;
+    try
+        AddI18nSymbol(Lib, 'ߒߞߏ_NK', 'Script: N''Ko, right to left', 'ߒߞߏ');
+    except
+    end;
+    try
+        AddI18nSymbol(Lib, 'प्रतिरोधक_HI', 'Script: Devanagari, combining marks', 'प्रतिरोधक');
+    except
+    end;
+    try
+        AddI18nSymbol(Lib, 'রোধক_BN', 'Script: Bengali', 'রোধক');
+    except
+    end;
+    try
+        AddI18nSymbol(Lib, 'ਰੋਧਕ_PA', 'Script: Gurmukhi', 'ਰੋਧਕ');
+    except
+    end;
+    try
+        AddI18nSymbol(Lib, 'અવરોધક_GU', 'Script: Gujarati', 'અવરોધક');
+    except
+    end;
+    try
+        AddI18nSymbol(Lib, 'ପ୍ରତିରୋଧକ_OR', 'Script: Odia', 'ପ୍ରତିରୋଧକ');
+    except
+    end;
+    try
+        AddI18nSymbol(Lib, 'மின்தடை_TA', 'Script: Tamil', 'மின்தடை');
+    except
+    end;
+    try
+        AddI18nSymbol(Lib, 'నిరోధకం_TE', 'Script: Telugu, zero-width joiner', 'నిరోధకం');
+    except
+    end;
+    try
+        AddI18nSymbol(Lib, 'ಪ್ರತಿರೋಧಕ_KN', 'Script: Kannada', 'ಪ್ರತಿರೋಧಕ');
+    except
+    end;
+    try
+        AddI18nSymbol(Lib, 'പ്രതിരോധകം_ML', 'Script: Malayalam', 'പ്രതിരോധകം');
+    except
+    end;
+    try
+        AddI18nSymbol(Lib, 'ප්‍රතිරෝධකය_SI', 'Script: Sinhala', 'ප්‍රතිරෝධකය');
+    except
+    end;
+    try
+        AddI18nSymbol(Lib, 'ᱚᱞ ᱪᱤᱠᱤ_SA', 'Script: Ol Chiki, Santali', 'ᱚᱞ ᱪᱤᱠᱤ');
+    except
+    end;
+    try
+        AddI18nSymbol(Lib, 'ꯃꯤꯇꯩ_MN', 'Script: Meetei Mayek, Manipuri', 'ꯃꯤꯇꯩ');
+    except
+    end;
+    try
+        AddI18nSymbol(Lib, 'ตัวต้านทาน_TH', 'Script: Thai, no word spacing', 'ตัวต้านทาน');
+    except
+    end;
+    try
+        AddI18nSymbol(Lib, 'ຕົວຕ້ານທານ_LO', 'Script: Lao', 'ຕົວຕ້ານທານ');
+    except
+    end;
+    try
+        AddI18nSymbol(Lib, 'រេស៊ីស្ទ័រ_KM', 'Script: Khmer, stacked consonants', 'រេស៊ីស្ទ័រ');
+    except
+    end;
+    try
+        AddI18nSymbol(Lib, 'လျှပ်ခုခံ_MY', 'Script: Myanmar', 'လျှပ်ခုခံ');
+    except
+    end;
+    try
+        AddI18nSymbol(Lib, 'ꦗꦮ_JV', 'Script: Javanese', 'ꦗꦮ');
+    except
+    end;
+    try
+        AddI18nSymbol(Lib, 'ᬩᬮᬶ_BA', 'Script: Balinese', 'ᬩᬮᬶ');
+    except
+    end;
+    try
+        AddI18nSymbol(Lib, 'ᮞᮥᮔ᮪ᮓ_SU', 'Script: Sundanese', 'ᮞᮥᮔ᮪ᮓ');
+    except
+    end;
+    try
+        AddI18nSymbol(Lib, 'ᨅᨔ_BU', 'Script: Buginese, Lontara', 'ᨅᨔ');
+    except
+    end;
+    try
+        AddI18nSymbol(Lib, 'ᜊᜌ᜔ᜊᜌᜒᜈ᜔_TL', 'Script: Tagalog, Baybayin', 'ᜊᜌ᜔ᜊᜌᜒᜈ᜔');
+    except
+    end;
+    try
+        AddI18nSymbol(Lib, 'ꨌꨩꩌ_CH', 'Script: Cham', 'ꨌꨩꩌ');
+    except
+    end;
+    try
+        AddI18nSymbol(Lib, 'བོད་ཡིག_BD', 'Script: Tibetan', 'བོད་ཡིག');
+    except
+    end;
+    try
+        AddI18nSymbol(Lib, 'ᠮᠣᠩᠭᠣᠯ_MO', 'Script: Mongolian, written vertically', 'ᠮᠣᠩᠭᠣᠯ');
+    except
+    end;
+    try
+        AddI18nSymbol(Lib, 'አማርኛ_AM', 'Script: Ethiopic, Amharic', 'አማርኛ');
+    except
+    end;
+    try
+        AddI18nSymbol(Lib, 'ⵜⵉⴼⵉⵏⴰⵖ_TI', 'Script: Tifinagh, Berber', 'ⵜⵉⴼⵉⵏⴰⵖ');
+    except
+    end;
+    try
+        AddI18nSymbol(Lib, 'ꕙꔤ_VA', 'Script: Vai', 'ꕙꔤ');
+    except
+    end;
+    try
+        AddI18nSymbol(Lib, 'ꆈꌠ_YI', 'Script: Yi', 'ꆈꌠ');
+    except
+    end;
+    try
+        AddI18nSymbol(Lib, 'ᏣᎳᎩ_CR', 'Script: Cherokee', 'ᏣᎳᎩ');
+    except
+    end;
+    try
+        AddI18nSymbol(Lib, 'ᐃᓄᒃᑎᑐᑦ_IU', 'Script: Canadian Aboriginal Syllabics, Inuktitut', 'ᐃᓄᒃᑎᑐᑦ');
+    except
+    end;
+    try
+        AddI18nSymbol(Lib, 'ⲕⲟⲡⲧⲓⲕⲟⲛ_CO', 'Script: Coptic', 'ⲕⲟⲡⲧⲓⲕⲟⲛ');
+    except
+    end;
+    try
+        AddI18nSymbol(Lib, '𠮷野_SB', 'Script: Han beyond the BMP: surrogate pair', '𠮷野');
+    except
+    end;
+    try
+        AddI18nSymbol(Lib, '𞤀𞤣𞤤𞤢𞤥_AD', 'Script: Adlam beyond the BMP, right to left', '𞤀𞤣𞤤𞤢𞤥');
+    except
+    end;
+    try
+        AddI18nSymbol(Lib, '𐒰𐓑𐓘_OS', 'Script: Osage beyond the BMP', '𐒰𐓑𐓘');
     except
     end;
 
@@ -1843,6 +3832,40 @@ begin
     // IServerDocument has no DoFileSaveAs; use DoSafeChangeFileNameAndSave.
     Doc.SetModified(True);
     Doc.DoSafeChangeFileNameAndSave(OUT_DIR + 'symbols.SchLib', 'SCHLIB');
+end;
+
+{ Opens a library previously saved to the bridge dir and resaves it through
+  Altium's own reader and writer, touching no string literals at all.
+
+  DOCUMENTED NEGATIVE (run 4, 2026-08-16): this was hoped to cure the five
+  damaged i18n symbols — their records carry the true name in the %UTF8% twin,
+  so a resave "should" recover it. It does not: the output held a FOURTH
+  mangling variant, worse than the input (replacement characters appearing),
+  proving the broken component is AD's READER itself. That one defect explains
+  every prior failure: the script engine feeds literals through the same
+  decode, and each open+save degrades these five sequences further. The only
+  path that bypasses the broken decode is typing the names in the AD UI (input
+  goes straight to a real wide string; the writer side is faithful, as the 48
+  working symbols prove), done ONCE — the repo never re-opens goldens in AD, so
+  reader-side lossiness never touches the committed file again. }
+procedure ResaveRun;
+var
+    Doc : IServerDocument;
+begin
+    try
+        Doc := Client.OpenDocument('SCHLIB', OUT_DIR + 'resave_input.SchLib');
+        if Doc = nil then
+        begin
+            WriteResponse('error', 'OpenDocument returned nil for resave_input.SchLib');
+            Exit;
+        end;
+        Client.ShowDocument(Doc);
+        Doc.SetModified(True);
+        Doc.DoSafeChangeFileNameAndSave(OUT_DIR + 'resave_output.SchLib', 'SCHLIB');
+        WriteResponse('ok', 'resaved SchLib through Altium reader+writer');
+    except
+        WriteResponse('error', 'exception during resave (see Altium)');
+    end;
 end;
 
 procedure Run;

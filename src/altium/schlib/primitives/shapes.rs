@@ -51,6 +51,14 @@ pub struct Rectangle {
     /// shape identity; a from-scratch shape generates a fresh one on write (#113).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unique_id: Option<String>,
+    /// The record exactly as read: every `key=value` segment in stored order
+    /// (an empty segment as `("", "")`), so the writer replays it verbatim
+    /// where the field behind a segment is unchanged and emits only the keys
+    /// Altium wrote — the UI omits `LineWidth=1` on a rectangle, a script
+    /// does not. Empty for a record built from scratch, which emits the
+    /// canonical form.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub raw_params: Vec<(String, String)>,
 }
 
 const fn default_line_width() -> u8 {
@@ -67,6 +75,7 @@ impl Rectangle {
         y2: impl Into<f64>,
     ) -> Self {
         Self {
+            raw_params: Vec::new(),
             x1: x1.into(),
             y1: y1.into(),
             x2: x2.into(),
@@ -126,6 +135,14 @@ pub struct Line {
     /// shape identity; a from-scratch shape generates a fresh one on write (#113).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unique_id: Option<String>,
+    /// The record exactly as read: every `key=value` segment in stored order
+    /// (an empty segment as `("", "")`), so the writer replays it verbatim
+    /// where the field behind a segment is unchanged and emits only the keys
+    /// Altium wrote — the UI omits `LineWidth=1` on a rectangle, a script
+    /// does not. Empty for a record built from scratch, which emits the
+    /// canonical form.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub raw_params: Vec<(String, String)>,
 }
 
 impl Line {
@@ -139,6 +156,7 @@ impl Line {
         y2: impl Into<f64>,
     ) -> Self {
         Self {
+            raw_params: Vec::new(),
             x1: x1.into(),
             y1: y1.into(),
             x2: x2.into(),
@@ -160,7 +178,9 @@ impl Line {
 /// not derived (floats are only `PartialEq`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Polyline {
-    /// Points as (x, y) pairs.
+    /// Points as (x, y) pairs; serialised as `{x, y}` objects, the shape the
+    /// tool schema documents.
+    #[serde(with = "crate::altium::serde_round::xy_points")]
     pub points: Vec<(f64, f64)>,
     /// Line width.
     #[serde(default = "default_line_width")]
@@ -198,6 +218,37 @@ pub struct Polyline {
     /// shape identity; a from-scratch shape generates a fresh one on write (#113).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unique_id: Option<String>,
+    /// The record exactly as read: every `key=value` segment in stored order
+    /// (an empty segment as `("", "")`), so the writer replays it verbatim
+    /// where the field behind a segment is unchanged and emits only the keys
+    /// Altium wrote — the UI omits `LineWidth=1` on a rectangle, a script
+    /// does not. Empty for a record built from scratch, which emits the
+    /// canonical form.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub raw_params: Vec<(String, String)>,
+}
+
+impl Polyline {
+    /// Creates a plain polyline through `points`: a small black solid stroke
+    /// with no end shapes, not accessible.
+    #[must_use]
+    pub fn new(points: Vec<(f64, f64)>) -> Self {
+        Self {
+            points,
+            line_width: 1,
+            color: 0,
+            line_style: 0,
+            start_line_shape: 0,
+            end_line_shape: 0,
+            line_shape_size: 0,
+            transparent: false,
+            is_not_accessible: true,
+            owner_part_id: 1,
+            display_flags: ShapeDisplayFlags::default(),
+            unique_id: None,
+            raw_params: Vec::new(),
+        }
+    }
 }
 
 /// A filled polygon.
@@ -206,7 +257,9 @@ pub struct Polyline {
 /// not derived (floats are only `PartialEq`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Polygon {
-    /// Vertices as (x, y) pairs.
+    /// Vertices as (x, y) pairs; serialised as `{x, y}` objects, the shape the
+    /// tool schema documents.
+    #[serde(with = "crate::altium::serde_round::xy_points")]
     pub points: Vec<(f64, f64)>,
     /// Border line width.
     #[serde(default = "default_line_width")]
@@ -243,6 +296,36 @@ pub struct Polygon {
     /// shape identity; a from-scratch shape generates a fresh one on write (#113).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unique_id: Option<String>,
+    /// The record exactly as read: every `key=value` segment in stored order
+    /// (an empty segment as `("", "")`), so the writer replays it verbatim
+    /// where the field behind a segment is unchanged and emits only the keys
+    /// Altium wrote — the UI omits `LineWidth=1` on a rectangle, a script
+    /// does not. Empty for a record built from scratch, which emits the
+    /// canonical form.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub raw_params: Vec<(String, String)>,
+}
+
+impl Polygon {
+    /// Creates a filled polygon through `points`, with the same defaults as a
+    /// rectangle (dark-red border, light-yellow fill, not accessible).
+    #[must_use]
+    pub fn new(points: Vec<(f64, f64)>) -> Self {
+        Self {
+            points,
+            line_width: 1,
+            line_color: 0x00_00_80,
+            fill_color: 0xB0_FF_FF,
+            line_style: 0,
+            filled: true,
+            transparent: false,
+            is_not_accessible: true,
+            owner_part_id: 1,
+            display_flags: ShapeDisplayFlags::default(),
+            unique_id: None,
+            raw_params: Vec::new(),
+        }
+    }
 }
 
 /// An arc or circle.
@@ -290,6 +373,44 @@ pub struct Arc {
     /// shape identity; a from-scratch shape generates a fresh one on write (#113).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unique_id: Option<String>,
+    /// The record exactly as read: every `key=value` segment in stored order
+    /// (an empty segment as `("", "")`), so the writer replays it verbatim
+    /// where the field behind a segment is unchanged and emits only the keys
+    /// Altium wrote — the UI omits `LineWidth=1` on a rectangle, a script
+    /// does not. Empty for a record built from scratch, which emits the
+    /// canonical form.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub raw_params: Vec<(String, String)>,
+}
+
+impl Arc {
+    /// Creates an arc centred on (`x`, `y`) with the given radius, from
+    /// `start_angle` to `end_angle` in degrees, at the defaults a from-scratch
+    /// arc gets (small black stroke, not accessible).
+    #[must_use]
+    pub fn new(
+        x: impl Into<f64>,
+        y: impl Into<f64>,
+        radius: impl Into<f64>,
+        start_angle: f64,
+        end_angle: f64,
+    ) -> Self {
+        Self {
+            x: x.into(),
+            y: y.into(),
+            radius: radius.into(),
+            is_not_accessible: true,
+            start_angle,
+            end_angle,
+            line_width: 1,
+            color: 0,
+            fill_color: 0,
+            owner_part_id: 1,
+            display_flags: ShapeDisplayFlags::default(),
+            unique_id: None,
+            raw_params: Vec::new(),
+        }
+    }
 }
 
 const fn default_end_angle() -> f64 {
@@ -350,6 +471,14 @@ pub struct Pie {
     /// shape identity; a from-scratch shape generates a fresh one on write (#113).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unique_id: Option<String>,
+    /// The record exactly as read: every `key=value` segment in stored order
+    /// (an empty segment as `("", "")`), so the writer replays it verbatim
+    /// where the field behind a segment is unchanged and emits only the keys
+    /// Altium wrote — the UI omits `LineWidth=1` on a rectangle, a script
+    /// does not. Empty for a record built from scratch, which emits the
+    /// canonical form.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub raw_params: Vec<(String, String)>,
 }
 
 impl Pie {
@@ -363,6 +492,7 @@ impl Pie {
         end_angle: f64,
     ) -> Self {
         Self {
+            raw_params: Vec::new(),
             x: x.into(),
             y: y.into(),
             radius: radius.into(),
@@ -462,6 +592,14 @@ pub struct Image {
     /// shape identity; a from-scratch shape generates a fresh one on write (#113).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unique_id: Option<String>,
+    /// The record exactly as read: every `key=value` segment in stored order
+    /// (an empty segment as `("", "")`), so the writer replays it verbatim
+    /// where the field behind a segment is unchanged and emits only the keys
+    /// Altium wrote — the UI omits `LineWidth=1` on a rectangle, a script
+    /// does not. Empty for a record built from scratch, which emits the
+    /// canonical form.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub raw_params: Vec<(String, String)>,
 }
 
 impl Image {
@@ -476,6 +614,7 @@ impl Image {
         file_name: impl Into<String>,
     ) -> Self {
         Self {
+            raw_params: Vec::new(),
             x1: x1.into(),
             y1: y1.into(),
             x2: x2.into(),
@@ -548,10 +687,21 @@ pub struct Bezier {
     /// Owner part ID.
     #[serde(default = "default_owner_part")]
     pub owner_part_id: i32,
+    /// Universal display/lock flags; omitted from JSON when all default.
+    #[serde(default, flatten)]
+    pub display_flags: ShapeDisplayFlags,
     /// Altium unique ID (8-char). Preserved on read so a round-trip keeps the
     /// shape identity; a from-scratch shape generates a fresh one on write (#113).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unique_id: Option<String>,
+    /// The record exactly as read: every `key=value` segment in stored order
+    /// (an empty segment as `("", "")`), so the writer replays it verbatim
+    /// where the field behind a segment is unchanged and emits only the keys
+    /// Altium wrote — the UI omits `LineWidth=1` on a rectangle, a script
+    /// does not. Empty for a record built from scratch, which emits the
+    /// canonical form.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub raw_params: Vec<(String, String)>,
 }
 
 impl Bezier {
@@ -569,6 +719,7 @@ impl Bezier {
         y4: impl Into<f64>,
     ) -> Self {
         Self {
+            raw_params: Vec::new(),
             x1: x1.into(),
             y1: y1.into(),
             x2: x2.into(),
@@ -581,6 +732,7 @@ impl Bezier {
             color: 0x00_00_80, // Dark red (BGR)
             is_not_accessible: true,
             owner_part_id: 1,
+            display_flags: ShapeDisplayFlags::default(),
             unique_id: None,
         }
     }
@@ -634,6 +786,14 @@ pub struct Ellipse {
     /// shape identity; a from-scratch shape generates a fresh one on write (#113).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unique_id: Option<String>,
+    /// The record exactly as read: every `key=value` segment in stored order
+    /// (an empty segment as `("", "")`), so the writer replays it verbatim
+    /// where the field behind a segment is unchanged and emits only the keys
+    /// Altium wrote — the UI omits `LineWidth=1` on a rectangle, a script
+    /// does not. Empty for a record built from scratch, which emits the
+    /// canonical form.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub raw_params: Vec<(String, String)>,
 }
 
 impl Ellipse {
@@ -646,6 +806,7 @@ impl Ellipse {
         radius_y: impl Into<f64>,
     ) -> Self {
         Self {
+            raw_params: Vec::new(),
             x: x.into(),
             y: y.into(),
             radius_x: radius_x.into(),
@@ -723,6 +884,14 @@ pub struct RoundRect {
     /// shape identity; a from-scratch shape generates a fresh one on write (#113).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unique_id: Option<String>,
+    /// The record exactly as read: every `key=value` segment in stored order
+    /// (an empty segment as `("", "")`), so the writer replays it verbatim
+    /// where the field behind a segment is unchanged and emits only the keys
+    /// Altium wrote — the UI omits `LineWidth=1` on a rectangle, a script
+    /// does not. Empty for a record built from scratch, which emits the
+    /// canonical form.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub raw_params: Vec<(String, String)>,
 }
 
 impl RoundRect {
@@ -738,6 +907,7 @@ impl RoundRect {
         corner_y_radius: impl Into<f64>,
     ) -> Self {
         Self {
+            raw_params: Vec::new(),
             x1: x1.into(),
             y1: y1.into(),
             x2: x2.into(),
@@ -797,10 +967,23 @@ pub struct EllipticalArc {
     /// Owner part ID.
     #[serde(default = "default_owner_part")]
     pub owner_part_id: i32,
+    /// Universal display/lock flags; omitted from JSON when all default. The
+    /// ELLARC golden stores a locked arc as `GraphicallyLocked=T` right after
+    /// `OwnerPartId`, as every other graphic does.
+    #[serde(default, flatten)]
+    pub display_flags: ShapeDisplayFlags,
     /// Altium unique ID (8-char). Preserved on read so a round-trip keeps the
     /// shape identity; a from-scratch shape generates a fresh one on write (#113).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unique_id: Option<String>,
+    /// The record exactly as read: every `key=value` segment in stored order
+    /// (an empty segment as `("", "")`), so the writer replays it verbatim
+    /// where the field behind a segment is unchanged and emits only the keys
+    /// Altium wrote — the UI omits `LineWidth=1` on a rectangle, a script
+    /// does not. Empty for a record built from scratch, which emits the
+    /// canonical form.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub raw_params: Vec<(String, String)>,
 }
 
 impl EllipticalArc {
@@ -815,6 +998,8 @@ impl EllipticalArc {
         end_angle: impl Into<f64>,
     ) -> Self {
         Self {
+            display_flags: ShapeDisplayFlags::default(),
+            raw_params: Vec::new(),
             x: x.into(),
             y: y.into(),
             radius: radius.into(),
@@ -841,6 +1026,92 @@ impl EllipticalArc {
     }
 }
 
+/// An IEEE symbol — `SchLib` `RECORD=3`.
+///
+/// One of Altium's standard logic and signal glyphs (a dot, a clock, an
+/// active-low input, …) placed at a point with a scale, a quarter-turn
+/// rotation and an optional mirror. Settled by the `IEEESYM` golden: the record carries `Symbol`,
+/// `Location.X/Y`, `ScaleFactor`, `Orientation`, `LineWidth`, `Mirror=T`,
+/// `Color` and the universal display flags — and no `UniqueID`, which is why
+/// this struct has none. Earlier versions of this crate read `RECORD=3` as a
+/// text annotation; Altium's text string is [`super::Label`] (`RECORD=4`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct IeeeSymbol {
+    /// Anchor X (`Location.X`).
+    #[serde(serialize_with = "crate::altium::serde_round::serialize")]
+    pub x: f64,
+    /// Anchor Y (`Location.Y`).
+    #[serde(serialize_with = "crate::altium::serde_round::serialize")]
+    pub y: f64,
+    /// The glyph, as Altium's `TIeeeSymbol` id: 1 Dot, 2 Right-Left Signal
+    /// Flow, 3 Clock, 4 Active Low Input, 5 Analog Signal In, 6 Not Logic
+    /// Connection, 7 Shift Right, 8 Postponed Output, 9 Open Collector, 10 Hi-Z,
+    /// 11 High Current, 12 Pulse, 13 Schmitt, 14 Delay, 15 Group Line, 16 Group
+    /// Binary, 17 Active Low Output, 18 Pi, 19 Greater Equal, 20 Less Equal,
+    /// 21 Sigma, 22 Open Collector Pull Up, 23 Open Emitter, 24 Open Emitter
+    /// Pull Up, 25 Digital Signal In, 26 And, 27 Invertor, 28 Or, 29 Xor,
+    /// 30 Shift Left, 31 Input Output, 32 Open Circuit Output, 33 Left-Right
+    /// Signal Flow, 34 Bidirectional Signal Flow (`docs/SCHLIB_FORMAT.md`).
+    pub symbol: u32,
+    /// Glyph size (`ScaleFactor`), in schematic units; Altium's default
+    /// placement is 10.
+    #[serde(
+        default = "default_scale_factor",
+        serialize_with = "crate::altium::serde_round::serialize"
+    )]
+    pub scale_factor: f64,
+    /// Rotation in degrees, a multiple of 90 (`Orientation` 0-3).
+    #[serde(default, serialize_with = "crate::altium::serde_round::serialize")]
+    pub rotation: f64,
+    /// Mirrored (`Mirror=T`).
+    #[serde(default)]
+    pub is_mirrored: bool,
+    /// Line width.
+    #[serde(default = "default_line_width")]
+    pub line_width: u8,
+    /// Line colour (BGR format).
+    #[serde(default)]
+    pub color: u32,
+    /// Owner part ID.
+    #[serde(default = "default_owner_part")]
+    pub owner_part_id: i32,
+    /// Universal display/lock flags; omitted from JSON when all default.
+    #[serde(default, flatten)]
+    pub display_flags: ShapeDisplayFlags,
+    /// The record exactly as read: every `key=value` segment in stored order
+    /// (an empty segment as `("", "")`), so the writer replays it verbatim
+    /// where the field behind a segment is unchanged and emits only the keys
+    /// Altium wrote. Empty for a record built from scratch, which emits the
+    /// canonical form.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub raw_params: Vec<(String, String)>,
+}
+
+const fn default_scale_factor() -> f64 {
+    10.0
+}
+
+impl IeeeSymbol {
+    /// Creates an IEEE symbol of glyph `symbol` at (`x`, `y`), at Altium's
+    /// default size, unrotated and unmirrored.
+    #[must_use]
+    pub fn new(symbol: u32, x: impl Into<f64>, y: impl Into<f64>) -> Self {
+        Self {
+            x: x.into(),
+            y: y.into(),
+            symbol,
+            scale_factor: default_scale_factor(),
+            rotation: 0.0,
+            is_mirrored: false,
+            line_width: 1,
+            color: 0,
+            owner_part_id: 1,
+            display_flags: ShapeDisplayFlags::default(),
+            raw_params: Vec::new(),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -858,5 +1129,22 @@ mod tests {
             RoundRect::new(0, 0, 10, 10, 2, 2).fill_color,
             ALTIUM_LIGHT_YELLOW
         );
+    }
+
+    #[test]
+    fn a_minimal_arc_defaults_to_a_full_circle_one_unit_wide() {
+        // Only centre and radius are required; an omitted end angle must sweep
+        // the full 360 degrees and an omitted width must be Altium's 1.
+        let a: Arc = serde_json::from_value(serde_json::json!({
+            "x": 0.0, "y": 0.0, "radius": 5.0
+        }))
+        .unwrap();
+        assert!(
+            (a.end_angle - 360.0).abs() < 1e-9,
+            "end_angle {}",
+            a.end_angle
+        );
+        assert!((a.start_angle - 0.0).abs() < 1e-9);
+        assert_eq!(a.line_width, 1);
     }
 }

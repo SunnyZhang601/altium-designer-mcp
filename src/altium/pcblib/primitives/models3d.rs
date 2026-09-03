@@ -114,21 +114,39 @@ pub struct ComponentBody {
     #[serde(default, serialize_with = "crate::altium::serde_round::serialize")]
     pub standoff_height: f64,
 
+    /// Cavity depth in mm (`CAVITYHEIGHT`), for a body embedded into a board
+    /// cavity. Altium writes the key on every body, `0mil` when unused.
+    #[serde(default, serialize_with = "crate::altium::serde_round::serialize")]
+    pub cavity_height: f64,
+
     /// Layer the body outline is on.
     #[serde(default)]
     pub layer: Layer,
 
-    /// 2D outline of the body in the footprint plane, as `(x, y)` vertices in mm.
+    /// 2D outline of the body in the footprint plane, as `(x, y)` vertices in
+    /// mm; serialised as `{x, y}` objects, the shape the tool schema documents.
     ///
     /// Altium stores a closed polygon giving the body's 2D extent. When this is
     /// empty the writer synthesises a bounding box from the footprint, since
     /// Altium needs a non-degenerate outline to place and render the body.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        with = "crate::altium::serde_round::xy_points"
+    )]
     pub outline: Vec<(f64, f64)>,
 
     /// Unique ID assigned by Altium (8-character alphanumeric string).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unique_id: Option<String>,
+    /// Altium's stable identity for this primitive, from the footprint's
+    /// `PrimitiveGuids` stream (`{XXXXXXXX-…}`), or `None` for a primitive
+    /// with no recorded identity (anything built from scratch). Riding on the
+    /// primitive itself, the identity follows it through structural edits —
+    /// deleting a neighbour cannot re-point it, which the old footprint-level
+    /// ordinal list could not guarantee.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub guid: Option<String>,
 
     /// Model integrity checksum (Altium `MODEL.CHECKSUM`). Round-tripped verbatim —
     /// never recomputed, because the checksum is over the raw (uncompressed) model
@@ -176,6 +194,62 @@ pub struct ComponentBody {
     /// written with `{:.3}` so the default renders as `0.000` (byte-identity).
     #[serde(default)]
     pub model_2d_rotation: f64,
+    /// Model offset from the body origin in the 2D plane, X in mm (`MODEL.2D.X`).
+    /// Altium stores it mil-suffixed. Default `0.0`.
+    #[serde(default, serialize_with = "crate::altium::serde_round::serialize")]
+    pub model_2d_x: f64,
+    /// Model offset in the 2D plane, Y in mm (`MODEL.2D.Y`). Default `0.0`.
+    #[serde(default, serialize_with = "crate::altium::serde_round::serialize")]
+    pub model_2d_y: f64,
+
+    /// The body's `IDENTIFIER` — a user-visible name, stored on disk as a
+    /// comma-separated list of decimal Unicode code points (`µΩ电` is
+    /// `181,937,30005`; settled by the hand-authored `manual/identifier.PcbLib`).
+    /// Held here as the decoded string; empty when the body has none.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub identifier: String,
+
+    /// The `TEXTURECENTERX` value, verbatim wire text (mil-suffixed). The UI
+    /// and the scripting route disagree on these four texture values (the UI
+    /// writes `TEXTURESIZEX=0.0001mil` where a scripted body carries `0mil`),
+    /// so they round-trip as read rather than being derived; `None` emits the
+    /// scripted-body default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub texture_center_x: Option<String>,
+    /// The `TEXTURECENTERY` value, verbatim wire text (see `texture_center_x`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub texture_center_y: Option<String>,
+    /// The `TEXTURESIZEX` value, verbatim wire text (see `texture_center_x`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub texture_size_x: Option<String>,
+    /// The `TEXTURESIZEY` value, verbatim wire text (see `texture_center_x`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub texture_size_y: Option<String>,
+    /// The `TEXTUREROTATION` value, verbatim wire text (see `texture_center_x`);
+    /// a UI-authored body rotates its texture (`terminal_block_5mm_3way` carries
+    /// ` 9.00000000000000E+0001`), so it is carried rather than reset to zero.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub texture_rotation: Option<String>,
+
+    /// The header layer byte exactly as read, kept only when `layer_from_id`
+    /// hit its `MultiLayer` catch-all on an id it does not map — the byte
+    /// cannot be re-derived from [`Self::layer`] then, and without this the
+    /// writer rewrote it to the canonical `MultiLayer` id (#391). Replayed
+    /// (together with [`Self::v7_layer`]) only while the body still sits on
+    /// that catch-all layer; retargeting the body to a real layer discards
+    /// both and emits the canonical pair.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub raw_layer_id: Option<u8>,
+
+    /// The `V7_LAYER` token verbatim, kept only when it disagrees with the
+    /// canonical token for [`Self::layer`] — the text half of the same
+    /// unmapped-byte pair as [`Self::raw_layer_id`]. Unlike `Region::v7_layer`
+    /// (where a mapped layer can legitimately carry a disagreeing token, so
+    /// replay is unconditional), a body's disagreement only arises from an
+    /// unmapped byte, so byte and token replay under the same condition and
+    /// can never re-emit as a mismatched pair.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub v7_layer: Option<String>,
 
     /// Net index into the board's net list — common-header u16 @3. `0xFFFF`
     /// (65535) means "no net", the from-scratch default (round-trip fidelity).
@@ -202,6 +276,13 @@ pub struct ComponentBody {
     /// the output stays byte-identical to the canonical form.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub additional_parameters: Vec<(String, String)>,
+    /// The keys of the parameter block in the order they were read, canonical
+    /// and unmodelled alike, so the writer emits them in Altium's order — a
+    /// UI-authored body stores `BODYOVERRIDECOLOR=TRUE` right after
+    /// `BODYOPACITY3D`, not appended. Empty for a from-scratch body, which
+    /// emits the canonical order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub param_key_order: Vec<String>,
 }
 
 const fn default_body_color() -> u32 {
@@ -252,9 +333,11 @@ impl ComponentBody {
             z_offset: 0.0,
             overall_height: 0.0,
             standoff_height: 0.0,
+            cavity_height: 0.0,
             layer: Layer::Top3DBody,
             outline: Vec::new(),
             unique_id: None,
+            guid: None,
             model_checksum: 0,
             name: default_body_name(),
             kind: 0,
@@ -265,10 +348,21 @@ impl ComponentBody {
             body_color_3d: default_body_color(),
             body_opacity_3d: default_opacity(),
             model_2d_rotation: 0.0,
+            model_2d_x: 0.0,
+            model_2d_y: 0.0,
+            identifier: String::new(),
+            texture_center_x: None,
+            texture_center_y: None,
+            texture_size_x: None,
+            texture_size_y: None,
+            texture_rotation: None,
+            raw_layer_id: None,
+            v7_layer: None,
             net_index: default_net_index(),
             polygon_index: default_polygon_index(),
             component_index: default_component_index(),
             additional_parameters: Vec::new(),
+            param_key_order: Vec::new(),
         }
     }
 }

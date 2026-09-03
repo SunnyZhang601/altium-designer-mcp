@@ -848,7 +848,7 @@ fn write_pcblib_component_body_fields_roundtrip() {
                 { "x": 1.0, "y": 1.0 }, { "x": -1.0, "y": 1.0 },
             ],
             "body_color_3d": 0xFF_0000, "body_opacity_3d": 0.5, "body_projection": 1,
-            "model_2d_rotation": 90.0, "is_shape_based": true, "kind": 2, "name": "BODY_A",
+            "is_shape_based": true, "kind": 2, "name": "BODY_A",
         }],
     });
     let write = h.call_tool(
@@ -873,10 +873,56 @@ fn write_pcblib_component_body_fields_roundtrip() {
     assert_eq!(i(bd, "body_color_3d"), 0xFF_0000, "body_color_3d");
     assert!(near(f(bd, "body_opacity_3d"), 0.5), "body_opacity_3d");
     assert_eq!(i(bd, "body_projection"), 1, "body_projection");
-    assert!(near(f(bd, "model_2d_rotation"), 90.0), "model_2d_rotation");
+    // model_2d_rotation is NOT asserted here: this body is extruded (outline,
+    // no model), and Altium stores the MODEL.* placement group only for
+    // model-backed bodies — the golden's extruded bodies carry no MODEL keys
+    // at all, so the field has nowhere to live in the file. It round-trips for
+    // STEP-backed bodies, where the group exists.
     assert!(b(bd, "is_shape_based"), "is_shape_based");
     assert_eq!(i(bd, "kind"), 2, "body kind");
     assert_eq!(s(bd, "name"), "BODY_A", "body name");
+}
+
+#[test]
+fn write_pcblib_per_layer_pad_stack_roundtrip() {
+    // The pad stack is modelled and round-trips through the file, but until now none
+    // of it was reachable from write_pcblib: the schema had no entries and the parser
+    // hard-coded Simple/None, so a caller could not author anything but a simple pad.
+    let mut h = Harness::start();
+    let lib = h.lib_path();
+    let footprint = json!({
+        "name": "PAD_STACK_RT",
+        "pads": [{
+            "designator": "1", "x": 0.0, "y": 0.0, "width": 1.0, "height": 1.0,
+            "hole_size": 0.5,
+            "stack_mode": "top_middle_bottom",
+            "per_layer_sizes": [
+                { "width": 1.6, "height": 1.2 },
+                { "width": 1.4, "height": 1.0 },
+                { "width": 1.8, "height": 1.4 },
+            ],
+            "per_layer_shapes": ["round", "rectangular", "octagonal"],
+        }],
+    });
+    let write = h.call_tool(
+        "write_pcblib",
+        json!({ "filepath": lib, "footprints": [footprint], "append": false }),
+    );
+    assert!(
+        !is_err(&write),
+        "write_pcblib (pad stack) succeeded: {write}"
+    );
+
+    let read = h.call_tool("read_pcblib", json!({ "filepath": lib }));
+    let fp = find_by(arr(&read, "footprints"), "name", "PAD_STACK_RT").expect("present");
+    let pad = &arr(fp, "pads")[0];
+    assert_eq!(
+        pad.get("stack_mode").and_then(serde_json::Value::as_str),
+        Some("top_middle_bottom"),
+        "stack mode survives the round trip: {pad}"
+    );
+    let sizes = arr(pad, "per_layer_sizes");
+    assert_eq!(sizes.len(), 3, "three per-layer entries: {pad}");
 }
 
 #[test]
@@ -1936,15 +1982,19 @@ fn read_schlib_exposes_round_rects_and_polygons() {
     );
     assert_eq!(len_of(pg, "polygons"), 2, "POLYGONS exposes 2 polygons");
 
+    // A symbol without a family omits its key — the struct's own serde shape,
+    // which write_schlib and import_library default to empty — so a client
+    // must not rely on every list being present.
     let pins = find_by(symbols, "name", "PINS_ETYPE").expect("PINS_ETYPE symbol");
     assert!(
-        pins.get("round_rects").is_some(),
-        "PINS_ETYPE has 'round_rects' field"
+        pins.get("round_rects").is_none(),
+        "PINS_ETYPE carries no round_rects, so the key is omitted"
     );
     assert!(
-        pins.get("polygons").is_some(),
-        "PINS_ETYPE has 'polygons' field"
+        pins.get("polygons").is_none(),
+        "PINS_ETYPE carries no polygons, so the key is omitted"
     );
+    assert!(len_of(pins, "pins") > 0, "its pins are there");
 }
 
 /// Collects an `additional_parameters` array of `[key, value]` pairs.

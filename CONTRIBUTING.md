@@ -99,9 +99,10 @@ When submitting:
 - [ ] Code is formatted (`cargo fmt --all --check`)
 - [ ] Clippy passes (`cargo clippy --all-targets --all-features -- -D warnings`)
 - [ ] Markdown lints cleanly (`markdownlint-cli2 "**/*.md"`)
+- [ ] Internal links and anchors resolve (`lychee --offline --include-fragments "./**/*.md"`; `cargo install lychee`)
 - [ ] File paths are validated and path-traversal tests cover any new file-touching tool (see [Security Considerations](#security-considerations))
 - [ ] Documentation is updated if needed
-- [ ] CHANGELOG.md is updated for user-facing changes (once the changelog is initialised at the first release)
+- [ ] CHANGELOG.md is updated for user-facing changes (add to the `## [Unreleased]` section)
 - [ ] Commit messages follow [conventional commits](#commit-messages)
 
 #### PR Process
@@ -252,6 +253,17 @@ cargo test module_name::
 - Use descriptive test names that explain what's being tested
 - Test both success and failure cases
 
+### Coverage
+
+The project holds **99% line coverage on production code** (`main.rs` excluded — it is
+exercised end-to-end across a process boundary instrumentation cannot see; measured with
+`cargo llvm-cov --all-features --workspace --ignore-filename-regex '(^|[/\\])main\.rs$'`).
+Two facts worth knowing when reading figures near the gate: the measured total flaps by a
+few lines between identical runs, so treat small movements as noise; and the remaining
+uncovered lines are, on inspection, ones a passing test cannot reach — assertion-failure
+formatting, `cfg(unix)` signal handling, manual-tooling branches and defence-in-depth
+behind the writers' own guarantees — so a new test should target a seam, not the number.
+
 ---
 
 ## Documentation
@@ -270,21 +282,21 @@ cargo test module_name::
 | `docs/ARCHITECTURE.md` | System architecture and module layout |
 | `docs/AI_WORKFLOW.md` | AI usage workflow, symbol pin conventions, IPC reference |
 | `docs/AGENT_GUIDE.md` | Invariants for an agent driving the server (units, pin geometry, sandbox) |
-| `docs/CLAUDE_CODE_GUIDE.md` | Step-by-step Claude Code setup guide |
-| `docs/ANTIGRAVITY_GUIDE.md` | Google Antigravity setup guide |
+| `docs/CLIENT_SETUP.md` | Setup for every MCP client (Claude Code, Claude Desktop, Antigravity, Cursor, VS Code, Windsurf, Cline, Zed, JetBrains, Gemini CLI, Codex CLI, …) + troubleshooting — the single place a client's wiring is described |
+| `docs/USAGE.md` | What to ask for once connected: workflows, prompts, tips — client-neutral |
 | `docs/SECURITY.md` | Security threat model and design rationale |
+| `docs/RELEASING.md` | Release runbook: dry run, tag-day steps, draft review, rollback |
 | `docs/errors.md` | Error reference catalogue |
 | `docs/TOOLS.md` | Generated tool reference (source of truth: `src/mcp/tool_definitions.rs`) |
 | `docs/PCBLIB_FORMAT.md` | `.PcbLib` binary format reference |
 | `docs/SCHLIB_FORMAT.md` | `.SchLib` binary format reference |
-| `docs/FIXTURE_COVERAGE.md` | Golden-fixture coverage map for the Altium-authored samples |
-| `docs/COVERAGE_AUDIT.md` | Point-in-time feature-coverage audit snapshot and roadmap |
+| `scripts/samples/COVERAGE.md` | Golden-fixture coverage map, verified Altium negatives and the scripting-name checks |
 | Rustdoc comments | API documentation |
 
 ### Updating Documentation
 
 - Update `README.md` for user-facing changes
-- Update `CHANGELOG.md` for all notable changes (once the changelog is initialised at the first release)
+- Update `CHANGELOG.md` for all notable changes (add to the `## [Unreleased]` section)
 - Update rustdoc comments when changing public APIs
 - Keep examples up to date and working
 

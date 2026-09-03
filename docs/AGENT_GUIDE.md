@@ -43,10 +43,31 @@ Overbar (active-low) pin names use a backslash **after** each barred character
 conventions and examples:
 [AI_WORKFLOW.md § Symbol Pin Conventions](AI_WORKFLOW.md#symbol-pin-conventions).
 
+## Symbol draw order
+
+Schematic records render in the order they are stored, so a filled body drawn
+after a pin hides that pin's name. You do not have to manage this: a symbol you
+author from JSON is written body-graphics-first, so `"filled": true` bodies sit
+behind their pin names. Keep bodies solid — a transparent body is not the fix
+for hidden pin names. Supply `primitive_order` only to reproduce an order you
+read off an existing file; it overrides the default.
+
+## Description length
+
+The Altium 365 library importer refuses a component whose description exceeds
+**256 characters**, and it names neither the library nor the component at
+fault. Altium Designer itself opens and reads such a library whole, so a longer
+`description` is written as asked — and every write and `validate_library`
+reports it as a warning naming the component and the overshoot. If a library
+is bound for a workspace, keep footprint, symbol and footprint-link
+descriptions inside the limit; put the long-form reasoning in your own notes,
+not the description field.
+
 ## Filesystem sandbox
 
-Only paths inside the configured `allowed_paths` (see `config.json`) can be read
-or written. Requests outside the sandbox are rejected. Writes create a timestamped
+Only paths inside the configured `allowed_paths` (`config.json`, or the folders
+granted with `--allow`) can be read or written. Requests outside the sandbox are
+rejected. Writes create a timestamped
 `.bak` of any existing file first.
 
 ## Typical build flow

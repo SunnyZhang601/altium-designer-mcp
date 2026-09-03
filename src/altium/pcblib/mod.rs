@@ -46,9 +46,10 @@ mod writer;
 use serde::{Deserialize, Serialize};
 
 pub use primitives::{
-    Arc, ComponentBody, EmbeddedModel, Fill, HoleShape, Layer, MaskExpansionMode, Model3D, Pad,
-    PadShape, PadStackMode, PcbFlags, PowerPlaneConnectStyle, Region, RegionKind, StrokeFont, Text,
-    TextJustification, TextKind, Track, Vertex, Via,
+    Arc, ComponentBody, DrillLayerPairType, EmbeddedModel, Fill, HoleShape, Layer,
+    MaskExpansionMode, Model3D, Pad, PadShape, PadStackMode, PcbFlags, PowerPlaneConnectStyle,
+    Region, RegionKind, StrokeFont, Text, TextJustification, TextKind, Track, Vertex, Via,
+    ViaStackMode,
 };
 
 use crate::altium::error::{AltiumError, AltiumResult};
@@ -134,9 +135,248 @@ pub struct Footprint {
     /// 3D model reference (legacy, use `component_bodies` for new code).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model_3d: Option<Model3D>,
+
+    /// Altium's stable identity for the footprint record itself — the
+    /// `PrimitiveGuids` stream's kind-85 entry. Each primitive's own identity
+    /// rides on the primitive (`guid` on all eight primitive structs), so a
+    /// structural edit moves identities with their primitives; this field
+    /// carries the one identity that names no primitive.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub guid: Option<String>,
+
+    /// The order the primitives are stored in, one entry per primitive.
+    ///
+    /// Altium interleaves kinds in authoring order — `LOCKFLAGS_PCB` in the
+    /// golden runs pad x6, track, pad x2, track, arc x2, fill x2 — and both
+    /// identity streams key off a primitive's position in that sequence:
+    /// `PrimitiveGuids` stores it as a record's second `u32`, and
+    /// `UniqueIDPrimitiveInformation` as `PRIMITIVEINDEX`. Emitting the kinds
+    /// in blocks would renumber every primitive and detach both.
+    ///
+    /// An entry names one of the lists above; its n-th occurrence refers to
+    /// that list's n-th element, so the sequence alone reconstructs the
+    /// interleaving. It is maintained by the `add_*` methods, which is how
+    /// reading a footprint records the file's order. Empty when the primitive
+    /// lists were populated directly, in which case the writer falls back to
+    /// [`PrimitiveKind::WRITE_ORDER`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub primitive_order: Vec<PrimitiveKind>,
 }
 
+/// How many primitives of each kind [`Footprint::move_layer`] moved.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct LayerMove {
+    /// Tracks moved.
+    pub tracks: usize,
+    /// Arcs moved.
+    pub arcs: usize,
+    /// Text moved.
+    pub text: usize,
+    /// Fills moved.
+    pub fills: usize,
+    /// Regions moved.
+    pub regions: usize,
+    /// Pads moved.
+    pub pads: usize,
+    /// Component bodies moved.
+    pub component_bodies: usize,
+}
+
+impl LayerMove {
+    /// Every primitive moved, all kinds together.
+    #[must_use]
+    pub const fn total(self) -> usize {
+        self.tracks
+            + self.arcs
+            + self.text
+            + self.fills
+            + self.regions
+            + self.pads
+            + self.component_bodies
+    }
+}
+
+primitive_kinds! {
+    /// One of a [`Footprint`]'s primitive lists, as named by `primitive_order`.
+    PrimitiveKind {
+        /// [`Footprint::arcs`].
+        Arc => "arc",
+        /// [`Footprint::pads`].
+        Pad => "pad",
+        /// [`Footprint::vias`].
+        Via => "via",
+        /// [`Footprint::tracks`].
+        Track => "track",
+        /// [`Footprint::text`].
+        Text => "text",
+        /// [`Footprint::regions`].
+        Region => "region",
+        /// [`Footprint::fills`].
+        Fill => "fill",
+        /// [`Footprint::component_bodies`].
+        ComponentBody => "component_body",
+    }
+}
+
+impl PrimitiveKind {
+    /// Altium's numeric object id for this kind, as a `PrimitiveGuids`
+    /// record stores it.
+    #[must_use]
+    pub const fn altium_object_id(self) -> u32 {
+        match self {
+            Self::Arc => 1,
+            Self::Pad => 2,
+            Self::Via => 3,
+            Self::Track => 4,
+            Self::Text => 5,
+            Self::Fill => 6,
+            Self::Region => 89,
+            Self::ComponentBody => 90,
+        }
+    }
+
+    /// The kind for one of Altium's numeric object ids, or `None` for an id
+    /// that names no library primitive (85 is the footprint record itself).
+    #[must_use]
+    pub const fn from_altium_object_id(id: u32) -> Option<Self> {
+        match id {
+            1 => Some(Self::Arc),
+            2 => Some(Self::Pad),
+            3 => Some(Self::Via),
+            4 => Some(Self::Track),
+            5 => Some(Self::Text),
+            6 => Some(Self::Fill),
+            89 => Some(Self::Region),
+            90 => Some(Self::ComponentBody),
+            _ => None,
+        }
+    }
+
+    /// The `PRIMITIVEOBJECTID` token Altium writes for this kind in a
+    /// `UniqueIDPrimitiveInformation` record.
+    #[must_use]
+    pub const fn object_id(self) -> &'static str {
+        match self {
+            Self::Arc => "Arc",
+            Self::Pad => "Pad",
+            Self::Via => "Via",
+            Self::Track => "Track",
+            Self::Text => "Text",
+            Self::Region => "Region",
+            Self::Fill => "Fill",
+            Self::ComponentBody => "ComponentBody",
+        }
+    }
+}
+
+/// One `PrimitiveGuids` record as it sits in the stream.
+///
+/// Which primitive it names, and its GUID. Parse/emit carrier only — the
+/// identities themselves live on the primitives (`guid`) and on
+/// [`Footprint::guid`].
+///
+/// The stream is a `u32` count followed by that many 24-byte records of
+/// `[object_kind: u32][ordinal: u32][guid: 16 bytes, little-endian]`.
+/// `object_kind` is Altium's object id — 1 arc, 2 pad, 3 via, 4 track, 5 text,
+/// 6 fill, 85 the footprint itself, 89 region, 90 component body.
+///
+/// `index` is the primitive's position among **all** the footprint's
+/// primitives, not among its own kind: across the 22 golden footprints the
+/// indices are a permutation of `0..n-1` once the footprint's own record (kind
+/// 85, always index 0) is set aside, and `PRIMPROPS` puts its regions at 0, 4,
+/// 5 and 6 with a pad at 1 and its texts at 2 and 3. It is the same ordinal
+/// `UniqueIDPrimitiveInformation` calls `PRIMITIVEINDEX`, which is why
+/// [`Footprint::primitive_order`] has to survive a write for either to mean
+/// anything.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PrimitiveGuid {
+    /// Altium object id of the primitive this GUID belongs to.
+    pub object_kind: u32,
+    /// Position of the primitive among all of the footprint's primitives.
+    pub index: u32,
+    /// The GUID, formatted `{XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX}`.
+    pub guid: String,
+}
+
+/// Most overlapping pad pairs a tool reports before collapsing to a summary.
+///
+/// Overlaps are quadratic in pad count, so a systematic error on a large BGA
+/// would otherwise bury the response in tens of thousands of entries. Shared by
+/// `write_pcblib` and `validate_library` so both truncate alike.
+pub const MAX_REPORTED_PAD_OVERLAPS: usize = 20;
+
 impl Footprint {
+    /// Finds pairs of pads whose copper overlaps on a shared layer.
+    ///
+    /// Overlapping copper merges into a single net, so a footprint can pass every
+    /// integrity check while shorting pins together — the classic cause being an
+    /// exposed thermal pad sized against a mis-read land dimension, which welds
+    /// the EP to every perimeter pad.
+    ///
+    /// Returns `(index_a, index_b, overlap_x, overlap_y)` in mm with `a < b`, where
+    /// the overlaps are the intersection rectangle's width and height.
+    ///
+    /// Deliberate constructions are excluded:
+    /// - pads sharing a designator (same designator == same net in Altium, so
+    ///   stacking them is a normal way to build a compound land),
+    /// - pads with no layer in common (a Top-only and a Bottom-only pad may sit
+    ///   at identical coordinates; `MultiLayer` shares both).
+    ///
+    /// Non-rectangular and rotated pads are compared by their axis-aligned
+    /// bounding box, so the test errs toward reporting: a false positive costs a
+    /// glance, a missed short costs a board. Pads that merely touch (zero gap)
+    /// are reported, since Altium merges those too.
+    #[must_use]
+    pub fn overlapping_pad_pairs(&self) -> Vec<(usize, usize, f64, f64)> {
+        /// Zero-gap tolerance. Altium stores coordinates in 2.54 nm units, so
+        /// anything at or below this is contact rather than clearance.
+        const TOUCH_TOL: f64 = 1e-6;
+
+        fn spans(pad: &Pad) -> (f64, f64) {
+            // Rotated pads use the AABB of the rotated rectangle.
+            if pad.rotation.abs() < f64::EPSILON {
+                return (pad.width, pad.height);
+            }
+            let radians = pad.rotation.to_radians();
+            let (cos, sin) = (radians.cos().abs(), radians.sin().abs());
+            (
+                pad.width.mul_add(cos, pad.height * sin),
+                pad.width.mul_add(sin, pad.height * cos),
+            )
+        }
+        fn shares_layer(a: &Pad, b: &Pad) -> bool {
+            let sides = |p: &Pad| match p.layer {
+                Layer::TopLayer => (true, false),
+                Layer::BottomLayer => (false, true),
+                Layer::MultiLayer => (true, true),
+                _ => (false, false), // non-copper pads cannot short
+            };
+            let (at, ab) = sides(a);
+            let (bt, bb) = sides(b);
+            (at && bt) || (ab && bb)
+        }
+
+        let mut hits = Vec::new();
+        for (i, a) in self.pads.iter().enumerate() {
+            for (j, b) in self.pads.iter().enumerate().skip(i + 1) {
+                if a.designator == b.designator || !shares_layer(a, b) {
+                    continue;
+                }
+                let (aw, ah) = spans(a);
+                let (bw, bh) = spans(b);
+                // Intersection extent, not penetration depth: when one pad sits
+                // wholly inside the other's span on an axis, the overlap there is
+                // the smaller pad's size, which is what a reader expects to see.
+                let ox = ((aw + bw) / 2.0 - (a.x - b.x).abs()).min(aw).min(bw);
+                let oy = ((ah + bh) / 2.0 - (a.y - b.y).abs()).min(ah).min(bh);
+                if ox >= -TOUCH_TOL && oy >= -TOUCH_TOL {
+                    hits.push((i, j, ox.max(0.0), oy.max(0.0)));
+                }
+            }
+        }
+        hits
+    }
+
     /// Creates a new empty footprint with the given name.
     #[must_use]
     pub fn new(name: impl Into<String>) -> Self {
@@ -152,47 +392,326 @@ impl Footprint {
             fills: Vec::new(),
             component_bodies: Vec::new(),
             model_3d: None,
+            guid: None,
+            primitive_order: Vec::new(),
         }
     }
 
     /// Adds a pad to the footprint.
     pub fn add_pad(&mut self, pad: Pad) {
         self.pads.push(pad);
+        self.primitive_order.push(PrimitiveKind::Pad);
     }
 
     /// Adds a via to the footprint.
     pub fn add_via(&mut self, via: Via) {
         self.vias.push(via);
+        self.primitive_order.push(PrimitiveKind::Via);
     }
 
     /// Adds a track to the footprint.
     pub fn add_track(&mut self, track: Track) {
         self.tracks.push(track);
+        self.primitive_order.push(PrimitiveKind::Track);
     }
 
     /// Adds an arc to the footprint.
     pub fn add_arc(&mut self, arc: Arc) {
         self.arcs.push(arc);
+        self.primitive_order.push(PrimitiveKind::Arc);
     }
 
     /// Adds a region to the footprint.
     pub fn add_region(&mut self, region: Region) {
         self.regions.push(region);
+        self.primitive_order.push(PrimitiveKind::Region);
     }
 
     /// Adds text to the footprint.
     pub fn add_text(&mut self, text: Text) {
         self.text.push(text);
+        self.primitive_order.push(PrimitiveKind::Text);
     }
 
     /// Adds a fill to the footprint.
     pub fn add_fill(&mut self, fill: primitives::Fill) {
         self.fills.push(fill);
+        self.primitive_order.push(PrimitiveKind::Fill);
     }
 
     /// Adds a component body (3D model) to the footprint.
     pub fn add_component_body(&mut self, body: primitives::ComponentBody) {
         self.component_bodies.push(body);
+        self.primitive_order.push(PrimitiveKind::ComponentBody);
+    }
+
+    /// Moves every primitive on `from` to `to` — tracks, arcs, text, fills,
+    /// regions, pads and component bodies, every kind that sits on a layer —
+    /// and returns how many of each moved. A carrier that named the old
+    /// layer (a header byte kept as `raw_layer_id`, a region's or body's
+    /// `V7_LAYER` token) is dropped so the writer derives it from the new
+    /// layer instead of replaying a stale one. Vias span layers and are not
+    /// on one; they are untouched.
+    pub fn move_layer(&mut self, from: Layer, to: Layer) -> LayerMove {
+        let mut moved = LayerMove::default();
+        for track in &mut self.tracks {
+            if track.layer == from {
+                track.layer = to;
+                track.raw_layer_id = None;
+                moved.tracks += 1;
+            }
+        }
+        for arc in &mut self.arcs {
+            if arc.layer == from {
+                arc.layer = to;
+                arc.raw_layer_id = None;
+                moved.arcs += 1;
+            }
+        }
+        for text in &mut self.text {
+            if text.layer == from {
+                text.layer = to;
+                text.raw_layer_id = None;
+                moved.text += 1;
+            }
+        }
+        for fill in &mut self.fills {
+            if fill.layer == from {
+                fill.layer = to;
+                fill.raw_layer_id = None;
+                moved.fills += 1;
+            }
+        }
+        for region in &mut self.regions {
+            if region.layer == from {
+                region.layer = to;
+                region.v7_layer = None;
+                moved.regions += 1;
+            }
+        }
+        for pad in &mut self.pads {
+            if pad.layer == from {
+                pad.layer = to;
+                pad.raw_layer_id = None;
+                moved.pads += 1;
+            }
+        }
+        for body in &mut self.component_bodies {
+            if body.layer == from {
+                body.layer = to;
+                body.raw_layer_id = None;
+                body.v7_layer = None;
+                moved.component_bodies += 1;
+            }
+        }
+        moved
+    }
+
+    /// Keeps the component bodies `keep` accepts and drops the rest together
+    /// with their slots in [`Self::primitive_order`], so every other primitive
+    /// keeps its place in the file; a bare `retain` on the list leaves the
+    /// order one slot long per body and the later bodies each move up one.
+    /// Returns how many were dropped.
+    pub fn retain_component_bodies(
+        &mut self,
+        mut keep: impl FnMut(&primitives::ComponentBody) -> bool,
+    ) -> usize {
+        let dropped: Vec<usize> = self
+            .component_bodies
+            .iter()
+            .enumerate()
+            .filter(|(_, body)| !keep(body))
+            .map(|(index, _)| index)
+            .collect();
+        for &index in dropped.iter().rev() {
+            self.component_bodies.remove(index);
+            self.forget_order_slot(PrimitiveKind::ComponentBody, index);
+        }
+        dropped.len()
+    }
+
+    /// Removes the `index`-th slot of `kind` from [`Self::primitive_order`],
+    /// if the order records one.
+    fn forget_order_slot(&mut self, kind: PrimitiveKind, index: usize) {
+        let slot = self
+            .primitive_order
+            .iter()
+            .enumerate()
+            .filter(|(_, k)| **k == kind)
+            .nth(index)
+            .map(|(position, _)| position);
+        if let Some(position) = slot {
+            self.primitive_order.remove(position);
+        }
+    }
+
+    /// The strings the writer never places in a pipe-delimited record: a
+    /// pad's designator and a text's string, font names and barcode font
+    /// live in length-prefixed binary fields, a body's identifier is stored
+    /// as code points, and the flag names carry a `|` of their own.
+    pub const RECORD_TEXT_EXEMPT: &'static [&'static str] = &[
+        "flags",
+        "pads[].designator",
+        "text[].text",
+        "text[].font_name",
+        "text[].barcode_font_name",
+        "component_bodies[].identifier",
+    ];
+
+    /// Refuses text the record format cannot hold: a `|` in any string the
+    /// writer would place between the separators of a pipe-delimited record
+    /// (see [`Self::RECORD_TEXT_EXEMPT`] for the strings it never does).
+    /// Altium's own PCB editor writes such a `|` raw and then reads the text
+    /// back cut at it, so the text is refused rather than written to be lost.
+    ///
+    /// # Errors
+    ///
+    /// A message naming this footprint and the offending field's path.
+    pub fn check_record_text(&self) -> Result<(), String> {
+        crate::altium::record_separator_path(self, Self::RECORD_TEXT_EXEMPT).map_or(
+            Ok(()),
+            |path| {
+                Err(format!(
+                    "Footprint '{}' {path} contains '|', the separator of Altium's record format, \
+                 which cannot hold it (Altium's own PCB editor writes it raw and then reads the \
+                 text back cut at the '|')",
+                    self.name
+                ))
+            },
+        )
+    }
+
+    /// The footprint's primitives in the order they are written, as
+    /// `(kind, index into that kind's list)` pairs.
+    ///
+    /// [`Self::primitive_order`] is advisory: the primitive lists are public,
+    /// so a caller can push to or truncate one without it. Entries pointing
+    /// past the end of their list are therefore dropped, and any primitive the
+    /// sequence never reaches is appended in [`PrimitiveKind::WRITE_ORDER`] —
+    /// so a footprint with no recorded order, or one edited behind its back,
+    /// still writes every primitive exactly once.
+    #[must_use]
+    pub fn write_sequence(&self) -> Vec<(PrimitiveKind, usize)> {
+        let mut taken: std::collections::HashMap<PrimitiveKind, usize> =
+            std::collections::HashMap::new();
+        let mut sequence = Vec::with_capacity(self.primitive_count());
+
+        for &kind in &self.primitive_order {
+            let next = taken.entry(kind).or_insert(0);
+            if *next < self.count_of(kind) {
+                sequence.push((kind, *next));
+                *next += 1;
+            }
+        }
+        for kind in PrimitiveKind::WRITE_ORDER {
+            let next = taken.entry(kind).or_insert(0);
+            while *next < self.count_of(kind) {
+                sequence.push((kind, *next));
+                *next += 1;
+            }
+        }
+        sequence
+    }
+
+    /// Gives the footprint the identity of a brand-new component.
+    ///
+    /// A clone that will live beside its source must not share its
+    /// identities: the kind-85 footprint GUID, every primitive's GUID and
+    /// unique id, and the two per-pad identity GUIDs are cleared, so the
+    /// writer omits the identity streams and mints fresh pad GUIDs exactly as
+    /// for a footprint built from scratch; a replayed via block's identity
+    /// slots are zeroed to the nil GUIDs Altium itself writes. Geometry and
+    /// the replayed binary bases are untouched.
+    pub fn reset_identities(&mut self) {
+        self.guid = None;
+        for pad in &mut self.pads {
+            pad.guid = None;
+            pad.unique_id = None;
+            pad.identity_guid = None;
+            pad.identity_guid_b = None;
+        }
+        for via in &mut self.vias {
+            via.guid = None;
+            via.unique_id = None;
+            if let Some(block) = via.raw_block.as_mut() {
+                if block.len() >= 291 {
+                    block[259..291].fill(0);
+                }
+            }
+        }
+        for track in &mut self.tracks {
+            track.guid = None;
+            track.unique_id = None;
+        }
+        for arc in &mut self.arcs {
+            arc.guid = None;
+            arc.unique_id = None;
+        }
+        for region in &mut self.regions {
+            region.guid = None;
+            region.unique_id = None;
+        }
+        for text in &mut self.text {
+            text.guid = None;
+            text.unique_id = None;
+        }
+        for fill in &mut self.fills {
+            fill.guid = None;
+            fill.unique_id = None;
+        }
+        for body in &mut self.component_bodies {
+            body.guid = None;
+            body.unique_id = None;
+        }
+    }
+
+    /// How many primitives of one kind the footprint holds.
+    #[must_use]
+    pub fn count_of(&self, kind: PrimitiveKind) -> usize {
+        match kind {
+            PrimitiveKind::Arc => self.arcs.len(),
+            PrimitiveKind::Pad => self.pads.len(),
+            PrimitiveKind::Via => self.vias.len(),
+            PrimitiveKind::Track => self.tracks.len(),
+            PrimitiveKind::Text => self.text.len(),
+            PrimitiveKind::Region => self.regions.len(),
+            PrimitiveKind::Fill => self.fills.len(),
+            PrimitiveKind::ComponentBody => self.component_bodies.len(),
+        }
+    }
+
+    /// The layer each primitive of `kind` sits on, one entry per primitive.
+    /// A via spans the stack rather than sitting on one layer and counts as
+    /// `MultiLayer`, as Altium lists it.
+    #[must_use]
+    pub fn layers_of(&self, kind: PrimitiveKind) -> Vec<Layer> {
+        match kind {
+            PrimitiveKind::Arc => self.arcs.iter().map(|arc| arc.layer).collect(),
+            PrimitiveKind::Pad => self.pads.iter().map(|pad| pad.layer).collect(),
+            PrimitiveKind::Via => vec![Layer::MultiLayer; self.vias.len()],
+            PrimitiveKind::Track => self.tracks.iter().map(|track| track.layer).collect(),
+            PrimitiveKind::Text => self.text.iter().map(|text| text.layer).collect(),
+            PrimitiveKind::Region => self.regions.iter().map(|region| region.layer).collect(),
+            PrimitiveKind::Fill => self.fills.iter().map(|fill| fill.layer).collect(),
+            PrimitiveKind::ComponentBody => self
+                .component_bodies
+                .iter()
+                .map(|body| body.layer)
+                .collect(),
+        }
+    }
+
+    /// How many primitives the footprint holds in total.
+    #[must_use]
+    pub fn primitive_count(&self) -> usize {
+        self.pads.len()
+            + self.vias.len()
+            + self.tracks.len()
+            + self.arcs.len()
+            + self.regions.len()
+            + self.text.len()
+            + self.fills.len()
+            + self.component_bodies.len()
     }
 }
 
@@ -217,6 +736,28 @@ pub struct LibraryMetadata {
 
     /// Component descriptions by index from `CompDescr{N}` fields.
     pub component_descriptions: Vec<String>,
+
+    /// The library's own 8-character `UniqueId` from the `FileHeader`, kept
+    /// for the library's lifetime as Altium keeps it; a library built from
+    /// scratch is given one on its first save.
+    pub unique_id: Option<String>,
+
+    /// The `PADVIALIBRARY.LIBRARYID` of `/Library/PadViaLibrary`, likewise
+    /// kept across saves rather than minted afresh each time.
+    pub pad_via_library_id: Option<String>,
+
+    /// The `/Library/Data` parameter block exactly as it was read, without its
+    /// length prefix or trailing null.
+    ///
+    /// This block is the library's own board configuration: the V9 layer stack,
+    /// every mechanical layer's name, kind and enabled flag, the layer sets and
+    /// the view state. Almost none of it is modelled here, and a library
+    /// routinely carries names a designer chose (`Mechanical 15 = Assembly
+    /// Top`), so it is carried through byte-for-byte on a read-modify-write
+    /// rather than replaced by the template stack a from-scratch library gets.
+    ///
+    /// `None` for a library built in memory, which has no stack to preserve.
+    pub library_params: Option<Vec<u8>>,
 }
 
 /// A `PcbLib` footprint library.
@@ -275,9 +816,13 @@ impl PcbLib {
     /// Returns an error if the file cannot be read or is not a valid `PcbLib`.
     pub fn open(path: impl AsRef<std::path::Path>) -> AltiumResult<Self> {
         let path = path.as_ref();
-        let file = std::fs::File::open(path).map_err(|e| AltiumError::file_read(path, e))?;
+        // The whole file is read into memory first: a compound-file reader
+        // seeks through its sector chains constantly, and each seek against
+        // an unbuffered file is a system call — several times the cost of
+        // parsing the same bytes from memory.
+        let bytes = std::fs::read(path).map_err(|e| AltiumError::file_read(path, e))?;
 
-        let mut lib = Self::read(file)?;
+        let mut lib = Self::read(std::io::Cursor::new(bytes))?;
         lib.filepath = Some(path.display().to_string());
         Ok(lib)
     }
@@ -285,13 +830,17 @@ impl PcbLib {
     /// Saves the library to a file.
     ///
     /// Uses atomic write: writes to a temporary file first, then renames on success.
-    /// This prevents data loss if the write fails partway through.
+    /// This prevents data loss if the write fails partway through. The library
+    /// then belongs to `path`: the `FILENAME` Altium stores in `/Library/Data`
+    /// is the file being written, not the one it was read from.
     ///
     /// # Errors
     ///
     /// Returns an error if the file cannot be written.
     pub fn save(&mut self, path: impl AsRef<std::path::Path>) -> AltiumResult<()> {
-        crate::altium::save_atomic(path.as_ref(), "pcblib.tmp", |file| self.write(file))
+        let path = path.as_ref();
+        self.filepath = Some(path.display().to_string());
+        crate::altium::save_atomic(path, "pcblib.tmp", |image| self.write(image))
     }
 
     /// Returns the number of footprints in the library.
@@ -328,16 +877,32 @@ impl PcbLib {
         self.filepath.as_deref()
     }
 
-    /// Gets a footprint by name.
-    #[must_use]
-    pub fn get(&self, name: &str) -> Option<&Footprint> {
-        self.footprints.iter().find(|f| f.name == name)
+    /// The index of the footprint `name` resolves to: the exact name, else
+    /// the footprint whose name is the same regardless of case — the way the
+    /// file's own directory resolves it (see [`crate::altium::same_name`]).
+    fn position(&self, name: &str) -> Option<usize> {
+        self.footprints
+            .iter()
+            .position(|f| f.name == name)
+            .or_else(|| {
+                self.footprints
+                    .iter()
+                    .position(|f| crate::altium::same_name(&f.name, name))
+            })
     }
 
-    /// Gets a mutable reference to a footprint by name.
+    /// Gets a footprint by name — the exact name, else the one the name
+    /// resolves to regardless of case.
+    #[must_use]
+    pub fn get(&self, name: &str) -> Option<&Footprint> {
+        self.position(name).map(|i| &self.footprints[i])
+    }
+
+    /// Gets a mutable reference to a footprint by name (resolved as
+    /// [`Self::get`] resolves it).
     #[must_use]
     pub fn get_mut(&mut self, name: &str) -> Option<&mut Footprint> {
-        self.footprints.iter_mut().find(|f| f.name == name)
+        self.position(name).map(move |i| &mut self.footprints[i])
     }
 
     /// Adds a footprint to the library.
@@ -349,11 +914,7 @@ impl PcbLib {
     ///
     /// Returns the removed footprint if found, or `None` if no footprint with that name exists.
     pub fn remove(&mut self, name: &str) -> Option<Footprint> {
-        if let Some(idx) = self.footprints.iter().position(|f| f.name == name) {
-            Some(self.footprints.remove(idx))
-        } else {
-            None
-        }
+        self.position(name).map(|idx| self.footprints.remove(idx))
     }
 
     /// Updates a footprint in-place, preserving its position in the library.
@@ -363,11 +924,34 @@ impl PcbLib {
     ///
     /// Returns the old footprint if found, or `None` if no footprint with that name exists.
     pub fn update(&mut self, name: &str, replacement: Footprint) -> Option<Footprint> {
-        if let Some(idx) = self.footprints.iter().position(|f| f.name == name) {
-            Some(std::mem::replace(&mut self.footprints[idx], replacement))
-        } else {
-            None
+        self.position(name)
+            .map(|i| std::mem::replace(&mut self.footprints[i], replacement))
+    }
+
+    /// Renames a footprint in place, so it keeps its position in the
+    /// library and in the file. Returns whether `old_name` resolved to one.
+    pub fn rename(&mut self, old_name: &str, new_name: &str) -> bool {
+        self.rename_all(&[(old_name.to_string(), new_name.to_string())])
+            .is_empty()
+    }
+
+    /// Renames several footprints at once, each in place. Every `(old, new)`
+    /// pair resolves against the names as they were before the call, so a
+    /// chain such as `A -> B, B -> C` renames both rather than renaming the
+    /// new `B` twice. Returns the old names that resolved to nothing.
+    pub fn rename_all(&mut self, renames: &[(String, String)]) -> Vec<String> {
+        let mut missing = Vec::new();
+        let mut resolved: Vec<(usize, &str)> = Vec::with_capacity(renames.len());
+        for (old, new) in renames {
+            match self.position(old) {
+                Some(i) => resolved.push((i, new.as_str())),
+                None => missing.push(old.clone()),
+            }
         }
+        for (i, new) in resolved {
+            self.footprints[i].name = new.to_string();
+        }
+        missing
     }
 
     /// Reorders footprints according to the given name order.
@@ -464,8 +1048,7 @@ impl PcbLib {
         let mut results = Vec::new();
 
         for footprint in &mut self.footprints {
-            let original_count = footprint.component_bodies.len();
-            footprint.component_bodies.retain(|cb| {
+            let removed = footprint.retain_component_bodies(|cb| {
                 // Keep external references (embedded: false) - they don't need model data
                 if !cb.embedded {
                     return true;
@@ -477,7 +1060,6 @@ impl PcbLib {
                 // Keep only if the model exists in the library
                 available.contains(&cb.model_id.to_lowercase())
             });
-            let removed = original_count - footprint.component_bodies.len();
             if removed > 0 {
                 tracing::debug!(
                     footprint = %footprint.name,
@@ -505,9 +1087,365 @@ impl PcbLib {
 mod tests {
     use super::*;
 
+    /// Every kind reports one layer per primitive — an arm that returned
+    /// nothing for a kind would hide that kind's layers.
+    #[test]
+    fn layers_of_reports_one_layer_per_primitive_of_every_kind() {
+        let mut fp = Footprint::new("KINDS");
+        let layer = Layer::Mechanical13;
+        fp.add_pad(Pad::smd("1", 0.0, 0.0, 1.0, 1.0));
+        fp.add_via(Via::new(0.0, 0.0, 0.6, 0.3));
+        fp.add_track(Track::new(0.0, 0.0, 1.0, 0.0, 0.1, layer));
+        fp.add_arc(Arc::circle(0.0, 0.0, 1.0, 0.1, layer));
+        fp.add_text(Text::new(0.0, 0.0, "T", 1.0, layer));
+        fp.add_region(Region::rectangle(0.0, 0.0, 1.0, 1.0, layer));
+        fp.add_fill(Fill::new(0.0, 0.0, 1.0, 1.0, layer));
+        let mut body = ComponentBody::new("", "b.step");
+        body.layer = layer;
+        fp.add_component_body(body);
+        for kind in PrimitiveKind::WRITE_ORDER {
+            let layers = fp.layers_of(kind);
+            assert_eq!(layers.len(), fp.count_of(kind), "{kind:?}");
+            let expected = match kind {
+                PrimitiveKind::Via => Layer::MultiLayer,
+                PrimitiveKind::Pad => Layer::TopLayer,
+                _ => layer,
+            };
+            assert_eq!(layers, vec![expected], "{kind:?}");
+        }
+    }
+
+    /// A footprint carrying an identity on every primitive kind, plus a via
+    /// whose replayed block has identity bytes and one whose block is too
+    /// short to hold any.
+    fn footprint_with_identities_everywhere() -> Footprint {
+        let guid = Some("{11111111-2222-3333-4444-555555555555}".to_string());
+        let uid = Some("ABCDEFGH".to_string());
+        let mut fp = Footprint::new("FP");
+        fp.guid = guid.clone();
+
+        let mut pad = Pad::smd("1", -0.5, 0.0, 0.6, 0.5);
+        pad.guid = guid.clone();
+        pad.unique_id = uid.clone();
+        pad.identity_guid = guid.clone();
+        pad.identity_guid_b = guid.clone();
+        fp.add_pad(pad);
+
+        let mut via = Via::new(1.5, 0.0, 0.6, 0.3);
+        via.guid = guid.clone();
+        via.unique_id = uid.clone();
+        let mut block = vec![0u8; 300];
+        block[259..291].fill(0xAB);
+        block[0] = 0x4A; // non-identity bytes must survive
+        via.raw_block = Some(block);
+        fp.add_via(via);
+
+        let mut short_via = Via::new(2.5, 0.0, 0.6, 0.3);
+        short_via.raw_block = Some(vec![0xAB; 10]); // too short to hold identities
+        fp.add_via(short_via);
+
+        let mut track = Track::new(0.0, 0.0, 1.0, 0.0, 0.2, Layer::TopOverlay);
+        track.guid = guid.clone();
+        track.unique_id = uid.clone();
+        fp.add_track(track);
+        let mut arc = Arc::circle(0.0, 2.0, 0.5, 0.1, Layer::TopOverlay);
+        arc.guid = guid.clone();
+        arc.unique_id = uid.clone();
+        fp.add_arc(arc);
+        let mut region = Region::rectangle(-1.0, -1.0, 1.0, 1.0, Layer::TopCourtyard);
+        region.guid = guid.clone();
+        region.unique_id = uid.clone();
+        fp.add_region(region);
+        let mut fill = Fill::new(-0.5, 0.8, 0.5, 1.2, Layer::TopLayer);
+        fill.guid = guid.clone();
+        fill.unique_id = uid.clone();
+        fp.add_fill(fill);
+        let mut body = ComponentBody::new("{G-1}", "m.step");
+        body.guid = guid.clone();
+        body.unique_id = uid.clone();
+        fp.add_component_body(body);
+        fp.add_text(Text {
+            raw_layer_id: None,
+            barcode_full_width: None,
+            barcode_full_height: None,
+            barcode_x_margin: None,
+            barcode_y_margin: None,
+            barcode_kind: 0,
+            barcode_font_name: String::new(),
+            barcode_inverted: false,
+            barcode_show_text: false,
+            x: 0.0,
+            y: -2.0,
+            text: ".Designator".to_string(),
+            height: 1.0,
+            layer: Layer::TopOverlay,
+            kind: TextKind::Stroke,
+            rotation: 0.0,
+            stroke_font: None,
+            stroke_width: None,
+            italic: false,
+            bold: false,
+            mirror: false,
+            is_comment: false,
+            is_designator: false,
+            font_name: "Arial".to_string(),
+            justification: TextJustification::default(),
+            is_inverted: false,
+            inverted_border: None,
+            use_inverted_rectangle: false,
+            inverted_rect_width: None,
+            inverted_rect_height: None,
+            inverted_rect_text_offset: None,
+            flags: PcbFlags::default(),
+            net_index: 0xFFFF,
+            polygon_index: 0xFFFF,
+            component_index: -1,
+            unique_id: uid,
+            guid,
+            raw_geometry: None,
+        });
+        fp
+    }
+
+    /// `reset_identities` clears every identity on every primitive kind and
+    /// zeroes a replayed via block's identity slots, leaving geometry alone.
+    #[test]
+    fn reset_identities_clears_every_identity_and_keeps_geometry() {
+        let mut fp = footprint_with_identities_everywhere();
+        fp.reset_identities();
+
+        assert!(fp.guid.is_none());
+        let pad = &fp.pads[0];
+        assert!(pad.guid.is_none() && pad.unique_id.is_none());
+        assert!(pad.identity_guid.is_none() && pad.identity_guid_b.is_none());
+        assert!((pad.width - 0.6).abs() < 1e-9, "geometry untouched");
+        let via = &fp.vias[0];
+        assert!(via.guid.is_none() && via.unique_id.is_none());
+        let block = via.raw_block.as_ref().unwrap();
+        assert!(
+            block[259..291].iter().all(|&b| b == 0),
+            "identity slots zeroed"
+        );
+        assert_eq!(block[0], 0x4A, "other replayed bytes untouched");
+        assert_eq!(
+            fp.vias[1].raw_block.as_deref(),
+            Some(&[0xABu8; 10][..]),
+            "short block left alone"
+        );
+        assert!(fp.tracks[0].guid.is_none() && fp.tracks[0].unique_id.is_none());
+        assert!(fp.arcs[0].guid.is_none() && fp.arcs[0].unique_id.is_none());
+        assert!(fp.regions[0].guid.is_none() && fp.regions[0].unique_id.is_none());
+        assert!(fp.fills[0].guid.is_none() && fp.fills[0].unique_id.is_none());
+        assert!(fp.text[0].guid.is_none() && fp.text[0].unique_id.is_none());
+        assert!(
+            fp.component_bodies[0].guid.is_none() && fp.component_bodies[0].unique_id.is_none()
+        );
+        assert_eq!(
+            fp.component_bodies[0].model_id, "{G-1}",
+            "model reference kept"
+        );
+    }
+
     /// Helper to compare floats with tolerance.
     fn approx_eq(a: f64, b: f64, tolerance: f64) -> bool {
         (a - b).abs() < tolerance
+    }
+
+    #[test]
+    fn every_primitive_kind_round_trips_through_its_altium_ids() {
+        // The numeric id and the PRIMITIVEOBJECTID token are what a
+        // UniqueIDPrimitiveInformation record is keyed by. A kind whose token
+        // or id is wrong re-attaches a stable identity to the wrong primitive
+        // on the next read, so each arm is pinned to its own value.
+        for (kind, id, token) in [
+            (PrimitiveKind::Arc, 1, "Arc"),
+            (PrimitiveKind::Pad, 2, "Pad"),
+            (PrimitiveKind::Via, 3, "Via"),
+            (PrimitiveKind::Track, 4, "Track"),
+            (PrimitiveKind::Text, 5, "Text"),
+            (PrimitiveKind::Fill, 6, "Fill"),
+            (PrimitiveKind::Region, 89, "Region"),
+            (PrimitiveKind::ComponentBody, 90, "ComponentBody"),
+        ] {
+            assert_eq!(kind.altium_object_id(), id, "{token} id");
+            assert_eq!(kind.object_id(), token, "{token} token");
+            assert_eq!(
+                PrimitiveKind::from_altium_object_id(id),
+                Some(kind),
+                "{token} reverse"
+            );
+        }
+
+        // 85 is the footprint record itself, not a primitive; it and any other
+        // unmapped id must not resolve to a kind.
+        for id in [0, 7, 85, 91, u32::MAX] {
+            assert_eq!(PrimitiveKind::from_altium_object_id(id), None, "id {id}");
+        }
+    }
+
+    #[test]
+    fn orphan_removal_keeps_bodies_it_cannot_judge() {
+        // Only an embedded body naming a model the library does not carry is
+        // an orphan. An external reference, or one with no model id to check
+        // against, must survive — deleting those would drop live geometry.
+        let mut lib = PcbLib::new();
+        let mut fp = Footprint::new("MIXED");
+
+        let mut external = ComponentBody::new("{ABSENT}", "ext.step");
+        external.embedded = false;
+        fp.add_component_body(external);
+
+        let mut anonymous = ComponentBody::new("", "anon.step");
+        anonymous.embedded = true;
+        fp.add_component_body(anonymous);
+
+        let mut orphan = ComponentBody::new("{GONE}", "gone.step");
+        orphan.embedded = true;
+        fp.add_component_body(orphan);
+
+        lib.add(fp);
+
+        let results = lib.remove_orphaned_component_bodies();
+        assert_eq!(results, vec![("MIXED".to_string(), 1)]);
+        let kept = &lib.get("MIXED").expect("the footprint").component_bodies;
+        assert_eq!(kept.len(), 2);
+        assert!(kept.iter().any(|cb| !cb.embedded));
+        assert!(kept.iter().any(|cb| cb.model_id.is_empty()));
+    }
+
+    #[test]
+    fn moving_a_layer_takes_every_kind_and_drops_the_stale_carriers() {
+        // One of each layered kind on Mechanical 13, one track elsewhere, and
+        // the carriers a read primitive may hold: an unmapped header byte and
+        // a region's / body's V7_LAYER token, which named the old layer.
+        let mut fp = Footprint::new("MOVE");
+        let (from, to) = (Layer::Mechanical13, Layer::Mechanical20);
+        fp.add_track(Track::new(0.0, 0.0, 1.0, 0.0, 0.1, from));
+        fp.add_track(Track::new(0.0, 1.0, 1.0, 1.0, 0.1, Layer::TopOverlay));
+        fp.add_arc(Arc::circle(0.0, 0.0, 1.0, 0.1, from));
+        let mut text = Text::new(0.0, 0.0, "T", 1.0, from);
+        text.raw_layer_id = Some(100);
+        fp.add_text(text);
+        fp.add_fill(Fill::new(0.0, 0.0, 1.0, 1.0, from));
+        let mut region = Region::rectangle(0.0, 0.0, 1.0, 1.0, from);
+        region.v7_layer = Some("MECHANICAL13".to_string());
+        fp.add_region(region);
+        let mut pad = Pad::smd("1", 0.0, 0.0, 1.0, 1.0);
+        pad.layer = from;
+        fp.add_pad(pad);
+        let mut body = ComponentBody::new("", "body.step");
+        body.layer = from;
+        body.v7_layer = Some("MECHANICAL13".to_string());
+        fp.add_component_body(body);
+
+        let moved = fp.move_layer(from, to);
+        assert_eq!(
+            moved,
+            LayerMove {
+                tracks: 1,
+                arcs: 1,
+                text: 1,
+                fills: 1,
+                regions: 1,
+                pads: 1,
+                component_bodies: 1,
+            }
+        );
+        assert_eq!(moved.total(), 7);
+        assert_eq!(fp.tracks[0].layer, to);
+        assert_eq!(
+            fp.tracks[1].layer,
+            Layer::TopOverlay,
+            "another layer is untouched"
+        );
+        assert_eq!(fp.arcs[0].layer, to);
+        assert_eq!(fp.text[0].layer, to);
+        assert_eq!(
+            fp.text[0].raw_layer_id, None,
+            "the carried byte went with the move"
+        );
+        assert_eq!(fp.fills[0].layer, to);
+        assert_eq!(fp.regions[0].layer, to);
+        assert_eq!(fp.regions[0].v7_layer, None, "the stale token went too");
+        assert_eq!(fp.pads[0].layer, to);
+        assert_eq!(fp.component_bodies[0].layer, to);
+        assert_eq!(fp.component_bodies[0].v7_layer, None);
+        assert_eq!(
+            fp.move_layer(from, to),
+            LayerMove::default(),
+            "nothing left on it"
+        );
+    }
+
+    #[test]
+    fn dropping_a_body_leaves_the_other_primitives_where_they_were() {
+        // Interleaved as a file might store it: body A, pad 1, body B, pad 2.
+        // Removing A must not move B in front of pad 1, which is what a bare
+        // `retain` on the list does once the order has one slot too many.
+        let mut fp = Footprint::new("ORDER");
+        let mut a = ComponentBody::new("{A}", "a.step");
+        a.embedded = true;
+        fp.add_component_body(a);
+        fp.add_pad(Pad::smd("1", 0.0, 0.0, 1.0, 1.0));
+        let mut b = ComponentBody::new("{B}", "b.step");
+        b.embedded = true;
+        fp.add_component_body(b);
+        fp.add_pad(Pad::smd("2", 1.0, 0.0, 1.0, 1.0));
+
+        assert_eq!(fp.retain_component_bodies(|cb| cb.model_id != "{A}"), 1);
+        assert_eq!(fp.component_bodies.len(), 1);
+        assert_eq!(fp.component_bodies[0].model_id, "{B}");
+        assert_eq!(
+            fp.write_sequence(),
+            vec![
+                (PrimitiveKind::Pad, 0),
+                (PrimitiveKind::ComponentBody, 0),
+                (PrimitiveKind::Pad, 1),
+            ]
+        );
+
+        // The library-level repair goes through the same path.
+        let mut lib = PcbLib::new();
+        let mut fp = Footprint::new("REPAIR");
+        let mut orphan = ComponentBody::new("{GONE}", "gone.step");
+        orphan.embedded = true;
+        fp.add_component_body(orphan);
+        fp.add_pad(Pad::smd("1", 0.0, 0.0, 1.0, 1.0));
+        let mut anonymous = ComponentBody::new("", "anon.step");
+        anonymous.embedded = true;
+        fp.add_component_body(anonymous);
+        lib.add(fp);
+        assert_eq!(
+            lib.remove_orphaned_component_bodies(),
+            vec![("REPAIR".to_string(), 1)]
+        );
+        assert_eq!(
+            lib.get("REPAIR").expect("footprint").write_sequence(),
+            vec![(PrimitiveKind::Pad, 0), (PrimitiveKind::ComponentBody, 0)]
+        );
+    }
+
+    #[test]
+    fn a_library_reports_its_source_path_only_once_it_has_one() {
+        let mut lib = PcbLib::new();
+        assert_eq!(lib.filepath(), None);
+
+        lib.filepath = Some("Parts.PcbLib".to_string());
+        assert_eq!(lib.filepath(), Some("Parts.PcbLib"));
+    }
+
+    #[test]
+    fn updating_an_absent_footprint_reports_no_previous_value() {
+        // The return value is the caller's signal that it replaced something;
+        // a miss must not silently insert.
+        let mut lib = PcbLib::new();
+        lib.add(Footprint::new("PRESENT"));
+
+        assert!(lib.update("ABSENT", Footprint::new("ABSENT")).is_none());
+        assert_eq!(lib.len(), 1);
+
+        let old = lib.update("PRESENT", Footprint::new("REPLACED"));
+        assert_eq!(old.expect("the replaced footprint").name, "PRESENT");
     }
 
     #[test]
@@ -628,7 +1566,7 @@ mod tests {
     fn pad_default_thermal_relief_byte_identical() {
         // A pad created with default thermal-relief must produce byte-for-byte
         // identical output regardless of whether the writer emits the struct
-        // fields or the old fixed template constants. We prove this by checking
+        // fields or the fixed template constants. We prove this by checking
         // that the default field values map back to the canonical template raw
         // values (style 0; conductor width / air gap 100000; entries 4; relief
         // expansion / clearance 200000), so the oracle stays at 0 regressions.
@@ -799,6 +1737,15 @@ mod tests {
 
         // Add text with different rotations
         original.add_text(Text {
+            raw_layer_id: None,
+            barcode_full_width: None,
+            barcode_full_height: None,
+            barcode_x_margin: None,
+            barcode_y_margin: None,
+            barcode_kind: 0,
+            barcode_font_name: String::new(),
+            barcode_inverted: false,
+            barcode_show_text: false,
             x: 0.0,
             y: 1.0,
             text: ".Designator".to_string(),
@@ -826,8 +1773,19 @@ mod tests {
             polygon_index: 0xFFFF,
             component_index: -1,
             unique_id: None,
+            guid: None,
+            raw_geometry: None,
         });
         original.add_text(Text {
+            raw_layer_id: None,
+            barcode_full_width: None,
+            barcode_full_height: None,
+            barcode_x_margin: None,
+            barcode_y_margin: None,
+            barcode_kind: 0,
+            barcode_font_name: String::new(),
+            barcode_inverted: false,
+            barcode_show_text: false,
             x: 1.5,
             y: 0.5,
             text: "TEST".to_string(),
@@ -855,6 +1813,8 @@ mod tests {
             polygon_index: 0xFFFF,
             component_index: -1,
             unique_id: None,
+            guid: None,
+            raw_geometry: None,
         });
 
         let data = writer::encode_data_stream(&original).expect("encoding should succeed");
@@ -881,10 +1841,19 @@ mod tests {
 
     #[test]
     fn text_stroke_width_round_trips() {
-        // Previously every text inherited the 252-byte template's 4-mil stroke; an
-        // explicit StrokeWidth (geometry offset 36) must now survive the round-trip.
+        // An explicit StrokeWidth (geometry offset 36) must survive the
+        // round-trip rather than inheriting the template's 4-mil stroke.
         let mut original = Footprint::new("TEXT_STROKE");
         original.add_text(Text {
+            raw_layer_id: None,
+            barcode_full_width: None,
+            barcode_full_height: None,
+            barcode_x_margin: None,
+            barcode_y_margin: None,
+            barcode_kind: 0,
+            barcode_font_name: String::new(),
+            barcode_inverted: false,
+            barcode_show_text: false,
             x: 0.0,
             y: 0.0,
             text: "W".to_string(),
@@ -912,6 +1881,8 @@ mod tests {
             polygon_index: 0xFFFF,
             component_index: -1,
             unique_id: None,
+            guid: None,
+            raw_geometry: None,
         });
 
         let data = writer::encode_data_stream(&original).expect("encode");
@@ -930,6 +1901,15 @@ mod tests {
         // A TrueType italic text must round-trip italic@45 and derive baseFontType@43=1.
         let mut original = Footprint::new("TT_ITALIC");
         original.add_text(Text {
+            raw_layer_id: None,
+            barcode_full_width: None,
+            barcode_full_height: None,
+            barcode_x_margin: None,
+            barcode_y_margin: None,
+            barcode_kind: 0,
+            barcode_font_name: String::new(),
+            barcode_inverted: false,
+            barcode_show_text: false,
             x: 0.0,
             y: 0.0,
             text: "String".to_string(),
@@ -957,6 +1937,8 @@ mod tests {
             polygon_index: 0xFFFF,
             component_index: -1,
             unique_id: None,
+            guid: None,
+            raw_geometry: None,
         });
 
         let data = writer::encode_data_stream(&original).expect("encode");
@@ -973,36 +1955,50 @@ mod tests {
         // Guards the oracle: a from-scratch stroke text with default styling must emit
         // the unmodified template at the styling offsets (43, 45 == 0) and at the
         // PR-10 offsets (mirror@35, bold@44, font-name@46-109, justification@132).
-        let geom = writer::encode_text_geometry(&Text {
-            x: 0.0,
-            y: 0.0,
-            text: "X".into(),
-            height: 1.0,
-            layer: Layer::TopOverlay,
-            rotation: 0.0,
-            kind: TextKind::Stroke,
-            stroke_font: None,
-            stroke_width: None,
-            italic: false,
-            bold: false,
-            mirror: false,
-            is_comment: false,
-            is_designator: false,
-            font_name: "Arial".to_string(),
-            // BottomLeft is the from-scratch default; it encodes to the template's 0x03.
-            justification: TextJustification::BottomLeft,
-            is_inverted: false,
-            inverted_border: None,
-            use_inverted_rectangle: false,
-            inverted_rect_width: None,
-            inverted_rect_height: None,
-            inverted_rect_text_offset: None,
-            flags: PcbFlags::empty(),
-            net_index: 0xFFFF,
-            polygon_index: 0xFFFF,
-            component_index: -1,
-            unique_id: None,
-        });
+        let geom = writer::encode_text_geometry(
+            &Text {
+                raw_layer_id: None,
+                barcode_full_width: None,
+                barcode_full_height: None,
+                barcode_x_margin: None,
+                barcode_y_margin: None,
+                barcode_kind: 0,
+                barcode_font_name: String::new(),
+                barcode_inverted: false,
+                barcode_show_text: false,
+                x: 0.0,
+                y: 0.0,
+                text: "X".into(),
+                height: 1.0,
+                layer: Layer::TopOverlay,
+                rotation: 0.0,
+                kind: TextKind::Stroke,
+                stroke_font: None,
+                stroke_width: None,
+                italic: false,
+                bold: false,
+                mirror: false,
+                is_comment: false,
+                is_designator: false,
+                font_name: "Arial".to_string(),
+                // BottomLeft is the from-scratch default; it encodes to the template's 0x03.
+                justification: TextJustification::BottomLeft,
+                is_inverted: false,
+                inverted_border: None,
+                use_inverted_rectangle: false,
+                inverted_rect_width: None,
+                inverted_rect_height: None,
+                inverted_rect_text_offset: None,
+                flags: PcbFlags::empty(),
+                net_index: 0xFFFF,
+                polygon_index: 0xFFFF,
+                component_index: -1,
+                unique_id: None,
+                guid: None,
+                raw_geometry: None,
+            },
+            None,
+        );
         assert_eq!(
             geom[43], 0x00,
             "stroke baseFontType must stay template default"
@@ -1037,6 +2033,15 @@ mod tests {
         // mirror, bold, font_name, a non-default justification, kind, italic.
         let mut original = Footprint::new("TEXT_PR10");
         original.add_text(Text {
+            raw_layer_id: None,
+            barcode_full_width: None,
+            barcode_full_height: None,
+            barcode_x_margin: None,
+            barcode_y_margin: None,
+            barcode_kind: 0,
+            barcode_font_name: String::new(),
+            barcode_inverted: false,
+            barcode_show_text: false,
             x: 0.0,
             y: 0.0,
             text: "Fancy".to_string(),
@@ -1064,6 +2069,8 @@ mod tests {
             polygon_index: 0xFFFF,
             component_index: -1,
             unique_id: None,
+            guid: None,
+            raw_geometry: None,
         });
 
         let data = writer::encode_data_stream(&original).expect("encode");
@@ -1086,10 +2093,19 @@ mod tests {
 
     #[test]
     fn text_comment_designator_flags_round_trip() {
-        // IsComment@40 / IsDesignator@41 (previously dropped on read) must
+        // IsComment@40 / IsDesignator@41 must
         // survive encode -> decode; a plain text keeps both false.
         let mut original = Footprint::new("TEXT_FLAGS");
         let mut text = Text {
+            raw_layer_id: None,
+            barcode_full_width: None,
+            barcode_full_height: None,
+            barcode_x_margin: None,
+            barcode_y_margin: None,
+            barcode_kind: 0,
+            barcode_font_name: String::new(),
+            barcode_inverted: false,
+            barcode_show_text: false,
             x: 0.0,
             y: 0.0,
             text: ".Designator".to_string(),
@@ -1117,6 +2133,8 @@ mod tests {
             polygon_index: 0xFFFF,
             component_index: -1,
             unique_id: None,
+            guid: None,
+            raw_geometry: None,
         };
         original.add_text(text.clone());
         text.text = ".Comment".to_string();
@@ -1152,8 +2170,8 @@ mod tests {
 
     #[test]
     fn pad_is_plated_round_trips() {
-        // is_plated @60 (previously derived from hole_size on write and dropped
-        // on read) must survive encode -> decode, both at the default (true —
+        // is_plated @60 is an independent field, not derived from hole_size: it
+        // must survive encode -> decode, both at the default (true —
         // Altium's for every pad, SMD included) and explicitly unplated.
         let mut original = Footprint::new("PAD_PLATED");
         original.add_pad(Pad::smd("1", 0.0, 0.0, 1.0, 0.6));
@@ -1174,9 +2192,9 @@ mod tests {
 
     #[test]
     fn pad_identity_guids_round_trip() {
-        // The two per-pad identity GUIDs @126/@142 (previously write-only fresh
-        // values) now read back verbatim, so encode -> decode -> encode
-        // reproduces the same GUID bytes instead of regenerating them.
+        // The two per-pad identity GUIDs @126/@142 must read back verbatim, so
+        // that encode -> decode -> encode reproduces the same GUID bytes
+        // instead of regenerating them.
         let mut original = Footprint::new("PAD_GUIDS");
         original.add_pad(Pad::smd("1", 0.0, 0.0, 1.0, 0.6));
 
@@ -1222,6 +2240,15 @@ mod tests {
         // InvertedRectTextOffset@133 (offsets verified against AltiumSharp ReadText).
         let mut original = Footprint::new("TEXT_INVRECT");
         original.add_text(Text {
+            raw_layer_id: None,
+            barcode_full_width: None,
+            barcode_full_height: None,
+            barcode_x_margin: None,
+            barcode_y_margin: None,
+            barcode_kind: 0,
+            barcode_font_name: String::new(),
+            barcode_inverted: false,
+            barcode_show_text: false,
             x: 0.0,
             y: 0.0,
             text: "KO".to_string(),
@@ -1249,6 +2276,8 @@ mod tests {
             polygon_index: 0xFFFF,
             component_index: -1,
             unique_id: None,
+            guid: None,
+            raw_geometry: None,
         });
 
         let data = writer::encode_data_stream(&original).expect("encode");
@@ -1278,10 +2307,19 @@ mod tests {
 
     #[test]
     fn binary_roundtrip_text_flags() {
-        // parse_text previously discarded the flag word (read PcbFlags::empty());
-        // a locked / tented text must now round-trip its flags.
+        // parse_text must carry the flag word through:
+        // a locked / tented text round-trips its flags.
         let mut original = Footprint::new("TEXT_FLAGS");
         original.add_text(Text {
+            raw_layer_id: None,
+            barcode_full_width: None,
+            barcode_full_height: None,
+            barcode_x_margin: None,
+            barcode_y_margin: None,
+            barcode_kind: 0,
+            barcode_font_name: String::new(),
+            barcode_inverted: false,
+            barcode_show_text: false,
             x: 0.0,
             y: 0.0,
             text: "LOCKED".to_string(),
@@ -1309,6 +2347,8 @@ mod tests {
             polygon_index: 0xFFFF,
             component_index: -1,
             unique_id: None,
+            guid: None,
+            raw_geometry: None,
         });
 
         let data = writer::encode_data_stream(&original).expect("encoding should succeed");
@@ -1321,11 +2361,194 @@ mod tests {
     }
 
     #[test]
+    fn library_roundtrip_text_longer_than_the_block_1_limit() {
+        // Block 1 of a Text record is a Pascal SHORT string, so a text over 255
+        // bytes cannot be stored inline: Altium truncates block 1 and carries
+        // the full value in /WideStrings, addressed by the index in the
+        // geometry block. A library Altium can author must therefore survive a
+        // write -> read cycle here, rather than the save being refused.
+        //
+        // Two texts, so a mis-addressed index resolves to the wrong entry
+        // instead of coincidentally matching.
+        use std::io::Cursor;
+
+        let long = "A".repeat(260) + "_END";
+        let text_at = |content: &str, y: f64| Text {
+            raw_layer_id: None,
+            barcode_full_width: None,
+            barcode_full_height: None,
+            barcode_x_margin: None,
+            barcode_y_margin: None,
+            barcode_kind: 0,
+            barcode_font_name: String::new(),
+            barcode_inverted: false,
+            barcode_show_text: false,
+            x: 0.0,
+            y,
+            text: content.to_string(),
+            height: 1.0,
+            layer: Layer::TopOverlay,
+            kind: TextKind::Stroke,
+            rotation: 0.0,
+            stroke_font: None,
+            stroke_width: None,
+            italic: false,
+            bold: false,
+            mirror: false,
+            is_comment: false,
+            is_designator: false,
+            font_name: "Arial".to_string(),
+            justification: TextJustification::default(),
+            is_inverted: false,
+            inverted_border: None,
+            use_inverted_rectangle: false,
+            inverted_rect_width: None,
+            inverted_rect_height: None,
+            inverted_rect_text_offset: None,
+            flags: PcbFlags::default(),
+            net_index: 0xFFFF,
+            polygon_index: 0xFFFF,
+            component_index: -1,
+            unique_id: None,
+            guid: None,
+            raw_geometry: None,
+        };
+
+        let mut fp = Footprint::new("LONG_TEXT");
+        fp.add_text(text_at(&long, 0.0));
+        fp.add_text(text_at("SHORT", -2.0));
+        let mut lib = PcbLib::new();
+        lib.add(fp);
+
+        let mut buffer = Cursor::new(Vec::new());
+        lib.write(&mut buffer)
+            .expect("a 264-character text must be writable");
+        buffer.set_position(0);
+        let read_back = PcbLib::read(&mut buffer).expect("read back");
+
+        let fp = read_back.get("LONG_TEXT").expect("footprint");
+        let contents: Vec<&str> = fp.text.iter().map(|t| t.text.as_str()).collect();
+        assert_eq!(
+            contents,
+            vec![long.as_str(), "SHORT"],
+            "both texts must survive, the long one in full"
+        );
+    }
+
+    #[test]
+    fn solder_mask_from_hole_edge_round_trips() {
+        // Main-block bool @125: measure mask expansion from the hole edge instead of
+        // the pad edge. A default pad leaves it clear, so the byte stays identical to
+        // Altium's template unless it is asked for.
+        let mut original = Footprint::new("HOLE_EDGE");
+        let mut from_hole = Pad::through_hole("1", 0.0, 0.0, 1.8, 1.8, 1.0);
+        from_hole.solder_mask_expansion_from_hole_edge = true;
+        original.add_pad(from_hole);
+        original.add_pad(Pad::through_hole("2", 3.0, 0.0, 1.8, 1.8, 1.0));
+
+        let data = writer::encode_data_stream(&original).expect("encode");
+        let mut decoded = Footprint::new("HOLE_EDGE");
+        reader::parse_data_stream(&mut decoded, &data, None);
+
+        assert_eq!(decoded.pads.len(), 2);
+        assert!(decoded.pads[0].solder_mask_expansion_from_hole_edge);
+        assert!(
+            !decoded.pads[1].solder_mask_expansion_from_hole_edge,
+            "a from-scratch pad measures from the pad edge"
+        );
+    }
+
+    #[test]
+    fn component_body_model_2d_offset_round_trips() {
+        // MODEL.2D.X/Y sit in BODY_MODELLED_PARAM_KEYS, so the additional_parameters
+        // passthrough skips them: before they were parsed, a non-zero offset was
+        // dropped on read and the writer always emitted 0mil.
+        let mut original = Footprint::new("MODEL2D");
+        let mut body = ComponentBody::new("{GUID}", "MODEL.STEP");
+        body.model_2d_x = 1.27;
+        body.model_2d_y = -0.635;
+        original.add_component_body(body);
+
+        let data = writer::encode_data_stream(&original).expect("encode");
+        let mut decoded = Footprint::new("MODEL2D");
+        reader::parse_data_stream(&mut decoded, &data, None);
+
+        let read = &decoded.component_bodies[0];
+        assert!(
+            (read.model_2d_x - 1.27).abs() < 1e-4,
+            "x: {}",
+            read.model_2d_x
+        );
+        assert!(
+            (read.model_2d_y + 0.635).abs() < 1e-4,
+            "y: {}",
+            read.model_2d_y
+        );
+        assert!(
+            !read
+                .additional_parameters
+                .iter()
+                .any(|(k, _)| k.starts_with("MODEL.2D.")),
+            "the offset is a typed field, not a passthrough entry"
+        );
+    }
+
+    #[test]
+    fn jumper_id_round_trips() {
+        // Main-block i16 @110-111. Zero is "no jumper" and must leave the template
+        // bytes alone, so the default pad is the control.
+        let mut original = Footprint::new("JUMPER");
+        let mut a = Pad::through_hole("1", 0.0, 0.0, 1.6, 1.6, 0.8);
+        a.jumper_id = 7;
+        original.add_pad(a);
+        original.add_pad(Pad::through_hole("2", 3.0, 0.0, 1.6, 1.6, 0.8));
+
+        let data = writer::encode_data_stream(&original).expect("encode");
+        let mut decoded = Footprint::new("JUMPER");
+        reader::parse_data_stream(&mut decoded, &data, None);
+
+        assert_eq!(decoded.pads[0].jumper_id, 7);
+        assert_eq!(decoded.pads[1].jumper_id, 0);
+    }
+
+    #[test]
+    fn testpoint_flags_round_trip_and_imply_locked() {
+        // The fabrication test-point bits (0x0080 / 0x0100 in Altium's flag word)
+        // must survive encode -> decode. Altium clears the unlocked bit on a pad it
+        // marks as a test point, so the writer does the same and the pad decodes as
+        // LOCKED as well — matching what the golden's authored pads carry.
+        let mut original = Footprint::new("TP_FLAGS");
+        let mut top = Pad::smd("1", 0.0, 0.0, 1.0, 1.0);
+        top.flags = PcbFlags::TESTPOINT_TOP;
+        original.add_pad(top);
+        let mut bottom = Pad::smd("2", 2.0, 0.0, 1.0, 1.0);
+        bottom.flags = PcbFlags::TESTPOINT_BOTTOM;
+        original.add_pad(bottom);
+        original.add_pad(Pad::smd("3", 4.0, 0.0, 1.0, 1.0));
+
+        let data = writer::encode_data_stream(&original).expect("encode");
+        let mut decoded = Footprint::new("TP_FLAGS");
+        reader::parse_data_stream(&mut decoded, &data, None);
+
+        assert_eq!(decoded.pads.len(), 3);
+        assert!(decoded.pads[0].flags.contains(PcbFlags::TESTPOINT_TOP));
+        assert!(decoded.pads[0].flags.contains(PcbFlags::LOCKED));
+        assert!(!decoded.pads[0].flags.contains(PcbFlags::TESTPOINT_BOTTOM));
+        assert!(decoded.pads[1].flags.contains(PcbFlags::TESTPOINT_BOTTOM));
+        assert!(decoded.pads[1].flags.contains(PcbFlags::LOCKED));
+        assert!(!decoded.pads[1].flags.contains(PcbFlags::TESTPOINT_TOP));
+        assert!(
+            decoded.pads[2].flags.is_empty(),
+            "the untouched pad stays unflagged"
+        );
+    }
+
+    #[test]
     fn binary_roundtrip_common_indices() {
         // A board-context Track and Text carrying a net/component association must
         // survive encode -> decode via the common-header indices (@3 net, @5
-        // polygon, @7 component). Previously these header bytes were dropped on
-        // read and hard-coded to 0xFF on write, so the association was lost.
+        // polygon, @7 component). Dropping them on read and hard-coding 0xFF
+        // on write loses the association.
         let mut original = Footprint::new("ROUNDTRIP_INDICES");
 
         let mut track = Track::new(-1.0, 0.0, 1.0, 0.0, 0.25, Layer::TopLayer);
@@ -1335,6 +2558,15 @@ mod tests {
         original.add_track(track);
 
         original.add_text(Text {
+            raw_layer_id: None,
+            barcode_full_width: None,
+            barcode_full_height: None,
+            barcode_x_margin: None,
+            barcode_y_margin: None,
+            barcode_kind: 0,
+            barcode_font_name: String::new(),
+            barcode_inverted: false,
+            barcode_show_text: false,
             x: 0.0,
             y: 1.0,
             text: "NET".to_string(),
@@ -1362,6 +2594,8 @@ mod tests {
             polygon_index: 0xFFFF,
             component_index: 4,
             unique_id: None,
+            guid: None,
+            raw_geometry: None,
         });
 
         let data = writer::encode_data_stream(&original).expect("encoding should succeed");
@@ -1459,6 +2693,7 @@ mod tests {
 
         // Add a rotated fill
         original.add_fill(Fill {
+            raw_layer_id: None,
             x1: -1.5,
             y1: -0.5,
             x2: 1.5,
@@ -1472,6 +2707,7 @@ mod tests {
             solder_mask_expansion: None,
             keepout_restrictions: None,
             unique_id: None,
+            guid: None,
         });
 
         let data = writer::encode_data_stream(&original).expect("encoding should succeed");
@@ -1502,7 +2738,7 @@ mod tests {
         use super::primitives::Fill;
 
         // Solder-mask expansion @37-40 and keepout @46 round-trip; a default fill
-        // stays None (additive — byte-identical to the old zero-tail output).
+        // stays None (additive — byte-identical to a zero tail).
         let mut fp = Footprint::new("FILL_TAIL");
         let mut fill = Fill::new(0.0, 0.0, 2.0, 1.0, Layer::TopLayer);
         fill.solder_mask_expansion = Some(0.1);
@@ -1534,7 +2770,15 @@ mod tests {
 
         // Add a ComponentBody with typical values and an explicit outline.
         let body = ComponentBody {
+            raw_layer_id: None,
+            v7_layer: None,
             model_id: "{TEST-GUID-1234-5678-ABCDEFGH}".to_string(),
+            identifier: String::new(),
+            texture_center_x: None,
+            texture_center_y: None,
+            texture_size_x: None,
+            texture_size_y: None,
+            texture_rotation: None,
             model_name: "TEST_MODEL.step".to_string(),
             embedded: true,
             rotation_x: 0.0,
@@ -1543,9 +2787,11 @@ mod tests {
             z_offset: 0.5,        // mm
             overall_height: 1.0,  // mm
             standoff_height: 0.1, // mm
+            cavity_height: 0.3,   // mm
             layer: Layer::Top3DBody,
             outline: vec![(-2.0, 1.0), (-2.0, -1.0), (2.0, -1.0), (2.0, 1.0)],
             unique_id: None,
+            guid: None,
             model_checksum: 7_654_321,
             name: " ".to_string(),
             kind: 0,
@@ -1556,10 +2802,13 @@ mod tests {
             body_color_3d: 8_421_504,
             body_opacity_3d: 1.0,
             model_2d_rotation: 0.0,
+            model_2d_x: 0.0,
+            model_2d_y: 0.0,
             net_index: 0xFFFF,
             polygon_index: 0xFFFF,
             component_index: -1,
             additional_parameters: Vec::new(),
+            param_key_order: Vec::new(),
         };
         original.add_component_body(body);
 
@@ -1580,8 +2829,9 @@ mod tests {
         assert!(approx_eq(body.z_offset, 0.5, 0.01));
         assert!(approx_eq(body.overall_height, 1.0, 0.01));
         assert!(approx_eq(body.standoff_height, 0.1, 0.01));
+        assert!(approx_eq(body.cavity_height, 0.3, 0.01));
         assert_eq!(body.layer, Layer::Top3DBody);
-        // MODEL.CHECKSUM round-trips verbatim (previously dropped + hard-coded to 0).
+        // MODEL.CHECKSUM round-trips verbatim rather than being hard-coded to 0.
         assert_eq!(body.model_checksum, 7_654_321);
 
         // The explicit outline round-trips (4 vertices, in mm).
@@ -1602,7 +2852,15 @@ mod tests {
         fp.add_pad(Pad::smd("2", 1.0, 0.0, 0.6, 0.5));
         for i in 0..2 {
             fp.add_component_body(ComponentBody {
+                raw_layer_id: None,
+                v7_layer: None,
                 model_id: format!("{{GUID-{i}}}"),
+                identifier: String::new(),
+                texture_center_x: None,
+                texture_center_y: None,
+                texture_size_x: None,
+                texture_size_y: None,
+                texture_rotation: None,
                 model_name: format!("M{i}.step"),
                 embedded: true,
                 rotation_x: 0.0,
@@ -1611,9 +2869,11 @@ mod tests {
                 z_offset: 0.0,
                 overall_height: 1.0,
                 standoff_height: 0.0,
+                cavity_height: 0.0,
                 layer: Layer::Top3DBody,
                 outline: Vec::new(), // exercise the synthesised-bbox fallback
                 unique_id: None,
+                guid: None,
                 model_checksum: 0,
                 name: " ".to_string(),
                 kind: 0,
@@ -1624,10 +2884,13 @@ mod tests {
                 body_color_3d: 8_421_504,
                 body_opacity_3d: 1.0,
                 model_2d_rotation: 0.0,
+                model_2d_x: 0.0,
+                model_2d_y: 0.0,
                 net_index: 0xFFFF,
                 polygon_index: 0xFFFF,
                 component_index: -1,
                 additional_parameters: Vec::new(),
+                param_key_order: Vec::new(),
             });
         }
 
@@ -1704,7 +2967,7 @@ mod tests {
         let block = &data[pos + 5..pos + 5 + 321];
         // Common-header layer byte is MultiLayer (74) for a via.
         assert_eq!(block[0], 74, "via common header should be on MultiLayer");
-        // Exactly one block — no second via sub-block follows (the old 6-block bug).
+        // Exactly one block — no second via sub-block follows.
         assert!(
             !data[pos + 5 + 321..].windows(sig.len()).any(|w| w == sig),
             "via should emit exactly one block, not several"
@@ -1714,7 +2977,7 @@ mod tests {
     #[test]
     fn track_arc_extended_tail_round_trips() {
         // #113: a track/arc's solder-mask expansion and keepout restrictions are
-        // preserved on read->write (previously silently dropped). Additive: a
+        // preserved on read->write rather than dropped. Additive: a
         // default primitive (None) must round-trip back to None.
         let mut fp = Footprint::new("FIDELITY");
         let mut track = Track::new(0.0, 0.0, 1.0, 0.0, 0.2, Layer::TopLayer);
@@ -1798,15 +3061,64 @@ mod tests {
     }
 
     #[test]
+    fn via_drill_pair_and_hole_edge_round_trip() {
+        use super::primitives::DrillLayerPairType;
+
+        // SubRecord-1 @258 (mask measured from the hole edge) and @312 (drill-pair
+        // classification). Both are 0 in Altium's template, so a default via must stay
+        // byte-identical while a configured one survives the round trip.
+        let mut original = Footprint::new("VIA_DRILL");
+        let mut configured = Via::new(0.0, 0.0, 0.6, 0.3);
+        configured.solder_mask_expansion_from_hole_edge = true;
+        configured.drill_layer_pair_type = DrillLayerPairType::Mid;
+        original.add_via(configured);
+        original.add_via(Via::new(2.0, 0.0, 0.6, 0.3));
+
+        let data = writer::encode_data_stream(&original).expect("encode");
+        let mut decoded = Footprint::new("VIA_DRILL");
+        reader::parse_data_stream(&mut decoded, &data, None);
+
+        assert_eq!(decoded.vias.len(), 2);
+        assert!(decoded.vias[0].solder_mask_expansion_from_hole_edge);
+        assert_eq!(
+            decoded.vias[0].drill_layer_pair_type,
+            DrillLayerPairType::Mid
+        );
+        assert!(!decoded.vias[1].solder_mask_expansion_from_hole_edge);
+        assert_eq!(
+            decoded.vias[1].drill_layer_pair_type,
+            DrillLayerPairType::Through,
+            "a from-scratch via is a through via"
+        );
+
+        // Every byte value maps back to itself, including the unknown-value fallback.
+        for (id, kind) in [
+            (0, DrillLayerPairType::Through),
+            (1, DrillLayerPairType::BlindBuriedStart),
+            (2, DrillLayerPairType::Mid),
+            (3, DrillLayerPairType::End),
+        ] {
+            assert_eq!(DrillLayerPairType::from_id(id), kind);
+            assert_eq!(kind.to_id(), id);
+        }
+        assert_eq!(
+            DrillLayerPairType::from_id(99),
+            DrillLayerPairType::Through,
+            "an unknown classification reads as a through via"
+        );
+    }
+
+    #[test]
     fn via_solder_mask_mode_round_trips() {
         use super::primitives::MaskExpansionMode;
 
-        // A fresh via defaults to FromRule (Altium's default, byte 66 = 1) — not the
-        // old `manual=false` which wrote 0 (None). A Manual via must round-trip.
+        // A fresh via carries None (byte 66 = 0, `eCacheInvalid`), matching what Altium
+        // writes for a factory via: the cached expansion is stale, so Altium takes the
+        // value from the design rule. A Manual via must round-trip.
         let mut original = Footprint::new("VIA_MASK_MODE");
         assert_eq!(
             Via::new(0.0, 0.0, 0.6, 0.3).solder_mask_expansion_mode,
-            MaskExpansionMode::FromRule
+            MaskExpansionMode::None
         );
         original.add_via(Via::new(0.0, 0.0, 0.6, 0.3));
         let mut manual = Via::new(1.0, 1.0, 0.6, 0.3);
@@ -1820,7 +3132,7 @@ mod tests {
         assert_eq!(decoded.vias.len(), 2);
         assert_eq!(
             decoded.vias[0].solder_mask_expansion_mode,
-            MaskExpansionMode::FromRule
+            MaskExpansionMode::None
         );
         assert_eq!(
             decoded.vias[1].solder_mask_expansion_mode,
@@ -1901,57 +3213,27 @@ mod tests {
     }
 
     #[test]
-    fn each_via_gets_a_unique_identity_guid() {
-        // PR-R6: every via must carry its OWN in-record identity GUIDs @259
-        // (IdentityGuid) and @275 (IdentityGuidB) — like the pad, which generates
-        // fresh unique GUIDs per primitive. The template previously reused one
-        // fixed GUID for every via, so two vias in one footprint collided.
+    fn from_scratch_vias_carry_nil_identity_guids() {
+        // The in-record identity GUID slots @259-290 are ZEROS in every
+        // AD-authored library via (the golden), and a via read from a file
+        // replays its whole block verbatim. We used to invent two fresh GUIDs
+        // per save, which made the record change on every write; nil is what
+        // Altium itself writes.
         let mut fp = Footprint::new("VIA_GUIDS");
         fp.add_via(Via::new(0.0, 0.0, 0.6, 0.3));
-        fp.add_via(Via::new(2.0, 0.0, 0.6, 0.3));
         let data = writer::encode_data_stream(&fp).expect("encode");
 
-        // Locate both 321-byte via blocks by their `[0x03][len: u32 LE]` signature.
         let sig = [0x03u8, 0x41, 0x01, 0x00, 0x00];
         let first = data
             .windows(sig.len())
             .position(|w| w == sig)
-            .expect("first via block");
-        let second_rel = data[first + 5..]
-            .windows(sig.len())
-            .position(|w| w == sig)
-            .expect("second via block");
-        let second = first + 5 + second_rel;
-        assert_ne!(first, second, "expected two distinct via blocks");
-
-        let via1 = &data[first + 5..first + 5 + 321];
-        let via2 = &data[second + 5..second + 5 + 321];
-
-        // Uniqueness: the two vias must NOT share an IdentityGuid @259-274.
-        assert_ne!(
-            &via1[259..275],
-            &via2[259..275],
-            "two vias share an IdentityGuid — GUID is not per-primitive-unique"
+            .expect("via block");
+        let via = &data[first + 5..first + 5 + 321];
+        assert_eq!(
+            &via[259..291],
+            &[0u8; 32],
+            "from-scratch identity GUID slots are nil, as AD writes them"
         );
-        // IdentityGuidB @275-290 must likewise differ between vias.
-        assert_ne!(
-            &via1[275..291],
-            &via2[275..291],
-            "two vias share an IdentityGuidB"
-        );
-
-        // Well-formedness: each emitted GUID is a non-zero 16-byte value, and a
-        // via's GUID-A differs from its own GUID-B (mirrors the pad's two
-        // independent generate_guid() calls).
-        for via in [via1, via2] {
-            assert_ne!(&via[259..275], &[0u8; 16], "IdentityGuid is all-zero");
-            assert_ne!(&via[275..291], &[0u8; 16], "IdentityGuidB is all-zero");
-            assert_ne!(
-                &via[259..275],
-                &via[275..291],
-                "a via's IdentityGuid equals its IdentityGuidB"
-            );
-        }
     }
 
     #[test]
@@ -1987,14 +3269,12 @@ mod tests {
     fn pad_mask_expansion_mode_round_trips() {
         use super::primitives::MaskExpansionMode;
 
-        // A fresh pad defaults to FromRule (Altium's default, bytes 101/102 = 1) — not
-        // the old `manual=false` which wrote 0 (None). A Manual pad must round-trip.
+        // A fresh pad carries None (bytes 101/102 = 0, `eCacheInvalid`), matching what
+        // Altium writes for a factory pad: the cached expansion is stale, so Altium
+        // takes the value from the design rule. A Manual pad must round-trip.
         let fresh = Pad::smd("1", 0.0, 0.0, 1.0, 1.0);
-        assert_eq!(fresh.paste_mask_expansion_mode, MaskExpansionMode::FromRule);
-        assert_eq!(
-            fresh.solder_mask_expansion_mode,
-            MaskExpansionMode::FromRule
-        );
+        assert_eq!(fresh.paste_mask_expansion_mode, MaskExpansionMode::None);
+        assert_eq!(fresh.solder_mask_expansion_mode, MaskExpansionMode::None);
 
         let mut original = Footprint::new("PAD_MASK_MODE");
         original.add_pad(Pad::smd("1", 0.0, 0.0, 1.0, 1.0));
@@ -2010,11 +3290,11 @@ mod tests {
         assert_eq!(decoded.pads.len(), 2);
         assert_eq!(
             decoded.pads[0].paste_mask_expansion_mode,
-            MaskExpansionMode::FromRule
+            MaskExpansionMode::None
         );
         assert_eq!(
             decoded.pads[0].solder_mask_expansion_mode,
-            MaskExpansionMode::FromRule
+            MaskExpansionMode::None
         );
         assert_eq!(
             decoded.pads[1].paste_mask_expansion_mode,
@@ -2564,6 +3844,215 @@ mod tests {
         assert!(
             err_str.contains("expected PcbLib"),
             "Expected 'expected PcbLib' in error, got: {err_str}"
+        );
+    }
+    /// The TPA6130A2 field failure, encoded. TI's RTJ0020D land drawing marks
+    /// (3.8) as pad row CENTRE-to-CENTRE; reading it as outer-edge-to-outer-edge
+    /// puts the 20 perimeter pads at 1.6 mm instead of 1.9 mm, whose inner edges
+    /// (1.30) then collide with the correctly-sized 2.7 mm exposed pad (1.35).
+    /// The library passed every integrity check while shorting all 21 pads.
+    #[test]
+    fn overlapping_pad_pairs_catches_undersized_qfn_land() {
+        fn wqfn20(centre: f64) -> Footprint {
+            let mut fp = Footprint::new("QFN50P400X400X80-21N");
+            let mut push = |des: &str, x: f64, y: f64, w: f64, h: f64| {
+                fp.pads.push(Pad::smd(des, x, y, w, h));
+            };
+            for k in 0..5 {
+                let o = f64::from(k).mul_add(-0.5, 1.0);
+                push(&format!("{}", k + 1), -centre, o, 0.6, 0.24);
+                push(&format!("{}", k + 6), -o, -centre, 0.24, 0.6);
+                push(&format!("{}", k + 11), centre, -o, 0.6, 0.24);
+                push(&format!("{}", k + 16), o, centre, 0.24, 0.6);
+            }
+            push("21", 0.0, 0.0, 2.7, 2.7); // exposed pad
+            fp
+        }
+
+        // As shipped: every perimeter pad welded to the EP by 0.05 mm.
+        let bad = wqfn20(1.6).overlapping_pad_pairs();
+        assert_eq!(bad.len(), 20, "all 20 pads must be reported against the EP");
+        for &(_, j, ox, oy) in &bad {
+            assert_eq!(j, 20, "the EP (last pad) is the other half of every pair");
+            // 0.05 mm along the pad's long axis, the pad's own 0.24 mm across it;
+            // which axis is which flips between the side rows and the top/bottom
+            // rows, so compare the unordered pair.
+            let (lo, hi) = if ox < oy { (ox, oy) } else { (oy, ox) };
+            assert!(
+                (lo - 0.05).abs() < 1e-9,
+                "short overlap {lo} (from {ox}x{oy})"
+            );
+            assert!(
+                (hi - 0.24).abs() < 1e-9,
+                "long overlap {hi} (from {ox}x{oy})"
+            );
+        }
+
+        // Corrected centres: 0.25 mm clearance, nothing reported.
+        assert!(
+            wqfn20(1.9).overlapping_pad_pairs().is_empty(),
+            "correct land pattern must be clean"
+        );
+    }
+
+    #[test]
+    fn overlapping_pad_pairs_excludes_legitimate_constructions() {
+        let base = |des: &str, x: f64, layer: Layer| {
+            let mut p = Pad::smd(des, x, 0.0, 1.0, 1.0);
+            p.layer = layer;
+            p
+        };
+
+        // Same designator == same net: stacking is a normal compound land.
+        let mut fp = Footprint::new("STACKED");
+        fp.pads.push(base("1", 0.0, Layer::TopLayer));
+        fp.pads.push(base("1", 0.4, Layer::TopLayer));
+        assert!(fp.overlapping_pad_pairs().is_empty(), "same designator");
+
+        // Opposite sides never short, even at identical coordinates.
+        let mut fp = Footprint::new("OPPOSITE");
+        fp.pads.push(base("1", 0.0, Layer::TopLayer));
+        fp.pads.push(base("2", 0.0, Layer::BottomLayer));
+        assert!(fp.overlapping_pad_pairs().is_empty(), "top vs bottom");
+
+        // A through-hole (MultiLayer) pad does short against a top-layer pad.
+        let mut fp = Footprint::new("THT");
+        fp.pads.push(base("1", 0.0, Layer::TopLayer));
+        fp.pads.push(base("2", 0.5, Layer::MultiLayer));
+        assert_eq!(fp.overlapping_pad_pairs().len(), 1, "multi-layer overlap");
+
+        // Merely touching still merges in Altium, so it is reported.
+        let mut fp = Footprint::new("TOUCHING");
+        fp.pads.push(base("1", 0.0, Layer::TopLayer));
+        fp.pads.push(base("2", 1.0, Layer::TopLayer));
+        assert_eq!(fp.overlapping_pad_pairs().len(), 1, "zero-gap contact");
+
+        // A clear gap is not reported.
+        let mut fp = Footprint::new("CLEAR");
+        fp.pads.push(base("1", 0.0, Layer::TopLayer));
+        fp.pads.push(base("2", 1.2, Layer::TopLayer));
+        assert!(fp.overlapping_pad_pairs().is_empty(), "0.2mm gap");
+    }
+
+    #[test]
+    fn overlapping_pad_pairs_uses_rotated_bounding_box() {
+        // A 90-degree rotated pad swaps its effective span, so a pair that clears
+        // unrotated can collide once rotated. The AABB comparison must see that.
+        let mk = |des: &str, y: f64, rot: f64| {
+            let mut p = Pad::smd(des, 0.0, y, 2.0, 0.2);
+            p.rotation = rot;
+            p
+        };
+        let mut fp = Footprint::new("FLAT");
+        fp.pads.push(mk("1", 0.0, 0.0));
+        fp.pads.push(mk("2", 0.5, 0.0));
+        assert!(
+            fp.overlapping_pad_pairs().is_empty(),
+            "flat pads clear in y"
+        );
+
+        let mut fp = Footprint::new("ROTATED");
+        fp.pads.push(mk("1", 0.0, 90.0));
+        fp.pads.push(mk("2", 0.5, 90.0));
+        assert_eq!(
+            fp.overlapping_pad_pairs().len(),
+            1,
+            "rotated pads span 2.0mm in y and must collide"
+        );
+    }
+    /// A full-stack per-layer rounded rectangle survives the roundtrip: the
+    /// block stores shape id 1 with the layer's corner-radius byte carrying
+    /// the rounding, and the reader reconstructs the shape from the pair.
+    #[test]
+    fn per_layer_rounded_rectangle_shape_survives_a_full_stack_roundtrip() {
+        let mut lib = PcbLib::new();
+        let mut footprint = Footprint::new("RRECT_STACK");
+        let mut pad = Pad::through_hole("1", 0.0, 0.0, 1.6, 1.6, 0.8);
+        pad.stack_mode = PadStackMode::FullStack;
+        pad.per_layer_sizes = Some(vec![(1.6, 1.6); 32]);
+        let mut shapes = vec![PadShape::Round; 32];
+        shapes[5] = PadShape::RoundedRectangle;
+        pad.per_layer_shapes = Some(shapes);
+        let mut radii = vec![0u8; 32];
+        radii[5] = 40;
+        pad.per_layer_corner_radii = Some(radii);
+        footprint.add_pad(pad);
+        lib.add(footprint);
+
+        let mut buffer = std::io::Cursor::new(Vec::new());
+        lib.write(&mut buffer).expect("write");
+        buffer.set_position(0);
+        let read_lib = PcbLib::read(buffer).expect("read");
+        let pad = &read_lib.get("RRECT_STACK").expect("footprint").pads[0];
+        let shapes = pad.per_layer_shapes.as_deref().expect("shapes survive");
+        assert_eq!(shapes[5], PadShape::RoundedRectangle);
+        assert_eq!(shapes[4], PadShape::Round);
+        let radii = pad
+            .per_layer_corner_radii
+            .as_deref()
+            .expect("radii survive");
+        assert_eq!(radii[5], 40);
+    }
+
+    /// A unique id on a region, fill or component body travels through the
+    /// `UniqueIdPrimitiveInformation` streams and is re-attached on read.
+    #[test]
+    fn unique_ids_on_region_fill_and_body_survive_the_roundtrip() {
+        let mut lib = PcbLib::new();
+        let mut footprint = Footprint::new("UIDS");
+        let mut region = Region::rectangle(0.0, 0.0, 2.0, 1.0, Layer::TopLayer);
+        region.unique_id = Some("REGIONID".to_string());
+        footprint.add_region(region);
+        let mut fill = Fill::new(0.0, 0.0, 1.0, 1.0, Layer::TopLayer);
+        fill.unique_id = Some("FILLIDAA".to_string());
+        footprint.add_fill(fill);
+        let mut body = ComponentBody::new("", "");
+        body.unique_id = Some("BODYIDAA".to_string());
+        footprint.add_component_body(body);
+        lib.add(footprint);
+
+        let mut buffer = std::io::Cursor::new(Vec::new());
+        lib.write(&mut buffer).expect("write");
+        buffer.set_position(0);
+        let read_lib = PcbLib::read(buffer).expect("read");
+        let footprint = read_lib.get("UIDS").expect("footprint");
+        assert_eq!(footprint.regions[0].unique_id.as_deref(), Some("REGIONID"));
+        assert_eq!(footprint.fills[0].unique_id.as_deref(), Some("FILLIDAA"));
+        assert_eq!(
+            footprint.component_bodies[0].unique_id.as_deref(),
+            Some("BODYIDAA")
+        );
+    }
+
+    /// Coincident pads on a non-copper layer never short: copper merging is a
+    /// copper-layer phenomenon, so mechanical-layer overlap is not reported.
+    #[test]
+    fn overlapping_pads_on_a_non_copper_layer_do_not_short() {
+        let mut footprint = Footprint::new("MECH_OVERLAP");
+        for designator in ["1", "2"] {
+            let mut pad = Pad::smd(designator, 0.0, 0.0, 2.0, 2.0);
+            pad.layer = Layer::Mechanical13;
+            footprint.add_pad(pad);
+        }
+        assert!(
+            footprint.overlapping_pad_pairs().is_empty(),
+            "non-copper pads cannot short"
+        );
+    }
+
+    /// `reset_identities` on a via whose raw block is shorter than the
+    /// identity region leaves the block alone instead of slicing past it.
+    #[test]
+    fn reset_identities_tolerates_a_via_raw_block_shorter_than_291_bytes() {
+        let mut footprint = Footprint::new("SHORT_VIA");
+        let mut via = Via::new(0.0, 0.0, 0.6, 0.3);
+        via.raw_block = Some(vec![0xAA; 100]);
+        footprint.add_via(via);
+        footprint.reset_identities();
+        assert_eq!(
+            footprint.vias[0].raw_block.as_deref(),
+            Some(vec![0xAA; 100].as_slice()),
+            "a short raw block stays untouched"
         );
     }
 }

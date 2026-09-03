@@ -25,6 +25,12 @@ struct Args {
     #[arg(value_name = "CONFIG_FILE")]
     config: Option<PathBuf>,
 
+    /// Grant access to a library directory (repeatable). Adds to the config
+    /// file's allowed paths, and works with no config file at all — the other
+    /// settings then take their defaults
+    #[arg(long = "allow", value_name = "DIR", num_args = 1..)]
+    allow: Vec<PathBuf>,
+
     /// Increase logging verbosity (-v for info, -vv for debug, -vvv for trace)
     #[arg(short, long, action = clap::ArgAction::Count)]
     verbose: u8,
@@ -81,14 +87,15 @@ fn main() -> ExitCode {
 
     // Load configuration
     let config_path = args.config.as_deref();
-    let cfg = match config::load_config(config_path) {
+    let cfg = match config::load_config_with_allow(config_path, args.allow) {
         Ok(cfg) => cfg,
         Err(e) => {
             eprintln!("Configuration error: {e}");
             if config_path.is_none() {
                 if let Some(default_path) = config::default_config_path() {
                     eprintln!("\nExpected config at: {}", default_path.display());
-                    eprintln!("Create one based on config/example-config.json");
+                    eprintln!("Create one based on config/example-config.json,");
+                    eprintln!("or grant directories directly: --allow <DIR>...");
                 }
             }
             return ExitCode::FAILURE;

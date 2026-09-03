@@ -108,15 +108,43 @@ pub struct InitializeParams {
     pub client_info: Option<ClientInfo>,
 }
 
+/// The MCP tool annotations: hints a client shows and reasons with before it
+/// runs a tool.
+///
+/// `read_only_hint` and `destructive_hint` follow the same classification the
+/// rate limiter and the audit log use (`is_mutating_tool`), so a client is told
+/// exactly which tools change files; `open_world_hint` is `false` for every
+/// tool, since each one touches only the library files it is given.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolAnnotations {
+    /// Human-readable display name.
+    pub title: String,
+    /// Whether the tool changes nothing on disk.
+    pub read_only_hint: bool,
+    /// Whether the tool may overwrite or delete what is there (every mutating
+    /// tool takes a backup first, but the file still changes).
+    pub destructive_hint: bool,
+    /// Whether the tool reaches beyond the local files it is given: never.
+    pub open_world_hint: bool,
+}
+
 /// A tool definition for tools/list response.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ToolDefinition {
     /// Unique tool name.
     pub name: String,
+    /// Human-readable display name (the MCP `title`, also carried in
+    /// `annotations`); filled in by `annotate`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
     /// Human-readable description.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    /// Behavioural hints for clients; filled in by `annotate`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub annotations: Option<ToolAnnotations>,
     /// JSON Schema for the tool's input parameters.
     pub input_schema: Value,
     /// Representative `tools/call` example, rendered into `docs/TOOLS.md` by the
@@ -293,6 +321,218 @@ pub struct McpServer {
     audit_logger: Option<AuditLogger>,
 }
 
+/// The JSON types a schema `type` names, as `serde_json` sees a value. A
+/// number with no fractional part is an `integer` as well as a `number`, as
+/// JSON Schema has it.
+fn value_has_schema_type(value: &Value, type_name: &str) -> bool {
+    match type_name {
+        "string" => value.is_string(),
+        "boolean" => value.is_boolean(),
+        "number" => value.is_number(),
+        "integer" => value
+            .as_f64()
+            .is_some_and(|n| n.fract() == 0.0 && n.abs() <= EXACT_INTEGER_MAX),
+        "array" => value.is_array(),
+        "object" => value.is_object(),
+        "null" => value.is_null(),
+        // A type this checker does not know is not a reason to refuse.
+        _ => true,
+    }
+}
+
+/// The largest magnitude a JSON number can carry as an exact integer
+/// (2^53): a whole float beyond it has no exact integer to become.
+const EXACT_INTEGER_MAX: f64 = 9_007_199_254_740_992.0;
+
+/// Rewrites, in place, every whole float under a schema node typed
+/// `integer` (alone or in a union) into a JSON integer, so a handler
+/// reading the field with `as_u64` / `as_i64` sees `2` where the caller
+/// sent `2.0` — the type check accepts both, as JSON Schema requires, and
+/// the handlers must not disagree with it by reading the float as absent.
+/// Descends the object `properties` and array `items` the schema describes.
+fn canonicalise_integers(value: &mut Value, schema: &Value) {
+    let integer_typed = match &schema["type"] {
+        Value::String(t) => t == "integer",
+        Value::Array(ts) => ts.iter().any(|t| t == "integer"),
+        _ => false,
+    };
+    if integer_typed && value.is_f64() {
+        if let Some(whole) = value
+            .as_f64()
+            .filter(|n| n.fract() == 0.0 && n.abs() <= EXACT_INTEGER_MAX)
+        {
+            #[allow(clippy::cast_possible_truncation)] // bounded by EXACT_INTEGER_MAX
+            let integer = whole as i64;
+            *value = Value::from(integer);
+        }
+    }
+    match value {
+        Value::Object(fields) => {
+            if let Some(properties) = schema["properties"].as_object() {
+                for (key, child) in fields.iter_mut() {
+                    if let Some(child_schema) = properties.get(key) {
+                        canonicalise_integers(child, child_schema);
+                    }
+                }
+            }
+        }
+        Value::Array(elements) => {
+            let items = &schema["items"];
+            if items.is_object() {
+                for element in elements.iter_mut() {
+                    canonicalise_integers(element, items);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Describes a value's JSON type for an error message.
+const fn json_type_name(value: &Value) -> &'static str {
+    match value {
+        Value::Null => "null",
+        Value::Bool(_) => "boolean",
+        Value::Number(_) => "number",
+        Value::String(_) => "string",
+        Value::Array(_) => "array",
+        Value::Object(_) => "object",
+    }
+}
+
+/// Checks `value` against `schema`'s `type` and, for a number, the
+/// `minimum` / `maximum` the schema states, and recurses into the object
+/// `properties` and array `items` the schema describes. Keys the schema does
+/// not mention are left alone (the tools' own allow-lists refuse unknown keys
+/// where that matters); `enum` and `required` are the parsers' to judge,
+/// since several fields accept spellings the schema lists only by example.
+/// `path` names the value in the error (`footprints[0].pads[1].width`).
+fn check_value_against_schema(value: &Value, schema: &Value, path: &str) -> Result<(), String> {
+    let allowed: Vec<&str> = match &schema["type"] {
+        Value::String(t) => vec![t.as_str()],
+        Value::Array(ts) => ts.iter().filter_map(Value::as_str).collect(),
+        _ => Vec::new(),
+    };
+    if !allowed.is_empty() && !allowed.iter().any(|t| value_has_schema_type(value, t)) {
+        let expected = allowed.join(" or ");
+        let shown = match value {
+            Value::String(s) if s.chars().count() > 40 => {
+                format!("\"{}…\"", s.chars().take(40).collect::<String>())
+            }
+            other => other.to_string(),
+        };
+        return Err(format!(
+            "Argument '{path}' must be {} {expected}, got {} {shown}",
+            article(&expected),
+            json_type_name(value)
+        ));
+    }
+    if let Some(number) = value.as_f64() {
+        let bound = |key: &str| schema.get(key).and_then(Value::as_f64);
+        match (bound("minimum"), bound("maximum")) {
+            (Some(min), Some(max)) if number < min || number > max => {
+                return Err(format!(
+                    "Argument '{path}' must be between {min} and {max}, got {value}"
+                ));
+            }
+            (Some(min), _) if number < min => {
+                return Err(format!(
+                    "Argument '{path}' must be at least {min}, got {value}"
+                ));
+            }
+            (_, Some(max)) if number > max => {
+                return Err(format!(
+                    "Argument '{path}' must be at most {max}, got {value}"
+                ));
+            }
+            _ => {}
+        }
+    }
+    if let (Some(properties), Some(object)) = (schema["properties"].as_object(), value.as_object())
+    {
+        for (key, child) in object {
+            if let Some(child_schema) = properties.get(key) {
+                let child_path = if path.is_empty() {
+                    key.clone()
+                } else {
+                    format!("{path}.{key}")
+                };
+                check_value_against_schema(child, child_schema, &child_path)?;
+            }
+        }
+    }
+    if let (Some(items), Some(array)) = (schema.get("items"), value.as_array()) {
+        if items.is_object() {
+            for (index, element) in array.iter().enumerate() {
+                check_value_against_schema(element, items, &format!("{path}[{index}]"))?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// "a" or "an", for the expected type in a message.
+fn article(noun: &str) -> &'static str {
+    if noun.starts_with(['a', 'e', 'i', 'o', 'u']) {
+        "an"
+    } else {
+        "a"
+    }
+}
+
+/// A library an in-place tool persists: checked for text its records cannot
+/// hold, then written to its path (see [`McpServer::backup_then_save`]).
+pub(crate) trait Persist {
+    /// The first text field a record of this library cannot hold, as the
+    /// message the tool reports, or `Ok(())`.
+    ///
+    /// # Errors
+    ///
+    /// The message naming the component and the offending field.
+    fn check_record_text(&self) -> Result<(), String>;
+
+    /// Writes the library to `path`.
+    ///
+    /// # Errors
+    ///
+    /// Whatever the writer refuses or the file system reports.
+    fn persist(&mut self, path: &str) -> crate::altium::AltiumResult<()>;
+}
+
+/// A handler that already holds its library by mutable reference passes
+/// that reference on.
+impl<L: Persist> Persist for &mut L {
+    fn check_record_text(&self) -> Result<(), String> {
+        (**self).check_record_text()
+    }
+
+    fn persist(&mut self, path: &str) -> crate::altium::AltiumResult<()> {
+        (**self).persist(path)
+    }
+}
+
+impl Persist for crate::altium::PcbLib {
+    fn check_record_text(&self) -> Result<(), String> {
+        self.iter()
+            .try_for_each(crate::altium::pcblib::Footprint::check_record_text)
+    }
+
+    fn persist(&mut self, path: &str) -> crate::altium::AltiumResult<()> {
+        self.save(path)
+    }
+}
+
+impl Persist for crate::altium::SchLib {
+    fn check_record_text(&self) -> Result<(), String> {
+        self.iter()
+            .try_for_each(crate::altium::schlib::Symbol::check_record_text)
+    }
+
+    fn persist(&mut self, path: &str) -> crate::altium::AltiumResult<()> {
+        self.save(path)
+    }
+}
+
 impl McpServer {
     /// Creates a new MCP server with the given allowed paths.
     ///
@@ -334,11 +574,60 @@ impl McpServer {
         self
     }
 
+    /// Every tool's input schema, from the same definitions `tools/list`
+    /// serves and `docs/TOOLS.md` is generated from.
+    fn tool_schemas() -> &'static std::collections::HashMap<String, Value> {
+        static SCHEMAS: std::sync::OnceLock<std::collections::HashMap<String, Value>> =
+            std::sync::OnceLock::new();
+        SCHEMAS.get_or_init(|| {
+            Self::get_tool_definitions()
+                .into_iter()
+                .map(|tool| (tool.name, tool.input_schema))
+                .collect()
+        })
+    }
+
+    /// Refuses a call whose arguments the tool's schema does not describe:
+    /// an argument name the schema does not document — a typo (`dryrun`,
+    /// `compnent_name`) every handler would otherwise ignore, silently taking
+    /// the default — or a value of the wrong JSON type anywhere in the
+    /// arguments, however deeply nested, which a handler would likewise
+    /// ignore (`"filled": "true"` is not `true`; `"width": "1.5"` is not
+    /// `1.5`). An unknown tool name is left to dispatch to report.
+    fn check_tool_arguments(name: &str, arguments: &Value) -> Result<(), String> {
+        let (Some(schema), Some(given)) = (Self::tool_schemas().get(name), arguments.as_object())
+        else {
+            return Ok(());
+        };
+        let known: Vec<&String> = schema["properties"]
+            .as_object()
+            .map(|props| props.keys().collect())
+            .unwrap_or_default();
+        if let Some(unknown) = given.keys().find(|key| !known.contains(key)) {
+            let known: Vec<&str> = known.iter().map(|s| s.as_str()).collect();
+            return Err(format!(
+                "Unknown argument '{unknown}' for tool '{name}'. Accepted arguments are: {known:?}"
+            ));
+        }
+        check_value_against_schema(arguments, schema, "")
+            .map_err(|e| format!("{e} (tool '{name}')"))
+    }
+
+    /// Hands the handler the arguments in the form it reads: every whole
+    /// float the schema types as an integer becomes one (see
+    /// [`canonicalise_integers`]). Runs only after [`Self::check_tool_arguments`]
+    /// has passed them.
+    fn canonicalise_tool_arguments(name: &str, arguments: &mut Value) {
+        if let Some(schema) = Self::tool_schemas().get(name) {
+            canonicalise_integers(arguments, schema);
+        }
+    }
+
     /// Returns `true` if the named tool mutates a library file on disk.
     ///
     /// Only these destructive operations are rate limited; read-only tools
     /// (reads, listings, diffs, renders, validation) are never throttled.
-    fn is_mutating_tool(name: &str) -> bool {
+    pub(crate) fn is_mutating_tool(name: &str) -> bool {
         matches!(
             name,
             "write_pcblib"
@@ -383,6 +672,9 @@ impl McpServer {
             return Err("Access denied: no allowed directories are configured".to_string());
         }
 
+        if filepath.is_empty() {
+            return Err("Invalid path: no file path was given".to_string());
+        }
         let path = Path::new(filepath);
 
         // Only ever surface the file name to the client, never the full
@@ -426,19 +718,26 @@ impl McpServer {
     /// Maximum number of timestamped backups to retain per file.
     const MAX_BACKUPS: usize = 5;
 
-    /// Backs up `filepath`, then persists the library via `save`.
+    /// Refuses text the library's records cannot hold, backs up `filepath`,
+    /// then persists the library.
     ///
-    /// Centralises the backup → save sequence shared by every mutating tool
-    /// handler so create and update paths cannot drift (see #104). On failure it
-    /// returns the tool-error response; the caller builds its own success result.
+    /// Centralises the check → backup → save sequence shared by every
+    /// mutating tool handler so create and update paths cannot drift. The
+    /// check comes first: the writer would refuse the same text, but only
+    /// after a backup had been made for a save that never happens. On
+    /// failure it returns the tool-error response; the caller builds its own
+    /// success result.
     pub(crate) fn backup_then_save(
         filepath: &str,
-        save: impl FnOnce() -> crate::altium::AltiumResult<()>,
+        library: &mut impl Persist,
     ) -> Result<(), ToolCallResult> {
+        library.check_record_text().map_err(ToolCallResult::error)?;
         if let Err(e) = Self::create_backup(filepath) {
             return Err(ToolCallResult::error(e));
         }
-        save().map_err(|e| ToolCallResult::error(format!("Failed to write library: {e}")))?;
+        library
+            .persist(filepath)
+            .map_err(|e| ToolCallResult::error(format!("Failed to write library: {e}")))?;
         Ok(())
     }
 
@@ -754,11 +1053,37 @@ impl McpServer {
         Ok(JsonRpcResponse::success(req.id.clone(), result))
     }
 
+    /// Runs one tool call with a panic safety net.
+    ///
+    /// A panic anywhere below a tool — a parser assertion, an index past the
+    /// end, a third-party crate's debug check — must not take the server down
+    /// mid-conversation: the client loses every later call until someone
+    /// restarts the process. Caught here, it becomes an `isError` result like
+    /// any other failure, and the session continues. The panic payload is
+    /// logged server-side only; the client message carries no detail, because
+    /// a payload may quote a path or file content.
+    fn guard_panics(tool: &str, call: impl FnOnce() -> ToolCallResult) -> ToolCallResult {
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(call)) {
+            Ok(result) => result,
+            Err(payload) => {
+                let detail = payload
+                    .downcast_ref::<String>()
+                    .map(String::as_str)
+                    .or_else(|| payload.downcast_ref::<&str>().copied())
+                    .unwrap_or("non-string panic payload");
+                tracing::error!(tool = %tool, panic = %detail, "tool call panicked; server kept running");
+                ToolCallResult::error(format!(
+                    "Internal error while running '{tool}'. The server is still running; please report this with the arguments used."
+                ))
+            }
+        }
+    }
+
     /// Handles the tools/call request.
     fn handle_tools_call(&self, req: &JsonRpcRequest) -> Result<JsonRpcResponse, JsonRpcError> {
         self.require_running(&req.id)?;
 
-        let params: ToolCallParams = req
+        let mut params: ToolCallParams = req
             .params
             .as_ref()
             .map(|p| serde_json::from_value(p.clone()))
@@ -775,9 +1100,11 @@ impl McpServer {
 
         // Throttle mutating operations so a runaway AI loop cannot thrash the
         // disk with repeated full-file rewrites + backups. Reads are unmetered.
-        let result = if Self::is_mutating_tool(params.name.as_str())
-            && !self.rate_limiter.try_acquire()
-        {
+        let checked = Self::check_tool_arguments(&params.name, &params.arguments)
+            .map(|()| Self::canonicalise_tool_arguments(&params.name, &mut params.arguments));
+        let result = if let Err(e) = checked {
+            ToolCallResult::error(e)
+        } else if Self::is_mutating_tool(params.name.as_str()) && !self.rate_limiter.try_acquire() {
             tracing::warn!(
                 tool = %params.name,
                 "Rate limit exceeded; rejecting mutating operation"
@@ -787,7 +1114,7 @@ impl McpServer {
                  Please slow down and retry.",
             )
         } else {
-            match params.name.as_str() {
+            Self::guard_panics(&params.name, || match params.name.as_str() {
                 // Library I/O tools
                 "read_pcblib" => self.call_read_pcblib(&params.arguments),
                 "write_pcblib" => self.call_write_pcblib(&params.arguments),
@@ -828,7 +1155,7 @@ impl McpServer {
                 "update_primitive" => self.call_update_primitive(&params.arguments),
                 // Unknown tool
                 _ => ToolCallResult::error(format!("Unknown tool: {}", params.name)),
-            }
+            })
         };
 
         // Audit destructive operations at the dispatch chokepoint (best-effort;
@@ -889,71 +1216,9 @@ mod tests {
     use super::*;
     use crate::altium::pcblib::{Footprint, Pad, PcbLib};
     use crate::altium::schlib::{Pin, PinOrientation, Rectangle, SchLib, Symbol};
-    use tempfile::TempDir;
-
-    /// Creates a temporary directory inside `.tmp/` for test isolation.
-    /// The directory is automatically cleaned up when the returned `TempDir` is dropped.
-    ///
-    /// Uses an absolute path to avoid issues with parallel test execution.
-    fn test_temp_dir() -> TempDir {
-        let cwd = std::env::current_dir().expect("Failed to get current directory");
-        let tmp_root = cwd.join(".tmp");
-        std::fs::create_dir_all(&tmp_root).expect("Failed to create .tmp directory");
-        tempfile::tempdir_in(&tmp_root).expect("Failed to create temp dir")
-    }
-
-    /// Helper to create a server with a temp directory as allowed path.
-    fn create_test_server(temp_path: &std::path::Path) -> McpServer {
-        McpServer::new(vec![temp_path.to_path_buf()])
-    }
-
-    /// Helper to create a test `PcbLib` with sample footprints.
-    fn create_test_pcblib(path: &std::path::Path) {
-        let mut lib = PcbLib::new();
-
-        let mut fp1 = Footprint::new("CHIP_0402");
-        fp1.description = "0402 chip resistor".to_string();
-        fp1.add_pad(Pad::smd("1", -0.5, 0.0, 0.6, 0.5));
-        fp1.add_pad(Pad::smd("2", 0.5, 0.0, 0.6, 0.5));
-        lib.add(fp1);
-
-        let mut fp2 = Footprint::new("CHIP_0603");
-        fp2.description = "0603 chip resistor".to_string();
-        fp2.add_pad(Pad::smd("1", -0.8, 0.0, 0.8, 0.8));
-        fp2.add_pad(Pad::smd("2", 0.8, 0.0, 0.8, 0.8));
-        lib.add(fp2);
-
-        lib.save(path).expect("Failed to create test PcbLib");
-    }
-
-    /// Helper to create a test `SchLib` with sample symbols.
-    fn create_test_schlib(path: &std::path::Path) {
-        let mut lib = SchLib::new();
-
-        let mut sym1 = Symbol::new("RESISTOR");
-        sym1.description = "Generic resistor".to_string();
-        sym1.designator = "R?".to_string();
-        sym1.add_pin(Pin::new("1", "1", -20, 0, 10, PinOrientation::Left));
-        sym1.add_pin(Pin::new("2", "2", 20, 0, 10, PinOrientation::Right));
-        sym1.add_rectangle(Rectangle::new(-10, -5, 10, 5));
-        lib.add(sym1);
-
-        let mut sym2 = Symbol::new("CAPACITOR");
-        sym2.description = "Generic capacitor".to_string();
-        sym2.designator = "C?".to_string();
-        sym2.add_pin(Pin::new("1", "1", -20, 0, 10, PinOrientation::Left));
-        sym2.add_pin(Pin::new("2", "2", 20, 0, 10, PinOrientation::Right));
-        lib.add(sym2);
-
-        lib.save(path).expect("Failed to create test SchLib");
-    }
-
-    /// Helper to extract text from a tool result.
-    fn get_result_text(result: &ToolCallResult) -> &str {
-        match &result.content[0] {
-            ToolContent::Text { text } => text,
-        }
-    }
+    use crate::mcp::tools::test_support::{
+        create_test_pcblib, create_test_schlib, create_test_server, get_result_text, test_temp_dir,
+    };
 
     #[test]
     fn server_initial_state() {
@@ -1265,11 +1530,10 @@ mod tests {
 
     #[test]
     fn extract_by_footprint_output_path_is_a_directory_even_for_one_match() {
-        // Regression (bug sweep 2026-07, deferred item): with exactly one
-        // matching model `output_path` used to be treated as a FILE path, but
-        // as a DIRECTORY for two or more — the same argument changed meaning
-        // based on data the caller does not control. It is now always a
-        // directory for extract_by_footprint.
+        // `output_path` is ALWAYS a directory here, whatever the match count.
+        // An argument whose meaning switches between file and directory based
+        // on how many models happen to match is data the caller does not
+        // control.
         let temp = test_temp_dir();
         let lib_path = temp.path().join("with_model.PcbLib");
         create_test_pcblib_with_model(&lib_path);
@@ -1320,9 +1584,9 @@ mod tests {
     // SchLib primitive-family completeness Tests
     // =========================================================================
 
-    /// Builds a symbol carrying every primitive family that a read-modify-write
-    /// used to drop (pies, images, beziers, elliptical arcs, footprint links)
-    /// plus a non-default part count.
+    /// Builds a symbol carrying every primitive family a read-modify-write is
+    /// at risk of dropping (pies, images, beziers, elliptical arcs, footprint
+    /// links) plus a non-default part count.
     fn symbol_with_every_at_risk_family() -> Symbol {
         use crate::altium::schlib::{Bezier, EllipticalArc, FootprintModel, Image, Pie};
 
@@ -1357,7 +1621,8 @@ mod tests {
         let mut sym_json = serde_json::to_value(&symbol).expect("serialise symbol");
         sym_json["description"] = json!("after");
 
-        let result = McpServer::update_schlib_component(
+        let server = McpServer::new(vec![temp.path().to_path_buf()]);
+        let result = server.update_schlib_component(
             &lib_path.to_string_lossy(),
             "FAMILIES",
             &sym_json,
@@ -1396,13 +1661,14 @@ mod tests {
 
         let parsed: Value = serde_json::from_str(get_result_text(&result)).expect("valid JSON");
         let symbol = &parsed["symbols"][0];
+        // The export is the struct's own serde shape: every populated family
+        // is present (an empty one is omitted, and import defaults it).
         for key in [
             "part_count",
             "pies",
             "images",
             "beziers",
             "elliptical_arcs",
-            "text",
             "footprints",
         ] {
             assert!(
@@ -1413,14 +1679,15 @@ mod tests {
         assert_eq!(symbol["part_count"], 2);
         assert_eq!(symbol["pies"].as_array().map(Vec::len), Some(1));
         assert_eq!(symbol["images"].as_array().map(Vec::len), Some(1));
+        assert!(symbol.get("text").is_none(), "an empty family is omitted");
     }
 
     #[test]
     fn symbol_validation_rejects_out_of_range_pie_and_image() {
         use crate::altium::schlib::{Image, Pie};
 
-        // Pies and images used to bypass the ±32000-unit coordinate guard that
-        // every other family goes through before a write.
+        // Pies and images must go through the same ±32000-unit coordinate
+        // guard as every other family before a write.
         let mut with_pie = Symbol::new("BAD_PIE");
         with_pie.pies.push(Pie::new(100_000, 0, 5, 0.0, 90.0));
         assert!(
@@ -1995,9 +2262,9 @@ mod tests {
                 "labels": [{"x": 0, "y": 0, "text": "L", "font_id": 1, "color": 128,
                     "rotation": 0, "is_mirrored": false, "is_hidden": false,
                     "justification": "bottom_left", "owner_part_id": 1}],
-                "text": [{"x": 0, "y": 0, "text": "T", "font_id": 1, "color": 128,
-                    "rotation": 0, "is_mirrored": false, "is_hidden": false,
-                    "justification": "bottom_left", "owner_part_id": 1}],
+                "ieee_symbols": [{"x": 0, "y": 0, "symbol": 4, "scale_factor": 20, "rotation": 90,
+                    "is_mirrored": true, "line_width": 1, "color": 128, "owner_part_id": 1,
+                    "graphically_locked": true}],
                 "parameters": [{"name": "Value", "value": "*", "x": 0, "y": 0,
                     "hidden": false, "font_id": 1, "color": 8_388_608, "owner_part_id": 1}],
                 "footprints": [{"name": "FP", "description": "d",
@@ -2014,9 +2281,9 @@ mod tests {
 
     #[test]
     fn write_schlib_authors_beziers_and_elliptical_arcs() {
-        // These two families used to be read/RMW-preserved only (write_schlib
-        // rejected the keys). Author one of each and read them back through
-        // the real writer + reader.
+        // Both families must be authorable, not merely read and preserved.
+        // Author one of each and read them back through the real writer and
+        // reader.
         let temp = test_temp_dir();
         let lib_path = temp.path().join("bez_earc.SchLib");
         let server = create_test_server(temp.path());
@@ -2067,10 +2334,9 @@ mod tests {
     #[test]
     fn export_schlib_write_schlib_round_trip_preserves_symbol_header_fields() {
         // The five symbol header fields beyond part_count are emitted by
-        // export_schlib and must survive a replay through write_schlib —
-        // previously the allow-list rejected them and the create path never
-        // parsed them, so an export -> write round-trip collapsed e.g. a
-        // two-display-mode symbol back to one.
+        // export_schlib and must survive a replay through write_schlib, or an
+        // export -> write round-trip collapses e.g. a two-display-mode symbol
+        // back to one.
         let temp = test_temp_dir();
         let src_path = temp.path().join("hdr_src.SchLib");
         let dst_path = temp.path().join("hdr_dst.SchLib");
@@ -2236,6 +2502,49 @@ mod tests {
         assert!(lib.get("RESISTOR").is_some());
         assert!(lib.get("CAPACITOR").is_some());
         assert!(lib.get("NEW_SYM").is_some());
+    }
+
+    #[test]
+    fn write_schlib_geometry_echo_covers_only_written_symbols() {
+        // The geometry echo exists so the caller can verify the pins it just wrote.
+        // Scoped to this call's symbols: walking the whole library makes an
+        // `append: true` sequence re-echo every pre-existing symbol, growing
+        // the response quadratically with the number of appends.
+        let temp = test_temp_dir();
+        let lib_path = temp.path().join("geom_scope.SchLib");
+        create_test_schlib(&lib_path); // seeds RESISTOR + CAPACITOR
+
+        let server = create_test_server(temp.path());
+        let args = json!({
+            "filepath": lib_path.to_string_lossy(),
+            "symbols": [{
+                "name": "APPENDED",
+                "designator": "X?",
+                "pins": [{"designator": "1", "name": "A", "x": -30, "y": 0,
+                          "length": 10, "orientation": "left"}]
+            }],
+            "append": true
+        });
+
+        let result = server.call_write_schlib(&args);
+        assert!(
+            !result.is_error,
+            "append must succeed, got: {}",
+            get_result_text(&result)
+        );
+
+        let parsed: serde_json::Value =
+            serde_json::from_str(get_result_text(&result)).expect("response is JSON");
+        let geometry = parsed["geometry"].as_array().expect("geometry array");
+        let names: Vec<&str> = geometry.iter().filter_map(|g| g["name"].as_str()).collect();
+
+        assert_eq!(
+            names,
+            vec!["APPENDED"],
+            "geometry must cover only the symbols written by this call"
+        );
+        // The library itself still grew — only the echo is scoped.
+        assert_eq!(parsed["symbol_count"].as_u64(), Some(3));
     }
 
     // =========================================================================
@@ -2858,6 +3167,45 @@ mod tests {
     mod dispatch_and_lifecycle {
         use super::*;
 
+        /// A tool that panics answers its call with an error result and the
+        /// server keeps running; the panic's own text stays in the log, never
+        /// in the client-facing message. A tool that returns normally is
+        /// passed through untouched.
+        #[test]
+        fn guard_panics_turns_a_panic_into_an_error_result() {
+            // Silence the default hook's stderr noise for this one test.
+            let previous = std::panic::take_hook();
+            std::panic::set_hook(Box::new(|_| {}));
+            let result = McpServer::guard_panics("boom_tool", || {
+                panic!("secret detail: C:/Users/someone/Library.PcbLib");
+            });
+            let payload_result = McpServer::guard_panics("boom_tool", || {
+                std::panic::panic_any(42_u8);
+            });
+            std::panic::set_hook(previous);
+
+            assert!(result.is_error);
+            let text = match &result.content[0] {
+                ToolContent::Text { text } => text.clone(),
+            };
+            assert!(
+                text.contains("Internal error while running 'boom_tool'"),
+                "{text}"
+            );
+            assert!(text.contains("still running"), "{text}");
+            assert!(
+                !text.contains("secret detail"),
+                "panic text must not reach the client: {text}"
+            );
+            assert!(
+                payload_result.is_error,
+                "non-string payloads are guarded too"
+            );
+
+            let ok = McpServer::guard_panics("fine_tool", || ToolCallResult::text("fine"));
+            assert!(!ok.is_error);
+        }
+
         fn req(method: &str, params: Option<Value>) -> JsonRpcRequest {
             JsonRpcRequest {
                 jsonrpc: "2.0".to_string(),
@@ -2934,6 +3282,362 @@ mod tests {
                 .as_str()
                 .unwrap()
                 .contains("Unknown tool"));
+        }
+
+        /// Every tool refuses an argument its schema does not document, and
+        /// every tool's own documented example passes the same check — so
+        /// the schemas, the examples and the handlers cannot drift apart.
+        #[test]
+        fn tools_call_refuses_an_undocumented_argument_on_every_tool() {
+            let dir = test_temp_dir();
+            let server = running_server(dir.path());
+            for tool in McpServer::get_tool_definitions() {
+                let r = req(
+                    "tools/call",
+                    Some(
+                        json!({ "name": tool.name, "arguments": { "filepath": "x", "dryrun": true } }),
+                    ),
+                );
+                let resp = server.handle_tools_call(&r).unwrap();
+                let text = resp.result["content"][0]["text"]
+                    .as_str()
+                    .unwrap()
+                    .to_string();
+                assert_eq!(resp.result["isError"], json!(true), "{}: {text}", tool.name);
+                assert!(
+                    text.contains("Unknown argument 'dryrun'") && text.contains(&tool.name),
+                    "{}: {text}",
+                    tool.name
+                );
+
+                let example = tool.example.expect("every tool documents an example");
+                assert_eq!(example["name"], tool.name);
+                assert!(
+                    McpServer::check_tool_arguments(&tool.name, &example["arguments"]).is_ok(),
+                    "{}: its own example carries an undocumented argument",
+                    tool.name
+                );
+            }
+            // Non-object arguments and unknown tools are left to dispatch.
+            assert!(McpServer::check_tool_arguments("read_pcblib", &json!(null)).is_ok());
+            assert!(McpServer::check_tool_arguments("no_such_tool", &json!({ "x": 1 })).is_ok());
+        }
+
+        /// A value of the wrong JSON type is refused wherever it sits, with
+        /// its path: a handler reading it with `as_bool` / `as_f64` would
+        /// otherwise get `None` and silently take the default.
+        #[test]
+        fn tools_call_refuses_a_value_of_the_wrong_type_wherever_it_is_nested() {
+            let cases: [(&str, Value, &str); 7] = [
+                (
+                    "write_schlib",
+                    json!({
+                        "filepath": "x.SchLib",
+                        "symbols": [{
+                            "name": "S",
+                            "rectangles": [{ "x1": 0, "y1": 0, "x2": 1, "y2": 1, "filled": "true" }],
+                        }],
+                    }),
+                    "Argument 'symbols[0].rectangles[0].filled' must be a boolean, got string \"true\"",
+                ),
+                (
+                    "write_pcblib",
+                    json!({
+                        "filepath": "x.PcbLib",
+                        "footprints": [{
+                            "name": "F",
+                            "pads": [{ "designator": "1", "x": 0, "y": 0, "width": "1.5", "height": 1 }],
+                        }],
+                    }),
+                    "Argument 'footprints[0].pads[0].width' must be a number, got string \"1.5\"",
+                ),
+                (
+                    "update_pad",
+                    json!({
+                        "filepath": "x.PcbLib", "component_name": "F", "designator": "1",
+                        "updates": { "width": "wide" },
+                    }),
+                    "Argument 'updates.width' must be a number, got string \"wide\"",
+                ),
+                (
+                    "write_pcblib",
+                    json!({ "filepath": "x.PcbLib", "footprints": "not a list" }),
+                    "Argument 'footprints' must be an array, got string",
+                ),
+                (
+                    "write_schlib",
+                    json!({
+                        "filepath": "x.SchLib",
+                        "symbols": [{ "name": "S", "pins": [{ "designator": 1 }] }],
+                    }),
+                    "Argument 'symbols[0].pins[0].designator' must be a string, got number 1",
+                ),
+                (
+                    "list_components",
+                    json!({ "filepath": "x.PcbLib", "limit": 2.5 }),
+                    "Argument 'limit' must be an integer, got number 2.5",
+                ),
+                (
+                    "list_components",
+                    json!({ "filepath": "x.PcbLib", "limit": 1e20 }),
+                    "Argument 'limit' must be an integer, got number 1e+20",
+                ),
+            ];
+            for (tool, arguments, expected) in cases {
+                let err = McpServer::check_tool_arguments(tool, &arguments)
+                    .expect_err(&format!("{tool}: {arguments} must be refused"));
+                assert!(
+                    err.contains(expected),
+                    "{tool}: expected {expected:?}, got {err:?}"
+                );
+                assert!(
+                    err.contains(tool),
+                    "{tool}: the error names the tool: {err:?}"
+                );
+            }
+        }
+
+        /// What the check must not refuse: a whole number for an `integer`
+        /// however it is written, a union type in either of its forms, a key
+        /// the schema does not describe (the tools' allow-lists judge those),
+        /// and a string that only looks long.
+        #[test]
+        fn a_whole_float_reaches_the_handler_as_the_integer_it_is() {
+            // Under `integer` (alone or in a union) a whole float becomes an
+            // integer; a fraction, a number-typed field and a float beyond
+            // 2^53 are left as they are.
+            let mut arguments = json!({
+                "filepath": "x.PcbLib",
+                "footprints": [{
+                    "name": "F",
+                    "pads": [{
+                        "designator": "1", "x": 0, "y": 0, "width": 1.5, "height": 1,
+                        "corner_radius_percent": 25.0, "net_index": 65535.0, "flags": 4.0,
+                        "per_layer_corner_radii": [10.0, 20.0],
+                    }],
+                }],
+            });
+            McpServer::canonicalise_tool_arguments("write_pcblib", &mut arguments);
+            let pad = &arguments["footprints"][0]["pads"][0];
+            assert!(pad["corner_radius_percent"].is_i64(), "{pad}");
+            assert_eq!(pad["corner_radius_percent"].as_u64(), Some(25));
+            assert_eq!(pad["net_index"].as_u64(), Some(65535));
+            assert_eq!(pad["flags"].as_u64(), Some(4), "union with integer");
+            assert_eq!(
+                pad["per_layer_corner_radii"][1].as_u64(),
+                Some(20),
+                "array items"
+            );
+            assert!(pad["width"].is_f64(), "a number-typed field is untouched");
+
+            let mut arguments = json!({ "filepath": "x.PcbLib", "limit": 2.0, "offset": 1e300 });
+            McpServer::canonicalise_tool_arguments("list_components", &mut arguments);
+            assert_eq!(arguments["limit"].as_u64(), Some(2));
+            assert!(
+                arguments["offset"].is_f64(),
+                "beyond 2^53 has no exact integer"
+            );
+
+            // End to end: a page of `1.0` pages by one.
+            let dir = test_temp_dir();
+            let path = dir.path().join("Page.PcbLib");
+            create_test_pcblib(&path);
+            let mut server = McpServer::new(vec![dir.path().to_path_buf()]);
+            server.state = ServerState::Running;
+            let r = req(
+                "tools/call",
+                Some(json!({
+                    "name": "list_components",
+                    "arguments": { "filepath": path.to_string_lossy(), "limit": 1.0 },
+                })),
+            );
+            let response = server.handle_tools_call(&r).unwrap();
+            let result = &response.result;
+            assert_ne!(result["is_error"], true, "{result}");
+            let text = result["content"][0]["text"]
+                .as_str()
+                .expect("a text result");
+            let page: Value = serde_json::from_str(text).unwrap();
+            assert_eq!(page["returned_count"], 1, "{page}");
+            assert_eq!(page["has_more"], true, "{page}");
+        }
+
+        /// A number outside the `minimum` / `maximum` the schema states is
+        /// refused by path — a floor alone, a ceiling alone, or both.
+        #[test]
+        fn tools_call_refuses_a_value_outside_the_range_the_schema_states() {
+            let cases: [(&str, Value, &str); 5] = [
+                (
+                    "list_components",
+                    json!({ "filepath": "x.PcbLib", "limit": 0 }),
+                    "Argument 'limit' must be at least 1, got 0",
+                ),
+                (
+                    "write_schlib",
+                    json!({
+                        "filepath": "x.SchLib",
+                        "symbols": [{ "name": "S", "pins": [{ "designator": "1", "name": "P",
+                            "x": 0, "y": 0, "length": 10, "orientation": "left",
+                            "owner_part_id": -2 }] }],
+                    }),
+                    "Argument 'symbols[0].pins[0].owner_part_id' must be at least -1, got -2",
+                ),
+                (
+                    "write_schlib",
+                    json!({
+                        "filepath": "x.SchLib",
+                        "symbols": [{ "name": "S", "labels": [{ "x": 0, "y": 0, "text": "T",
+                            "font_id": 0 }] }],
+                    }),
+                    "Argument 'symbols[0].labels[0].font_id' must be between 1 and 255, got 0",
+                ),
+                (
+                    "write_pcblib",
+                    json!({
+                        "filepath": "x.PcbLib",
+                        "footprints": [{ "name": "F", "pads": [{ "designator": "1", "x": 0, "y": 0,
+                            "width": 1, "height": 1, "net_index": 70000 }] }],
+                    }),
+                    "Argument 'footprints[0].pads[0].net_index' must be between 0 and 65535, got 70000",
+                ),
+                (
+                    "write_pcblib",
+                    json!({
+                        "filepath": "x.PcbLib",
+                        "footprints": [{ "name": "F", "pads": [{ "designator": "1", "x": 0, "y": 0,
+                            "width": 1, "height": 1, "flags": -1 }] }],
+                    }),
+                    "Argument 'footprints[0].pads[0].flags' must be at least 0, got -1",
+                ),
+            ];
+            for (tool, arguments, expected) in cases {
+                let err = McpServer::check_tool_arguments(tool, &arguments)
+                    .expect_err(&format!("{tool}: {arguments} must be refused"));
+                assert!(
+                    err.contains(expected),
+                    "{tool}: expected {expected:?}, got {err:?}"
+                );
+            }
+        }
+
+        #[test]
+        fn tools_call_accepts_every_type_the_schema_allows() {
+            let accepted: [(&str, Value); 5] = [
+                (
+                    "list_components",
+                    json!({ "filepath": "x.PcbLib", "limit": 2.0 }),
+                ),
+                (
+                    "write_pcblib",
+                    json!({
+                        "filepath": "x.PcbLib",
+                        "footprints": [{
+                            "name": "F",
+                            "regions": [
+                                { "layer": "Top Overlay", "vertices": [], "kind": "cutout" },
+                                { "layer": "Top Overlay", "vertices": [], "kind": 4 },
+                            ],
+                            "pads": [{ "designator": "1", "x": 0, "y": 0, "width": 1, "height": 1,
+                                       "flags": "LOCKED" },
+                                     { "designator": "2", "x": 0, "y": 0, "width": 1, "height": 1,
+                                       "flags": 4 }],
+                        }],
+                    }),
+                ),
+                (
+                    "write_schlib",
+                    json!({
+                        "filepath": "x.SchLib",
+                        "symbols": [{ "name": "S", "pins": [{ "designator": "1", "not_in_schema": "?" }] }],
+                    }),
+                ),
+                (
+                    "read_pcblib",
+                    json!({ "filepath": "x.PcbLib", "component_name": "F" }),
+                ),
+                (
+                    "write_pcblib",
+                    json!({ "filepath": "x.PcbLib", "footprints": [{ "name": "F", "description": "d".repeat(500) }] }),
+                ),
+            ];
+            for (tool, arguments) in accepted {
+                assert!(
+                    McpServer::check_tool_arguments(tool, &arguments).is_ok(),
+                    "{tool}: {arguments} must pass the type check"
+                );
+            }
+        }
+
+        /// The schemas describe what the read tools emit: every golden
+        /// library, read through `read_pcblib` / `read_schlib`, passes the
+        /// type check when handed back to `write_pcblib` / `write_schlib`
+        /// and `update_component`. A schema that mislabels a field's type
+        /// would refuse a faithful read-modify-write here.
+        #[test]
+        fn every_golden_read_passes_the_type_check_as_write_arguments() {
+            use crate::mcp::tools::test_support::parse_result_json;
+            let samples = std::path::Path::new("scripts/samples")
+                .canonicalize()
+                .unwrap();
+            let server = McpServer::new(vec![samples.clone()]);
+            let mut checked = 0;
+            for entry in std::fs::read_dir(&samples).unwrap().flatten() {
+                let path = entry.path();
+                let ext = path
+                    .extension()
+                    .map(|e| e.to_string_lossy().to_lowercase())
+                    .unwrap_or_default();
+                let (read, list_key, write_tool, item_key) = match ext.as_str() {
+                    "pcblib" => (
+                        server.call_read_pcblib(&json!({ "filepath": path.to_string_lossy() })),
+                        "footprints",
+                        "write_pcblib",
+                        "footprint",
+                    ),
+                    "schlib" => (
+                        server.call_read_schlib(&json!({ "filepath": path.to_string_lossy() })),
+                        "symbols",
+                        "write_schlib",
+                        "symbol",
+                    ),
+                    _ => continue,
+                };
+                assert!(
+                    !read.is_error,
+                    "{}: {}",
+                    path.display(),
+                    get_result_text(&read)
+                );
+                let components = parse_result_json(&read)[list_key].clone();
+                let write_args =
+                    json!({ "filepath": path.to_string_lossy(), list_key: components });
+                McpServer::check_tool_arguments(write_tool, &write_args).unwrap_or_else(|e| {
+                    panic!(
+                        "{}: a faithful read must pass {write_tool}: {e}",
+                        path.display()
+                    )
+                });
+                for component in write_args[list_key].as_array().unwrap() {
+                    let update_args = json!({
+                        "filepath": path.to_string_lossy(),
+                        "component_name": component["name"],
+                        item_key: component,
+                    });
+                    McpServer::check_tool_arguments("update_component", &update_args)
+                        .unwrap_or_else(|e| {
+                            panic!(
+                                "{}: {} must pass update_component: {e}",
+                                path.display(),
+                                component["name"]
+                            )
+                        });
+                    checked += 1;
+                }
+            }
+            assert!(
+                checked > 100,
+                "the golden samples were read: {checked} components"
+            );
         }
 
         #[test]
@@ -3095,6 +3799,42 @@ mod tests {
             assert!(logged.contains("write_pcblib"));
         }
 
+        /// A successful mutating call is recorded with its outcome and the
+        /// file it touched — the file name only, never the directory.
+        #[test]
+        fn audit_logger_records_a_successful_call_by_file_name() {
+            let dir = test_temp_dir();
+            let audit_path = dir.path().join("audit.jsonl");
+            let lib = dir.path().join("Audited.PcbLib");
+            let mut server = McpServer::new(vec![dir.path().to_path_buf()])
+                .with_rate_limiter(RateLimiter::new(1000, 0.0))
+                .with_audit_logger(Some(AuditLogger::new(audit_path.clone())));
+            server.state = ServerState::Running;
+
+            let r = req(
+                "tools/call",
+                Some(json!({
+                    "name": "write_pcblib",
+                    "arguments": {
+                        "filepath": lib.to_string_lossy(),
+                        "footprints": [{
+                            "name": "A",
+                            "pads": [{ "designator": "1", "x": 0, "y": 0, "width": 1, "height": 1 }],
+                        }],
+                    },
+                })),
+            );
+            let _ = server.handle_tools_call(&r).unwrap();
+            assert!(lib.exists(), "the call succeeded");
+
+            // One JSON event per line; the last is this call's.
+            let logged = std::fs::read_to_string(&audit_path).unwrap();
+            let event: Value = serde_json::from_str(logged.lines().last().unwrap()).unwrap();
+            assert_eq!(event["operation"], "write_pcblib");
+            assert_eq!(event["outcome"], "success");
+            assert_eq!(event["filepath"], "Audited.PcbLib");
+        }
+
         #[test]
         fn error_context_builders_populate_fields() {
             let ctx = ErrorContext::new("write_pcblib", "boom")
@@ -3126,5 +3866,314 @@ mod tests {
                 .count();
             assert_eq!(remaining, 5);
         }
+
+        /// What pruning leaves alone: a file whose middle part is not a
+        /// timestamp (not a backup), a backup it cannot remove (reported,
+        /// not fatal), and a path with no parent, no file name or a
+        /// directory that cannot be read.
+        #[test]
+        fn cleanup_old_backups_skips_non_backups_and_survives_a_stubborn_one() {
+            let dir = test_temp_dir();
+            let original = dir.path().join("Lib.PcbLib");
+            std::fs::write(&original, b"x").unwrap();
+            let odd = dir.path().join("Lib.PcbLib.notatimestamp.bak");
+            std::fs::write(&odd, b"x").unwrap();
+            // The oldest "backup" is a directory, which remove_file refuses.
+            let stubborn = dir.path().join("Lib.PcbLib.20200101_000000.bak");
+            std::fs::create_dir(&stubborn).unwrap();
+            for n in 1..=6 {
+                let bak = dir.path().join(format!("Lib.PcbLib.20260101_12000{n}.bak"));
+                std::fs::write(&bak, b"x").unwrap();
+            }
+
+            McpServer::cleanup_old_backups(&original.to_string_lossy());
+
+            assert!(odd.exists(), "not a backup, so not pruned");
+            assert!(
+                stubborn.exists(),
+                "could not be removed; reported, not fatal"
+            );
+            assert!(
+                !dir.path().join("Lib.PcbLib.20260101_120001.bak").exists(),
+                "the sixth-newest backup is pruned"
+            );
+            assert!(dir.path().join("Lib.PcbLib.20260101_120002.bak").exists());
+
+            // Nothing to do, and nothing to fail on, for these.
+            McpServer::cleanup_old_backups("");
+            McpServer::cleanup_old_backups("Lib.PcbLib/..");
+            McpServer::cleanup_old_backups(
+                &dir.path()
+                    .join("missing")
+                    .join("Lib.PcbLib")
+                    .to_string_lossy(),
+            );
+        }
+    }
+
+    // ==================== path gate and backup retention =====================
+
+    mod path_and_backups {
+        use crate::altium::pcblib::PcbLib;
+        use crate::altium::schlib::SchLib;
+        use crate::mcp::server::McpServer;
+        use crate::mcp::tools::test_support::{create_test_schlib, get_result_text, test_temp_dir};
+
+        #[test]
+        fn a_configured_allowed_path_that_does_not_exist_is_skipped_not_trusted() {
+            // An allow-list entry pointing at a directory that was never
+            // created cannot be canonicalised. Skipping it must not open the
+            // gate — a path is allowed only by matching an entry that resolves.
+            let real = test_temp_dir();
+            let server = McpServer::new(vec![
+                real.path().join("never_created"),
+                real.path().to_path_buf(),
+            ]);
+
+            // Inside the entry that does resolve: allowed.
+            assert!(server
+                .validate_path(&real.path().join("Lib.PcbLib").to_string_lossy())
+                .is_ok());
+
+            // With only the unresolvable entry configured, nothing is allowed.
+            let blind = McpServer::new(vec![real.path().join("never_created")]);
+            let err = blind
+                .validate_path(&real.path().join("Lib.PcbLib").to_string_lossy())
+                .expect_err("an unresolvable allow-list must not permit anything");
+            assert!(err.contains("Access denied"), "{err}");
+        }
+
+        /// An empty file path is refused as what it is — an empty path has
+        /// no parent to check, which is not "the filesystem root".
+        #[test]
+        fn an_empty_path_is_refused_as_empty() {
+            let dir = test_temp_dir();
+            let server = McpServer::new(vec![dir.path().to_path_buf()]);
+            let err = server
+                .validate_path("")
+                .expect_err("an empty path must be refused");
+            assert_eq!(err, "Invalid path: no file path was given");
+        }
+
+        #[test]
+        fn validate_path_reports_a_missing_parent_without_leaking_it() {
+            // Write targets are checked through their parent directory, and
+            // the message names only the file — never the resolved path.
+            let dir = test_temp_dir();
+            let server = McpServer::new(vec![dir.path().to_path_buf()]);
+            let missing = dir.path().join("no_such_dir").join("Lib.PcbLib");
+
+            let err = server
+                .validate_path(&missing.to_string_lossy())
+                .expect_err("a missing parent directory must be refused");
+            assert!(err.contains("Lib.PcbLib"), "{err}");
+            assert!(
+                !err.contains("no_such_dir"),
+                "the message leaked the directory: {err}"
+            );
+        }
+
+        #[test]
+        fn backup_then_save_reports_a_failed_backup_before_saving() {
+            // The backup runs first, so a failure there must stop the write
+            // rather than let a save proceed with no recovery point. A
+            // directory standing where the library should be exists, so a
+            // backup is attempted, and copying a directory fails.
+            let dir = test_temp_dir();
+            let as_dir = dir.path().join("Blocked.PcbLib");
+            std::fs::create_dir(&as_dir).unwrap();
+
+            let mut library = PcbLib::new();
+            let result = McpServer::backup_then_save(&as_dir.to_string_lossy(), &mut library);
+            assert!(result.is_err(), "a failed backup must abort the save");
+            assert!(
+                std::fs::read_dir(&as_dir).unwrap().next().is_none(),
+                "the save ran despite the backup failing"
+            );
+        }
+
+        /// Text the records cannot hold is refused before any backup is made:
+        /// the file the tool was about to touch keeps its one copy.
+        #[test]
+        fn backup_then_save_refuses_record_text_before_backing_up() {
+            let dir = test_temp_dir();
+            let lib = dir.path().join("Lib.SchLib");
+            create_test_schlib(&lib);
+            let mut library = SchLib::open(&lib).unwrap();
+            library.get_mut("RESISTOR").unwrap().description = "A|B".to_string();
+
+            let err = McpServer::backup_then_save(&lib.to_string_lossy(), &mut library)
+                .expect_err("record text the format cannot hold must be refused");
+            let text = get_result_text(&err);
+            assert!(
+                text.contains("Symbol 'RESISTOR' description contains '|'"),
+                "{text}"
+            );
+            let backups = std::fs::read_dir(dir.path())
+                .unwrap()
+                .filter_map(Result::ok)
+                .filter(|e| e.path().extension().is_some_and(|x| x == "bak"))
+                .count();
+            assert_eq!(backups, 0, "no backup for a save that never happens");
+            assert_eq!(
+                SchLib::open(&lib)
+                    .unwrap()
+                    .get("RESISTOR")
+                    .unwrap()
+                    .description,
+                "Generic resistor",
+                "the file is untouched"
+            );
+        }
+
+        #[test]
+        fn backup_retention_keeps_the_newest_and_prunes_the_rest() {
+            // Backups accumulate on every mutating call, so retention is what
+            // stops a busy library filling the directory. Newest are kept.
+            let dir = test_temp_dir();
+            let lib = dir.path().join("Lib.PcbLib");
+            std::fs::write(&lib, b"library").unwrap();
+
+            // Seven stamped backups, oldest first, plus two near-misses that
+            // are not retention's business: an unstamped `.bak` and a file
+            // belonging to a different library.
+            let stamps: Vec<String> = (1..=7).map(|i| format!("2026010{i}_010101")).collect();
+            for stamp in &stamps {
+                std::fs::write(dir.path().join(format!("Lib.PcbLib.{stamp}.bak")), b"old").unwrap();
+            }
+            std::fs::write(dir.path().join("Lib.PcbLib.bak"), b"unstamped").unwrap();
+            std::fs::write(
+                dir.path().join("Other.PcbLib.20260101_010101.bak"),
+                b"other",
+            )
+            .unwrap();
+
+            McpServer::cleanup_old_backups(&lib.to_string_lossy());
+
+            let survivors: Vec<String> = std::fs::read_dir(dir.path())
+                .unwrap()
+                .filter_map(Result::ok)
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .filter(|n| {
+                    n.starts_with("Lib.PcbLib.")
+                        && std::path::Path::new(n)
+                            .extension()
+                            .is_some_and(|e| e.eq_ignore_ascii_case("bak"))
+                })
+                .collect();
+
+            // Five stamped survivors plus the unstamped one, which retention
+            // deliberately does not touch.
+            assert_eq!(survivors.len(), 6, "{survivors:?}");
+            for stamp in &stamps[2..] {
+                assert!(
+                    survivors.iter().any(|n| n.contains(stamp.as_str())),
+                    "newest backup {stamp} was pruned: {survivors:?}"
+                );
+            }
+            for stamp in &stamps[..2] {
+                assert!(
+                    !survivors.iter().any(|n| n.contains(stamp.as_str())),
+                    "oldest backup {stamp} survived: {survivors:?}"
+                );
+            }
+            assert!(survivors.iter().any(|n| n == "Lib.PcbLib.bak"));
+            assert!(dir.path().join("Other.PcbLib.20260101_010101.bak").exists());
+        }
+
+        #[test]
+        fn creating_a_backup_of_a_missing_file_is_a_no_op() {
+            // Every mutating tool calls this, including on a brand-new
+            // library, so "nothing to back up" has to succeed quietly.
+            let dir = test_temp_dir();
+            let absent = dir.path().join("Nope.PcbLib");
+            assert_eq!(
+                McpServer::create_backup(&absent.to_string_lossy()),
+                Ok(None)
+            );
+
+            let present = dir.path().join("Here.PcbLib");
+            std::fs::write(&present, b"library").unwrap();
+            let made = McpServer::create_backup(&present.to_string_lossy())
+                .expect("an existing file should back up");
+            let made = made.expect("a backup path should be reported");
+            assert!(std::path::Path::new(&made).exists(), "{made}");
+        }
+    }
+
+    /// The type check's own corners: a `null` type, a type it does not know
+    /// (left to the parser), a union type, every JSON type named in the
+    /// message, the message's 40-character cap on a long string, and
+    /// `items` that is not a schema object (JSON Schema allows `true`),
+    /// which checks nothing.
+    #[test]
+    fn check_value_against_schema_covers_every_schema_form() {
+        let check = |value: Value, schema: Value| check_value_against_schema(&value, &schema, "v");
+
+        assert!(check(json!(null), json!({ "type": "null" })).is_ok());
+        assert!(check(json!("2026-08-30"), json!({ "type": "date" })).is_ok());
+
+        let union = json!({ "type": ["string", "integer"] });
+        assert!(check(json!("LOCKED"), union.clone()).is_ok());
+        assert!(check(json!(4), union.clone()).is_ok());
+        assert_eq!(
+            check(json!(true), union).unwrap_err(),
+            "Argument 'v' must be a string or integer, got boolean true"
+        );
+
+        for (value, name) in [
+            (json!(null), "null"),
+            (json!(false), "boolean"),
+            (json!([1]), "array"),
+            (json!({ "a": 1 }), "object"),
+        ] {
+            let err = check(value, json!({ "type": "number" })).unwrap_err();
+            assert!(err.contains(&format!("got {name} ")), "{err}");
+        }
+
+        let err = check(json!("x".repeat(60)), json!({ "type": "number" })).unwrap_err();
+        assert!(
+            err.ends_with(&format!("got string \"{}…\"", "x".repeat(40))),
+            "{err}"
+        );
+
+        assert!(check(json!([1, "two"]), json!({ "type": "array", "items": true })).is_ok());
+    }
+
+    /// Every integer-typed argument, however deep, states its floor — the
+    /// dispatch check can only refuse an out-of-range value where the schema
+    /// gives the range, and a negative under an unsigned field used to read
+    /// as absent. A pin's position and a model checksum are signed and
+    /// unbounded by design.
+    #[test]
+    fn every_integer_argument_states_its_floor() {
+        fn walk(schema: &Value, path: &str, missing: &mut Vec<String>) {
+            let integer_typed = match &schema["type"] {
+                Value::String(t) => t == "integer",
+                Value::Array(ts) => ts.iter().any(|t| t == "integer"),
+                _ => false,
+            };
+            let key = path.rsplit(['.', '[']).next().unwrap_or(path);
+            let unbounded = matches!(key, "x" | "y" | "model_checksum");
+            if integer_typed && !unbounded && schema.get("minimum").is_none() {
+                missing.push(path.to_string());
+            }
+            if let Some(properties) = schema["properties"].as_object() {
+                for (name, child) in properties {
+                    walk(child, &format!("{path}.{name}"), missing);
+                }
+            }
+            if schema["items"].is_object() {
+                walk(&schema["items"], &format!("{path}[]"), missing);
+            }
+        }
+        let mut missing = Vec::new();
+        for tool in McpServer::get_tool_definitions() {
+            walk(&tool.input_schema, &tool.name, &mut missing);
+        }
+        assert!(
+            missing.is_empty(),
+            "integer arguments without a minimum: {missing:#?}"
+        );
     }
 }

@@ -69,6 +69,8 @@ src/
     ├── tool_definitions.rs      # Tool schemas (source of truth for docs/TOOLS.md)
     ├── tool_docs.rs             # docs/TOOLS.md generator + drift guard (test-only)
     └── tools/                   # One file per tool family (read_write, compare, …)
+        ├── allowed_keys.rs      # JSON keys the write tools accept, derived from the structs
+        └── mutation_fidelity.rs # (test-only) every mutating tool leaves untouched components byte-identical
 ```
 
 ---
@@ -111,9 +113,18 @@ Altium libraries use OLE Compound File Binary (CFB) format:
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
-The `Data` stream contains binary records for each primitive. The exact binary
-format is being reverse-engineered from existing libraries and prior art
-(AltiumSharp, python-altium).
+The `Data` stream contains binary records for each primitive. The diagram above
+is a simplification; the full stream inventory and every record's byte layout are
+documented in [PCBLIB_FORMAT.md](PCBLIB_FORMAT.md) and
+[SCHLIB_FORMAT.md](SCHLIB_FORMAT.md), reverse-engineered from Altium-authored
+golden fixtures and prior art (AltiumSharp, python-altium) and enforced at three layers,
+each holding the golden's bytes through a different route:
+
+| Layer | Suite | Route |
+|-------|-------|-------|
+| Library API | `tests/golden_fidelity.rs` | `PcbLib::open` → `save`, every stream and parameter block; two saves of a library, and a save of our own output, are byte-identical |
+| JSON boundary | `fidelity_replay` in `src/mcp/tools/read_write.rs` | `read_*` → `write_*` and `read_*` → `update_component`, re-reading the server's own output save after save |
+| Mutating tools | `src/mcp/tools/mutation_fidelity.rs` | each tool on a copy of the golden; every component it was not asked to touch must be byte-identical, and export → import / merge must be too |
 
 ---
 

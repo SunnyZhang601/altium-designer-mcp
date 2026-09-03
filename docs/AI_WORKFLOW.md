@@ -141,10 +141,18 @@ IPC Name: RESC1608X55N
 
 ```json
 {
-    "success": true,
-    "footprints_written": 1
+    "status": "success",
+    "filepath": "./Passives.PcbLib",
+    "footprint_count": 1,
+    "footprint_names": ["RESC1608X55N"],
+    "warnings": [],
+    "bodies": []
 }
 ```
+
+(`warnings` carries non-blocking silkscreen-over-pad findings; `bodies` echoes
+each footprint's 3D-body height and source so an assumed height can be
+corrected.)
 
 ### 4. AI Verifies the Result
 
@@ -189,6 +197,47 @@ backslash **after** each character that should carry a bar.
 For multi-unit parts (dual / quad op-amps, gate arrays): set `part_count` on the symbol
 and tag each pin with `owner_part_id` (the 1-based part it belongs to). The `DUALPART`
 sample demonstrates a two-part symbol with pins split across parts 1 and 2.
+
+### Pin placement
+
+A symbol reads well when pins sit where an engineer expects them. These rules (adapted from
+[coffeenmusic/altium-mcp](https://github.com/coffeenmusic/altium-mcp)'s
+`symbol_placement_rules.txt`, MIT) give a consistent layout for ICs, regulators and
+connectors; apply them unless the datasheet's reference schematic or an existing library
+style says otherwise.
+
+**Sides.** Use the **left and right** sides only — a pin on the top or bottom edge breaks the
+signal-flow reading and makes wiring awkward. Never overlap or merge pins.
+
+**Where each kind goes**, from most to least important:
+
+| Pins | Position |
+|------|----------|
+| Ground — analogue, digital, power, exposed pad | bottom **left** |
+| No-connect (`NC`, `DNC`) | bottom **right** |
+| Power rails (`VCC`, `VDD`, `AVDD`, `VREF`…) | upper **right** |
+| Inputs | **left** |
+| Outputs | **right** |
+| Switching regulator `VIN` | **left** (input-to-output flow) |
+
+Everything else is grouped by function — one block for SPI, one for I²C, one for RGMII, the
+GPIO bank together — each block's pins in the datasheet's order.
+
+**Spacing.** Pins stay on the 10-unit grid (one 100 mil step). Separate groups with a **gap
+of one grid step**; if the body has room to spare, distribute the groups at equal spacing
+instead of stacking them at one end. Leave the body tall enough that the longer side's groups
+fit without crowding — stretching the rectangle is free, a cramped symbol is not.
+
+**Coordinates.** Lower `x` is left, lower `y` is bottom. In this server a pin's `(x, y)` is
+its body-attach end and `orientation` is the direction it points *outward* (see
+[AGENT_GUIDE.md § Pin geometry](AGENT_GUIDE.md#pin-geometry-the-counter-intuitive-one)), so a
+left-side pin at the body's left edge uses `"orientation": "left"` and its tip extends
+further left. The `write_schlib` response echoes each pin's computed `body_end`/`tip`, which is
+the cheapest way to check a layout before opening Altium.
+
+**Explain first.** Before emitting the symbol, list each pin (or group) with the position
+chosen for it and why — a reviewer can correct a plan in one line; a finished symbol costs a
+regeneration.
 
 ## Working with Large Libraries
 
@@ -331,11 +380,11 @@ When calculating footprints, the AI should apply these IPC standards:
 
 **Density Levels:**
 
-| Level | Code | Application |
-|-------|------|-------------|
-| Most (M) | N/A | High-density designs, fine-pitch |
-| Nominal (N) | N | Standard manufacturing |
-| Least (L) | N/A | Wave soldering, hand assembly |
+| Level | Name suffix | Application |
+|-------|-------------|-------------|
+| Most | `M` | High-density designs, fine-pitch |
+| Nominal | `N` | Standard manufacturing |
+| Least | `L` | Wave soldering, hand assembly |
 
 **Naming Convention:**
 
@@ -365,8 +414,8 @@ RESC1608X55N
 ### Official IPC Resources
 
 - **IPC Standards Store**: [shop.ipc.org](https://shop.ipc.org/)
-- **IPC-7351B LP Calculator**: [PCB Libraries Calculator](https://www.pcblibraries.com/Products/FPL_702-IPC7351LandPatternCalculator.asp)
-- **IPC-7351B Naming and Land Pattern Tool**: [PCB Libraries](https://www.pcblibraries.com/)
+- **IPC-7351B land-pattern and naming tools**: [PCB Libraries](https://www.pcblibraries.com/)
+  (the Library Expert / LP Calculator product family)
 
 ### Additional References
 

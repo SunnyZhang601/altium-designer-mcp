@@ -37,10 +37,11 @@ PcbLib files are OLE Compound Documents (CFB format, **OLE v3 with 512-byte sect
 
 > **Note:** OLE version MUST be V3 (512-byte sectors). Altium Designer rejects V4 (4096-byte) files.
 >
-> Real Altium libraries also carry `SectionKeys` (root, for >31-char names), `FileVersionInfo`,
-> `EmbeddedFonts`, `LayerKindMapping`, `PadViaLibrary`, `ComponentParamsTOC`, `Textures`,
-> `ModelsNoEmbed` and `PrimitiveGuids` streams/storages. These are **unmodelled**: the reader
-> ignores them and the writer does not emit them.
+> Real Altium libraries also carry `FileVersionInfo`, `EmbeddedFonts`, `LayerKindMapping`,
+> `PadViaLibrary`, `ComponentParamsTOC`, `Textures`, `ModelsNoEmbed`, `PrimitiveGuids`,
+> `UniqueIdPrimitiveInformation` and — when a component name exceeds the 31-unit storage cap —
+> a root `SectionKeys` stream mapping each real name to its plain-truncated storage name. All of
+> these are read and written back (`SectionKeys` format: see `SCHLIB_FORMAT.md`, identical here).
 
 ## Encoding Primitives (Building Blocks)
 
@@ -96,6 +97,16 @@ Contains library-level parameters and the component directory:
 The parameter block uses the standard `WriteCStringParameterBlock` encoding. `VERSION=3.00`
 requires the `V9_MASTERSTACK` + `V9_STACK_LAYER` layer-stack entries in the same block.
 
+Beyond those, the block is the library's whole board configuration: `LAYER_V8_{n}NAME`,
+`…MECHKIND` and `…MECHENABLED` per mechanical layer, `V9_CACHE_LAYER{n}_*` and
+`V9_STACK_LAYER{n}_*` for the stack, `LAYERSET{n}LAYERS` for the layer sets, plus the view
+state. Almost none of it is modelled, and the names in it are a designer's choice
+(`Mechanical 15 = Assembly Top`), so a library read from disk has its block replayed
+byte-for-byte on write — only `FILENAME`, `DATE` and `TIME` are rewritten. A library built
+in memory has no block to replay and gets a template stack captured from a real
+Altium-authored library; a synthesised one is rejected with "Catastrophic failure whilst
+loading section Library".
+
 ## Per-Component Streams
 
 ### `/{component}/Header`
@@ -122,8 +133,10 @@ Standard `WriteCStringParameterBlock` encoding. Altium-authored libraries also c
 ```
 
 One `|ENCODEDTEXT{n}=` entry per text primitive with real (non-special, non-empty) content, in
-primitive order — a leading pipe per entry, NO trailing pipe. The value is the comma-separated
-byte values of the text.
+primitive order — a leading pipe per entry, NO trailing pipe. The value is the text as
+comma-separated **UTF-16 code units** in decimal (`10µF` → `49,48,181,70`, `Ω` → `937`), which is
+how the stream carries text the Windows-1252 `Data` block cannot; a text with an entry here is
+read from it in preference to the `Data` block.
 
 When empty (no text content): `[block_len:4][\x00]` (`block_len` = 1 — just the null terminator,
 no pipe).
@@ -140,15 +153,40 @@ no pipe).
 
 | Field | Description |
 |-------|-------------|
-| `PRIMITIVEINDEX` | Single **global 0-based ordinal** over ALL primitives in Data-stream emit order |
+| `PRIMITIVEINDEX` | Single **global 0-based ordinal** over ALL primitives, in Data-stream order |
 | `PRIMITIVEOBJECTID` | Primitive type name (Pad, Via, Track, Arc, Text, Region, Fill, ComponentBody) |
-| `UNIQUEID` | 8-character alphanumeric identifier |
+| `UNIQUEID` | 8-character alphanumeric identifier, **often empty** |
 
 > **Note:** `PRIMITIVEINDEX` is NOT a per-type index. Every primitive consumes an ordinal in the
-> Data-stream order (Arcs, Pads, Vias, Tracks, Text, Regions, Fills, ComponentBodies) whether or
-> not it has a unique id, so e.g. the first pad behind two silkscreen arcs is `PRIMITIVEINDEX=2`.
-> On read the entry's `PRIMITIVEOBJECTID` must match the primitive found at that ordinal; a
-> mismatch (e.g. a foreign file with a different index base) is skipped rather than mis-attached.
+> order the Data stream stores them, whether or not it has a record here, so the ordinals of the
+> records present have gaps: `LOCKFLAGS_PCB` in the golden runs 0–5, 7, 8, because ordinal 6 is a
+> track. On read the entry's `PRIMITIVEOBJECTID` must match the primitive found at that ordinal;
+> a mismatch (e.g. a foreign file with a different index base) is skipped rather than
+> mis-attached.
+>
+> An **empty `UNIQUEID` is normal** — every record in the golden has one. The record marks the
+> primitive as tracked; the value is filled in by a board, not a library. Treating an empty value
+> as "no record" discards the stream.
+
+### `/{component}/PrimitiveGuids`
+
+**Header:** `[record_count:4 LE u32]`
+
+**Data:** `record_count` fixed-width 24-byte records, no framing of their own:
+
+```text
+[object_kind:4 LE u32][ordinal:4 LE u32][guid:16 bytes]
+```
+
+`object_kind` is Altium's object id — 1 arc, 2 pad, 3 via, 4 track, 5 text, 6 fill, 85 the
+footprint record itself, 89 region, 90 component body. The GUID's first three fields are
+little-endian (the Windows `GUID` struct layout).
+
+`ordinal` is the **same global ordinal** `UniqueIdPrimitiveInformation` calls `PRIMITIVEINDEX`,
+not a per-kind index: across the 22 golden footprints the ordinals are a permutation of `0..n-1`
+once the kind-85 record (always ordinal 0) is set aside, and `PRIMPROPS` has its regions at 0, 4,
+5 and 6 with a pad at 1 and texts at 2 and 3. Both streams are therefore meaningless unless the
+Data stream keeps the primitive order the file was written with.
 
 ## Data Stream Format
 
@@ -260,7 +298,20 @@ Every sub-block is length-prefixed:
 | 56 | Keep-Out Layer |
 | 57-72 | Mechanical 1-16 |
 | 73 | Drill Drawing |
-| 186-201 | Mechanical 17-32 (Altium Designer 18+) |
+| 186-201 | Mechanical 17-32 — read only; see below |
+
+Mechanical 17-32 have no header byte of their own. Altium stores a primitive on one of them
+under byte **72** (Mechanical 16, the last the byte can hold) and names the real layer in the
+[V7 layer id](#v7-layer-ids) — `72` + `0x01020014` for Mechanical 20 — or, for a region or
+body, in the `V7_LAYER` token (`MECHANICAL20`). The `MECH20` golden shows the pair on every
+kind: pad, track, arc, text, fill, region and body. The reader lets a V7 id or token past
+sixteen decide for a mechanical byte, and the writer stores such a layer the same way. Bytes
+186-201 are accepted on read for files earlier versions of this crate wrote; they are never
+written.
+
+A header byte the table does not map reads as Multi-Layer and is carried as the primitive's
+`raw_layer_id`, so a rewrite stores the byte as read rather than `74`; moving the primitive to a
+layer the model can name discards it.
 
 ### Component Layer Pairs
 
@@ -307,6 +358,7 @@ Several primitives carry a derived 32-bit "v7 saved layer id" alongside the laye
 | 32 (bottom) | `0x0100FFFF` |
 | 39-54 (internal plane n) | `0x01010000 + n` |
 | 57-72 (mechanical n) | `0x01020000 + n` |
+| Mechanical 17-32 (byte 72) | `0x01020011`-`0x01020020` |
 | 33 / 34 (overlay) | `0x01030006` / `0x01030007` |
 | 35 / 36 (paste) | `0x01030008` / `0x01030009` |
 | 37 / 38 (solder) | `0x0103000A` / `0x0103000B` |
@@ -319,7 +371,7 @@ All primitives start with a common header:
 
 | Offset | Size | Field |
 |--------|------|-------|
-| 0 | 1 | Layer ID |
+| 0 | 1 | Layer ID (byte 72 for Mechanical 17-32 — see [Layer IDs](#layer-ids)) |
 | 1-2 | 2 | Flags word (u16, see below) |
 | 3-4 | 2 | NetIndex (u16; `0xFFFF` when unconnected) |
 | 5-6 | 2 | PolygonIndex (u16; `0xFFFF` = none) |
@@ -339,14 +391,26 @@ fill byte-identically.
 | `0x0008` | Saved | Set on a saved primitive |
 | `0x0020` | TentingTop | Solder-mask tented on top |
 | `0x0040` | TentingBottom | Solder-mask tented on bottom |
+| `0x0080` | TestPointTop | Fabrication test point, top |
+| `0x0100` | TestPointBottom | Fabrication test point, bottom |
 | `0x0200` | Keepout | Keep-out primitive |
+| `0x0001`, `0x0002`, `0x0010`, `0x0400`–`0x8000` | — | Not modelled (AltiumSharp reads them as selection / display state). Hand-authored libraries do set them — every track of a pin-header footprint carries `0x001C` — so they are carried verbatim through a read-modify-write as `PcbFlags::DISK_BIT_n` |
 
 A normal saved primitive therefore carries `0x000C` (Saved + Unlocked), not `0x0000`; a keepout
 primitive carries `0x020C`.
 
+Altium **clears the Unlocked bit** on a primitive it marks as a fabrication test point, so a
+test-point pad carries `0x0088` or `0x0108` and reads as locked as well. The writer reproduces
+that rather than emitting a combination Altium never writes. This is Altium's behaviour, not a
+decode artefact — see issue #334, and the golden's `LOCKFLAGS_PCB` pads 5-6.
+
+The **assembly** test-point flags have no bit here: `IsAssyTestPoint_Top` / `_Bottom` author
+without error in AD24 but a saved `PcbLib` pad comes back as a plain `0x000C`, so they are not
+stored per-primitive in a library.
+
 > **Note:** These are the literal bits on disk. The crate also exposes an internal abstract
-> `PcbFlags` enum (`LOCKED` / `KEEPOUT` / `TENTING_TOP` / `TENTING_BOTTOM`, with its own distinct
-> values) for the public API; the reader/writer translate between the two. Do not confuse the
+> `PcbFlags` enum (`LOCKED` / `KEEPOUT` / `TENTING_TOP` / `TENTING_BOTTOM` / `TESTPOINT_TOP` /
+> `TESTPOINT_BOTTOM`, with its own distinct values) for the public API; the reader/writer translate between the two. Do not confuse the
 > abstract enum's values with the on-wire bits above.
 
 ## Primitive Formats
@@ -361,12 +425,14 @@ Pads have 6 blocks:
 | 1 | Reserved — a 1-byte block containing `0x00` |
 | 2 | Marker string `\|&\|0` (`WriteStringBlock`) |
 | 3 | Reserved — a 1-byte block containing `0x00` |
-| 4 | Main geometry block (202 bytes) |
+| 4 | Main geometry block (202 bytes from scratch; AD24 writes 194 — see below) |
 | 5 | Size/shape block (empty, 651 bytes, or the legacy 320/576-byte per-layer form) |
 
-**Block 4 — main geometry (202 bytes).** Offsets 0-60 are typed geometry; offsets 61-201 are the
-extended tail, written by overlaying the modelled fields onto a canonical byte template
-(`PAD_EXTENDED_TAIL_TEMPLATE`) captured from a standard Altium pad:
+**Block 4 — main geometry.** Offsets 0-60 are typed geometry; the bytes from 61 on are the
+extended tail. A pad built from scratch gets the 141-byte tail of `PAD_EXTENDED_TAIL_TEMPLATE`
+(captured from a standard Altium pad; 202 bytes in all); AD24 itself writes a 133-byte tail (194
+bytes in all) with two bytes differing, so a read pad's tail is carried as `raw_tail` and
+replayed as the base — length included — with the modelled fields overlaid:
 
 | Offset | Size | Field | Modelled |
 |--------|------|-------|----------|
@@ -384,7 +450,7 @@ extended tail, written by overlaying the modelled fields onto a canonical byte t
 | 50 | 1 | Shape, middle | yes (TopMiddleBottom mode) |
 | 51 | 1 | Shape, bottom | yes (TopMiddleBottom mode) |
 | 52-59 | 8 | Rotation (f64, degrees) | yes |
-| 60 | 1 | Is plated (0/1) | write-only (derived from hole presence) |
+| 60 | 1 | Is plated (0/1; an absent byte reads as plated) | yes |
 | 61 | 1 | Reserved (`0x00`) — **NOT** the hole shape (that lives in Block 5 @262) | — |
 | 62 | 1 | Stack mode (0=Simple, 1=TopMiddleBottom, 2=FullStack) | yes |
 | 67 | 1 | Power-plane connection style (0=Relief, 1=Direct, 2=NoConnect) | yes |
@@ -395,27 +461,62 @@ extended tail, written by overlaying the modelled fields onto a canonical byte t
 | 82-85 | 4 | Power-plane (anti-pad) clearance (i32; default 0.508 mm) | yes |
 | 86-89 | 4 | Paste mask expansion (i32) | yes |
 | 90-93 | 4 | Solder mask expansion (i32) | yes |
-| 101 | 1 | Paste mask expansion mode (0=None, 1=FromRule, 2=Manual) | yes |
-| 102 | 1 | Solder mask expansion mode (0=None, 1=FromRule, 2=Manual) | yes |
-| 110-111 | 2 | Jumper ID (i16) | unmodelled (template) |
+| 101 | 1 | Paste mask expansion cache state (`TCacheState`, see below) | yes |
+| 102 | 1 | Solder mask expansion cache state (`TCacheState`, see below) | yes |
+| 110-111 | 2 | Jumper ID (i16; `0` = not in a jumper group) | yes |
 | 114-117 | 4 | V7 layer id (derived from the pad's layer) | yes (write) |
 | 121-124 | 4 | Solder-mask cache (mirrors @90) | unmodelled (template) |
-| 126-141 | 16 | Identity GUID A (fresh per pad on write) | write-only |
-| 142-157 | 16 | Identity GUID B (fresh per pad on write) | write-only |
+| 125 | 1 | Solder-mask expansion measured from the hole edge (bool) | yes |
+| 126-141 | 16 | Identity GUID A (`identity_guid`; replayed as read, fresh when absent) | yes |
+| 142-157 | 16 | Identity GUID B (`identity_guid_b`; as GUID A) | yes |
 | 162-165 | 4 | Hole positive tolerance (i32; `0x7FFFFFFF` = unset) | yes |
 | 166-169 | 4 | Hole negative tolerance (i32; `0x7FFFFFFF` = unset) | yes |
 | 172 | 1 | Format marker (`0x1A` PcbLib / `0x12` PcbDoc) | template |
-| 185 | 1 | Reserved marker (`0x03` for a standard PcbLib pad) | yes (write) |
+| 185 | 1 | Reserved marker (`0x03` in the from-scratch template; AD24 writes `0x01`, kept as read) | template / replay |
 
-All remaining bytes of the tail are reserved / cache / identity values replayed verbatim from the
-template so the record matches Altium's 202-byte layout exactly.
+All remaining bytes of the tail are reserved / cache values replayed verbatim — from `raw_tail`
+for a read pad, from the template for one built from scratch.
 
 **Parsing thresholds:**
 
 | Field | Threshold | Behaviour |
 |-------|-----------|-----------|
 | Hole size | ≤ 0.001 mm | Treated as zero (SMD pad) |
-| Mask expansion | ≤ 0.0001 mm | Read back as `None` (no manual expansion) |
+| Mask expansion | ≤ 0.0001 mm | The value reads back as absent (`None`), independently of the cache-state byte below |
+
+**Mask expansion cache state (`TCacheState`, bytes @101 / @102; via @66):**
+
+The mask-expansion byte is not an on/off switch. It is Altium's
+
+```pascal
+TCacheState = (eCacheInvalid, eCacheValid, eCacheManual)
+```
+
+(ordinals 0/1/2, read from the `Advpcb.dll` RTTI), and it says whether the expansion value
+stored alongside it is trustworthy:
+
+| Byte | `TCacheState` | Meaning |
+|------|---------------|---------|
+| 0 | `eCacheInvalid` | The stored value is stale. A pad or via authored by Altium and saved without being opened again carries this. |
+| 1 | `eCacheValid` | The stored value is a rule result Altium has already computed. Altium leaves this behind after opening a library and resolving the expansion itself. |
+| 2 | `eCacheManual` | The stored value was specified by hand. |
+
+**Only `eCacheManual` survives a round trip through Altium.** Opening a library recomputes
+every rule-driven expansion from the applicable design rule, so bytes 0 and 1 are
+indistinguishable afterwards — a pad written as `eCacheInvalid` with 0.0 and one written
+as `eCacheValid` with 0.0 both come back as `eCacheValid` with the rule's 4 mil. The
+value paired with byte 1 is therefore never authoritative in practice, and a wrong state
+here is a fidelity difference rather than a change to the fabricated mask.
+
+Two consequences worth knowing:
+
+- The writer emits byte 0 for a from-scratch pad or via, matching a factory Altium
+  primitive rather than one Altium has re-saved.
+- A library re-saved by Altium is not byte-comparable with the one handed to it even when
+  nothing was edited, because opening it resolves these caches.
+
+Measured by [`scripts/Verify-MaskCacheState.ps1`](../scripts/Verify-MaskCacheState.ps1),
+which writes all three states and reports what Altium makes of each.
 
 **Pad shapes (bytes @49-51 and in Block 5):**
 
@@ -530,8 +631,9 @@ The reader accepts a 45-byte legacy block and defaults the tail fields.
 Text has 2 blocks:
 
 - **Block 0**: the fixed **252-byte** geometry record (`TEXT_SR1_TEMPLATE`) — the writer overlays
-  the modelled fields onto a canonical template captured from a real Altium text primitive and
-  replays every reserved byte verbatim.
+  the modelled fields onto the record as read (`raw_geometry`) or, from scratch, onto a
+  canonical template captured from a real Altium text primitive, and replays every reserved
+  byte verbatim.
 - **Block 1**: the text content as a `WriteStringBlock` (`[u32 len][u8 str_len][Windows-1252 text]`).
 
 **Block 0 — 252-byte geometry record:**
@@ -546,8 +648,8 @@ Text has 2 blocks:
 | 27-34 | 8 | Rotation (f64, degrees) | yes |
 | 35 | 1 | Mirrored (u8 bool) | yes |
 | 36-39 | 4 | Stroke line width (i32; template default 4 mil) | yes |
-| 40 | 1 | IsComment flag (u8 bool) | unmodelled (offset verified; dropped on read, 0 on write) |
-| 41 | 1 | IsDesignator flag (u8 bool) | unmodelled (offset verified; dropped on read, 0 on write) |
+| 40 | 1 | IsComment flag (u8 bool; `is_comment`) | yes |
+| 41 | 1 | IsDesignator flag (u8 bool; `is_designator`) | yes |
 | 42 | 1 | Character set (u8) | unmodelled (template) |
 | 43 | 1 | Base font type (0=stroke, 1=TrueType) | derived from kind @160 |
 | 44 | 1 | Bold (u8 bool) | yes |
@@ -562,10 +664,17 @@ Text has 2 blocks:
 | 128-131 | 4 | Inverted rect height (i32) | yes |
 | 132 | 1 | Text-box justification (u8, see below) | yes |
 | 133-136 | 4 | Inverted rect text offset (i32) | yes |
-| 137-159 | 23 | Barcode geometry / kind / render fields | unmodelled (BarCode deferred; template) |
+| 137-140 | 4 | Barcode full width (i32) | yes (barcode only) |
+| 141-144 | 4 | Barcode full height (i32) | yes (barcode only) |
+| 145-148 | 4 | Barcode X margin (i32) | yes (barcode only) |
+| 149-152 | 4 | Barcode Y margin (i32) | yes (barcode only) |
+| 153-156 | 4 | Barcode render fields | unmodelled (template / replay) |
+| 157 | 1 | Barcode symbology (`barcode_kind`: 0=Code 39, 1=Code 128, 2=QR, 3=Data Matrix) | yes |
+| 158 | 1 | Barcode min width | unmodelled (template / replay) |
+| 159 | 1 | Barcode inverted (u8 bool) | yes (barcode only) |
 | 160 | 1 | **Text kind (authoritative)**: 0=Stroke, 1=TrueType, 2=BarCode | yes |
-| 161-224 | 64 | Barcode font name (UTF-16LE) | unmodelled (template) |
-| 225 | 1 | Barcode show-text flag | unmodelled (template) |
+| 161-224 | 64 | Barcode font name (UTF-16LE, null-terminated) | yes (barcode only) |
+| 225 | 1 | Barcode show-text flag (u8 bool) | yes (barcode only) |
 | 226-229 | 4 | V7 layer id (u32, derived from layer) | yes (write) |
 | 230-251 | 22 | Frame / snapping / snap-point fields | unmodelled (template) |
 
@@ -586,7 +695,7 @@ decode to BottomLeft.
 |----|------|-------------|
 | 0 | Stroke | Vector-based outline text |
 | 1 | TrueType | Font-based rendering (base font type @43 = 1) |
-| 2 | BarCode | Barcode representation (deferred — not modelled) |
+| 2 | BarCode | Barcode (`TEXT_SPECIAL` golden: Code 128 with the sizing block above) |
 
 **Block 1 (Content):** a length-prefixed string with the text content, a special string, or a
 numeric WideStrings index reference.
@@ -621,9 +730,8 @@ Filled rectangle, single 50-byte block:
 
 ### Region (0x0B)
 
-Filled polygon — a **single** size-prefixed block. (Earlier revisions of this crate wrote a
-spurious empty second block, which Altium read as an invalid record type, silently dropping every
-primitive after the region.)
+Filled polygon — a **single** size-prefixed block; an empty second block would be read by Altium
+as an invalid record type, silently dropping every primitive after the region.
 
 | Offset | Size | Field |
 |--------|------|-------|
@@ -645,9 +753,9 @@ V7_LAYER={token}|NAME={name}|KIND={kind}|SUBPOLYINDEX={spi}|UNIONINDEX={uix}|ARC
 
 | Key | Description | Default |
 |-----|-------------|---------|
-| `V7_LAYER` | Canonical layer token — `MECHANICAL{n}` for mechanical layers, else the display name upper-cased with spaces stripped (e.g. `TOPLAYER`) | matches layer byte |
+| `V7_LAYER` | Canonical layer token from Altium's own vocabulary — `TOP`, `MECHANICAL4`, `PLANE3`, … (see below) | matches the layer byte, except on a board cutout |
 | `NAME` | Region name | empty |
-| `KIND` | Region kind (0 = copper/standard, 1 = cutout, ...) | 0 |
+| `KIND` | Region kind: 0 copper, 1 polygon cutout, 2 named region, 4 cavity (a board cutout keeps `KIND=0` and carries `ISBOARDCUTOUT=TRUE` instead — `PRIMPROPS` golden) | 0 |
 | `SUBPOLYINDEX` | Sub-polygon index | -1 |
 | `UNIONINDEX` | Union index | 0 |
 | `ARCRESOLUTION` | Arc resolution, mil-suffixed (`0mil`, `0.5mil`) | 0mil |
@@ -660,9 +768,31 @@ captured verbatim on read and re-emitted after the canonical set, so a read-modi
 drop them.
 
 > **Warning:** Altium resolves a Region's layer from the `V7_LAYER` token, NOT the header layer
-> byte. Mechanical layers MUST use their `MECHANICAL{n}` token (e.g. Top Courtyard →
-> `MECHANICAL4`); the space-stripped display name is not a valid token and makes Altium silently
-> drop the region onto Top Layer.
+> byte, and the token is a **fixed vocabulary** rather than the display name with the spaces taken
+> out. `TOPLAYER` and `BOTTOMLAYER` resolve to nothing, and an unresolved token leaves the region
+> on Top Layer — so the bottom-side case is a silent side swap.
+
+**The vocabulary**, held in `Advpcb.dll` as UTF-16LE strings. `MECHANICAL`, `MID` and `PLANE` take
+a number; the rest are literals.
+
+| Layer id | Token | | Layer id | Token |
+|----------|-------|-|----------|-------|
+| 1 | `TOP` | | 39-54 | `PLANE1`-`PLANE16` |
+| 2-31 | `MID1`-`MID30` | | 55 | `DRILLGUIDE` |
+| 32 | `BOTTOM` | | 56 | `KEEPOUT` |
+| 33 | `TOPOVERLAY` | | 57-72 | `MECHANICAL1`-`MECHANICAL16` |
+| 34 | `BOTTOMOVERLAY` | | 73 | `DRILLDRAWING` |
+| 35 | `TOPPASTE` | | 74 | `MULTILAYER` |
+| 36 | `BOTTOMPASTE` | | 75 | `CONNECT` |
+| 37 | `TOPSOLDER` | | Mechanical 17-32 (byte 72) | `MECHANICAL17`-`MECHANICAL32` |
+| 38 | `BOTTOMSOLDER` | | | |
+
+**Board cutouts are the one case where the token and the layer byte disagree.** AD24 saves a
+cutout authored on the top layer with layer byte 56 (keep-out) and
+`LAYER=KEEPOUT|KEEPOUT=TRUE|ISBOARDCUTOUT=TRUE`, but leaves `V7_LAYER=TOP` — the layer it was
+drawn on, recorded nowhere else in the record. The golden's `REGION_CUTOUT` and `PRIMPROPS`
+cutouts both show this. Deriving the token from the layer byte would write `KEEPOUT` and lose it,
+so a divergent token is kept as read.
 
 **Vertex format:** each vertex is two IEEE 754 doubles (X then Y) in internal units. Values are
 whole internal units in real files; the reader rounds to integers before converting to mm.
@@ -691,7 +821,7 @@ snap-point or reserved blocks, and there is no `MODEL.SNAPCOUNT` parameter.
 
 | Key | Description | Example |
 |-----|-------------|---------|
-| `V7_LAYER` | Canonical layer token (must match the header layer byte) | `MECHANICAL6` |
+| `V7_LAYER` | Canonical layer token; names the header layer byte, except that Mechanical 17-32 sit under byte 72 with the token naming the layer (`MECH20` golden) | `MECHANICAL6` |
 | `NAME` | Body name | ` ` (single space) |
 | `KIND` | Body kind | `0` |
 | `SUBPOLYINDEX` | Sub-polygon index | `-1` |
@@ -704,28 +834,33 @@ snap-point or reserved blocks, and there is no `MODEL.SNAPCOUNT` parameter.
 | `BODYPROJECTION` | Body projection | `0` |
 | `BODYCOLOR3D` | 3D body colour | `8421504` |
 | `BODYOPACITY3D` | 3D body opacity | `1.000` |
-| `IDENTIFIER` | Identifier (comma-separated codepoint list — deferred, emitted empty) | `` |
-| `TEXTURE`, `TEXTURECENTERX/Y`, `TEXTURESIZEX/Y`, `TEXTUREROTATION` | Texture fields (fixed defaults) | |
-| `MODELID` | Model GUID (synthesised for extruded bodies when absent) | `{GUID}` |
+| `IDENTIFIER` | Body name as comma-separated decimal Unicode code points (`µΩ电` = `181,937,30005`; empty stays empty) | `` |
+| `TEXTURE`, `TEXTURECENTERX/Y`, `TEXTURESIZEX/Y`, `TEXTUREROTATION` | Texture fields, round-tripped verbatim (a UI-authored body can carry a rotation of `9.00000000000000E+0001`, leading space included); from-scratch defaults `0mil` and a zero rotation | |
+| `MODELID` | Model GUID. A STEP reference the library does not embed takes one of two forms: UI-authored, **empty** (`MODELID=` followed by `MODEL.CHECKSUM=0`, `MODEL.EMBED=FALSE`, `MODEL.NAME=test_0805.step`, no `/Library/Models` entry); script-authored (`IPCB_Model.Embed := False`, the `STEP_REF` golden), a GUID with a `/Library/Models/Data` entry of `EMBED=FALSE` whose bytes are stored all the same. Both read; the writer reproduces the form it read | `{GUID}` |
 | `MODEL.CHECKSUM` | Model integrity checksum (round-tripped verbatim, see below) | `0` |
 | `MODEL.EMBED` | `TRUE` / `FALSE` | |
 | `MODEL.NAME` | Model filename | `RESC1005X04L.step` |
-| `MODEL.2D.X`, `MODEL.2D.Y` | 2D placement (fixed `0mil`) | |
+| `MODEL.2D.X`, `MODEL.2D.Y` | 2D placement (`0mil` from scratch; a read value is replayed verbatim) | |
 | `MODEL.2D.ROTATION` | 2D rotation (degrees, 3 decimals) | `0.000` |
 | `MODEL.3D.ROTX/Y/Z` | 3D rotations (degrees, 3 decimals) | `0.000` |
 | `MODEL.3D.DZ` | Z offset (mil-suffixed) | `15.748mil` |
-| `MODEL.MODELTYPE` | `0` = extruded, `1` = model-backed (STEP) | |
-| `MODEL.EXTRUDED.MINZ` / `MAXZ` | Extrusion Z range (extruded bodies ONLY) | `0mil` / `15.748mil` |
-| `MODEL.MODELSOURCE` | Model source (model-backed bodies ONLY) | `Undefined` |
+| `MODEL.MODELTYPE` | `1` = model-backed (STEP) | |
+| `MODEL.MODELSOURCE` | Model source | `Undefined` |
 
-**Extruded vs model-backed:** a body with no model file (empty `MODEL.NAME`, not embedded) is a
-generic *extruded* body — `MODEL.MODELTYPE=0` plus `MODEL.EXTRUDED.MINZ/MAXZ` (the Z range Altium
-extrudes the outline between; without it the body has no volume and is discarded). A model-backed
-body uses `MODEL.MODELTYPE=1` plus `MODEL.MODELSOURCE=Undefined` instead. `ISSHAPEBASED` stays
-`FALSE` in both cases.
+**Extruded vs model-backed — and the MODEL group's presence:** the group is present exactly
+when the body carries a `MODELID` or names a model file, which depends on the authoring route. A *script-authored*
+extruded body (the golden's `BODY3D`, `PRIMPROPS`) has none and ends at `TEXTUREROTATION`; a
+*UI-authored* extruded body (`manual/identifier.PcbLib`) carries a stable `MODELID` and the
+full group with `MODEL.MODELTYPE=0`, `MODEL.EXTRUDED.MINZ/MAXZ` (standoff..overall), real
+`MODEL.2D.X/Y` placement, and no `MODELSOURCE` — plus `TEXTURESIZEX/Y=0.0001mil` where the
+scripted route writes `0mil` (both round-trip verbatim). A model-backed body (`EMBSTEP`) uses
+`MODEL.MODELTYPE=1` plus `MODEL.MODELSOURCE=Undefined` and no `EXTRUDED` range. `ISSHAPEBASED`
+stays `FALSE` throughout.
 
-Unmodelled keys captured on read are re-emitted verbatim after the canonical set (with canonical
-duplicates dropped) so read-modify-write round-trips.
+Unmodelled keys captured on read are re-emitted verbatim **at their read position** — the key
+order is carried as `param_key_order`, as for regions, because Altium interleaves them
+(`BODYOVERRIDECOLOR=TRUE` sits right after `BODYOPACITY3D` in a UI-authored body) and writes
+`ARCRESOLUTION` twice; a from-scratch body emits the canonical set and appends any extras.
 
 > **Note:** Height values can be in "mil" or "mm" units on read. The tool parses both formats;
 > mil values are converted using 1 mil = 0.0254 mm.
@@ -741,8 +876,11 @@ duplicates dropped) so read-modify-write round-trips.
 | MECHANICAL6 | Top 3D Body |
 | MECHANICAL7 | Bottom 3D Body |
 
-The body's authoritative layer on read is the header layer byte at offset 0; `V7_LAYER` is the
-fallback only when the byte is absent.
+The body's layer on read is the header layer byte at offset 0, except that a mechanical byte
+defers to a `V7_LAYER` token past the sixteen it can hold (`MECHANICAL20` under byte 72 is
+Mechanical 20). An unmapped byte reads as Multi-Layer and is carried as `raw_layer_id` together
+with its token, so the pair round-trips. There is no token fallback for an absent byte — a block
+without the byte has no parameter string to fall back to either.
 
 ### Via (0x03)
 
@@ -769,19 +907,22 @@ constant regions are replayed verbatim.
 | 50-53 | 4 | Paste mask expansion (i32) | yes |
 | 54-57 | 4 | Solder mask expansion, front (i32) | yes |
 | 61-64 | 4 | Cache-valid word | unmodelled (template) |
-| 66 | 1 | Solder mask expansion mode (0=None, 1=FromRule, 2=Manual) | yes |
+| 66 | 1 | Solder mask expansion cache state (`TCacheState`, see [Pad](#pad-0x02)) | yes |
 | 74 | 1 | Diameter stack mode (0=Simple, 1=TopMiddleBottom, 2=FullStack) | yes |
 | 75-202 | 128 | Per-layer diameters (32 × i32; a Simple via repeats its diameter) | yes |
 | 242-245 | 4 | Solder mask expansion, back/bottom face (i32; mirrors the front when unset) | yes |
-| 258 | 1 | Solder-mask-from-hole-edge flag | unmodelled (template) |
-| 259-274 | 16 | Identity GUID A (fresh per via on write) | write-only |
-| 275-290 | 16 | Identity GUID B (fresh per via on write) | write-only |
+| 258 | 1 | Solder-mask expansion measured from the hole edge (bool) | yes |
+| 259-274 | 16 | Identity GUID A — zeros in every AD-authored library via; replayed from the read block, zeroed from scratch | replay |
+| 275-290 | 16 | Identity GUID B — as GUID A | replay |
 | 291-294 | 4 | Hole positive tolerance (i32; `0x7FFFFFFF` = unset) | yes |
 | 295-298 | 4 | Hole negative tolerance (i32; `0x7FFFFFFF` = unset) | yes |
-| 312 | 1 | Drill layer-pair type (0=Through, 1/2/3 = blind/buried) | unmodelled (template) |
+| 312 | 1 | Drill-pair classification (0=Through, 1=BlindBuriedStart, 2=Mid, 3=End) | yes |
 | 320 | 1 | Trailing constant (`0x01`) | template |
 
-The reader accepts any block ≥ 31 bytes and defaults every absent field.
+The reader accepts any block ≥ 31 bytes and defaults every absent field. The whole block as
+read is the via's `raw_block` and the write base, **length included**: an older library stores
+351-byte vias, and the thirty bytes past the template go back verbatim. A read block shorter
+than the template cannot take the overlays, so the template is the base instead.
 
 ### 3D Model Storage
 
@@ -831,7 +972,12 @@ recomputed body checksum that disagreed with the Models/Data record would be wor
 
 ## Primitive Writing Order
 
-When writing footprint data, primitives are encoded in this specific order:
+Altium stores primitives in **authoring order**, interleaving the kinds:
+`LOCKFLAGS_PCB` in the golden runs pad x6, track, pad x2, track, arc x2, fill x2. That order is
+the ordinal space both identity streams key off, so a footprint read from a file is written back
+in the order it came in.
+
+A footprint with no order of its own — one built in memory — is written kind by kind:
 
 1. Arcs (0x01)
 2. Pads (0x02)
@@ -841,6 +987,9 @@ When writing footprint data, primitives are encoded in this specific order:
 6. Regions (0x0B)
 7. Fills (0x06)
 8. ComponentBodies (0x0C)
+
+`WideStrings` is indexed over the text primitives alone, in their own relative order, so
+interleaving does not disturb the `ENCODEDTEXT{n}` numbering.
 
 There is **no** end marker after the last primitive (issue #68).
 
@@ -852,8 +1001,8 @@ There is **no** end marker after the last primitive (issue #68).
 - **3D model embedding**: zlib-compressed STEP files, referenced by GUID
 - **Pad hole shapes**: Round (0), Square (1), Slot (2) — stored at offset 262 of the 651-byte size/shape block, NOT in the main geometry block
 - **Net information**: modelled via the common-header indices; used in board files, not library files
-- **Unique IDs**: 8-character alphanumeric, keyed by a single global 0-based `PRIMITIVEINDEX` over all primitives in Data order
-- **Default layer mapping**: unknown layer IDs default to Multi-Layer (74)
+- **Unique IDs**: 8-character alphanumeric or empty, keyed by a global 0-based `PRIMITIVEINDEX` over all primitives in Data order — the ordinal `PrimitiveGuids` also uses
+- **Default layer mapping**: an unmapped layer byte reads as Multi-Layer (74) and is carried as `raw_layer_id`, so a rewrite stores the byte as read
 - **Default stack mode**: unknown stack mode IDs default to Simple (0)
 - **Internal OLE entries filtered on read**: FileHeader, Library, Models, Textures, ModelsNoEmbed, PadViaLibrary, LayerKindMapping,
     ComponentParamsTOC, FileVersionInfo, PrimitiveGuids
@@ -863,4 +1012,3 @@ There is **no** end marker after the last primitive (issue #68).
 - [AltiumSharp](https://github.com/issus/AltiumSharp) - C# library for Altium files (MIT)
 - [pyAltiumLib](https://github.com/ChrisHoyer/pyAltiumLib) - Python library for reading Altium files
 - [python-altium](https://github.com/vadmium/python-altium) - Altium format documentation
-- Sample analysis: `scripts/analyse/analyse_pcblib.py`

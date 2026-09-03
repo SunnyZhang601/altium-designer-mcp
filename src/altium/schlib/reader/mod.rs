@@ -21,9 +21,9 @@
 //! - `0x01`: Binary pin record
 
 use super::primitives::{
-    Arc, Bezier, Ellipse, EllipticalArc, FootprintModel, Image, Label, Line, Parameter, Pie, Pin,
-    PinElectricalType, PinOrientation, PinSymbol, Polygon, Polyline, Rectangle, RoundRect,
-    ShapeDisplayFlags, Text, TextFrame, TextJustification,
+    Arc, Bezier, Ellipse, EllipticalArc, FootprintModel, IeeeSymbol, Image, Label, Line, Parameter,
+    Pie, Pin, PinElectricalType, PinOrientation, PinSymbol, Polygon, Polyline, Rectangle,
+    RoundRect, ShapeDisplayFlags, TextFrame, TextJustification,
 };
 use super::Symbol;
 use crate::altium::bytes::{
@@ -122,6 +122,27 @@ fn contains_utf8_marker(data: &[u8]) -> bool {
         .any(|w| w.eq_ignore_ascii_case(MARKER))
 }
 
+/// A text record's segments exactly as stored: every `key=value` in order,
+/// an empty segment (the UI's `%UTF8%Key=…|||Key=…` form) as `("", "")`.
+fn record_segments(text: &str) -> Vec<(String, String)> {
+    text.trim_end_matches('\0')
+        .split('|')
+        .skip(1)
+        .map(|segment| {
+            segment.split_once('=').map_or_else(
+                || (segment.to_string(), String::new()),
+                |(key, value)| (key.to_string(), value.to_string()),
+            )
+        })
+        .collect()
+}
+
+/// [`parse_text_record_from_string`] for the writer's tests.
+#[cfg(test)]
+pub(crate) fn parse_text_record_from_string_for_test(symbol: &mut Symbol, text: &str) {
+    parse_text_record_from_string(symbol, text);
+}
+
 /// Parses a text record from a decoded string.
 #[allow(clippy::too_many_lines)] // Property parsing for all record types
 fn parse_text_record_from_string(symbol: &mut Symbol, text: &str) {
@@ -136,13 +157,13 @@ fn parse_text_record_from_string(symbol: &mut Symbol, text: &str) {
         1 => {
             // Component header
             // LibReference contains the full symbol name (may differ from OLE storage name)
-            if let Some(name) = props.get("libreference") {
+            if let Some(name) = read_utf8_text_field(&props, "libreference") {
                 if !name.is_empty() {
-                    symbol.name.clone_from(name);
+                    symbol.name = name;
                 }
             }
-            if let Some(desc) = props.get("componentdescription") {
-                symbol.description.clone_from(desc);
+            if let Some(desc) = read_utf8_text_field(&props, "componentdescription") {
+                symbol.description = desc;
             }
             if let Some(part_count) = props.get("partcount") {
                 // Altium stores part_count + 1 (part 0 is the common part), so we
@@ -161,22 +182,32 @@ fn parse_text_record_from_string(symbol: &mut Symbol, text: &str) {
             if let Some(part_id_locked) = props.get("partidlocked") {
                 symbol.part_id_locked = part_id_locked == "T";
             }
-            if let Some(source_lib) = props.get("sourcelibraryname") {
-                symbol.source_library_name.clone_from(source_lib);
+            if let Some(source_lib) = read_utf8_text_field(&props, "sourcelibraryname") {
+                symbol.source_library_name = source_lib;
             }
             if let Some(target_file) = props.get("targetfilename") {
                 symbol.target_file_name.clone_from(target_file);
             }
+            if let Some(count) = props.get("allpincount").and_then(|v| v.trim().parse().ok()) {
+                symbol.all_pin_count = Some(count);
+            }
+            // The record exactly as stored — every segment, an empty one
+            // included, because the UI writes a `%UTF8%` twin as
+            // `%UTF8%Key=…|||Key=…` — so the writer reproduces this header
+            // rather than the canonical one.
+            symbol.header_params = record_segments(text);
         }
         14 => {
             // Rectangle
-            if let Some(rect) = parse_rectangle(&props) {
+            if let Some(mut rect) = parse_rectangle(&props) {
+                rect.raw_params = record_segments(text);
                 symbol.add_rectangle(rect);
             }
         }
         13 => {
             // Line
-            if let Some(line) = parse_line(&props) {
+            if let Some(mut line) = parse_line(&props) {
+                line.raw_params = record_segments(text);
                 symbol.add_line(line);
             }
         }
@@ -195,7 +226,8 @@ fn parse_text_record_from_string(symbol: &mut Symbol, text: &str) {
         }
         41 => {
             // Parameter
-            if let Some(param) = parse_parameter(&props) {
+            if let Some(mut param) = parse_parameter(&props) {
+                param.raw_params = record_segments(text);
                 symbol.add_parameter(param);
             }
         }
@@ -203,6 +235,7 @@ fn parse_text_record_from_string(symbol: &mut Symbol, text: &str) {
             // Model (footprint reference)
             if let Some(name) = props.get("modelname") {
                 let mut fp = FootprintModel::new(name);
+                fp.raw_params = record_segments(text);
                 if let Some(desc) = props.get("description") {
                     fp.description.clone_from(desc);
                 }
@@ -214,78 +247,91 @@ fn parse_text_record_from_string(symbol: &mut Symbol, text: &str) {
                 }
                 // Preserve the current/default-model flag (Altium omits it when false).
                 fp.is_current = props.get("iscurrent").is_some_and(|v| v == "T");
+                fp.unique_id = props.get("uniqueid").cloned();
                 symbol.add_footprint(fp);
             }
         }
         6 => {
             // Polyline
-            if let Some(polyline) = parse_polyline(&props) {
+            if let Some(mut polyline) = parse_polyline(&props) {
+                polyline.raw_params = record_segments(text);
                 symbol.add_polyline(polyline);
             }
         }
         8 => {
             // Ellipse
-            if let Some(ellipse) = parse_ellipse(&props) {
+            if let Some(mut ellipse) = parse_ellipse(&props) {
+                ellipse.raw_params = record_segments(text);
                 symbol.add_ellipse(ellipse);
             }
         }
         9 => {
             // Pie (filled circular sector)
-            if let Some(pie) = parse_pie(&props) {
+            if let Some(mut pie) = parse_pie(&props) {
+                pie.raw_params = record_segments(text);
                 symbol.add_pie(pie);
             }
         }
         30 => {
             // Image (embedded/linked picture)
-            if let Some(image) = parse_image(&props) {
+            if let Some(mut image) = parse_image(&props) {
+                image.raw_params = record_segments(text);
                 symbol.add_image(image);
             }
         }
         28 => {
             // Text frame (bordered multi-line text box)
-            if let Some(text_frame) = parse_text_frame(&props) {
+            if let Some(mut text_frame) = parse_text_frame(&props) {
+                text_frame.raw_params = record_segments(text);
                 symbol.add_text_frame(text_frame);
             }
         }
         12 => {
             // Arc
-            if let Some(arc) = parse_arc(&props) {
+            if let Some(mut arc) = parse_arc(&props) {
+                arc.raw_params = record_segments(text);
                 symbol.add_arc(arc);
             }
         }
         3 => {
-            // Text annotation
-            if let Some(text) = parse_text(&props) {
-                symbol.add_text(text);
+            // IEEE symbol
+            if let Some(mut ieee_symbol) = parse_ieee_symbol(&props) {
+                ieee_symbol.raw_params = record_segments(text);
+                symbol.add_ieee_symbol(ieee_symbol);
             }
         }
         4 => {
             // Label
-            if let Some(label) = parse_label(&props) {
+            if let Some(mut label) = parse_label(&props) {
+                label.raw_params = record_segments(text);
                 symbol.add_label(label);
             }
         }
         5 => {
             // Bezier curve
-            if let Some(bezier) = parse_bezier(&props) {
+            if let Some(mut bezier) = parse_bezier(&props) {
+                bezier.raw_params = record_segments(text);
                 symbol.add_bezier(bezier);
             }
         }
         7 => {
             // Polygon
-            if let Some(polygon) = parse_polygon(&props) {
+            if let Some(mut polygon) = parse_polygon(&props) {
+                polygon.raw_params = record_segments(text);
                 symbol.add_polygon(polygon);
             }
         }
         10 => {
             // Rounded Rectangle
-            if let Some(round_rect) = parse_round_rect(&props) {
+            if let Some(mut round_rect) = parse_round_rect(&props) {
+                round_rect.raw_params = record_segments(text);
                 symbol.add_round_rect(round_rect);
             }
         }
         11 => {
             // Elliptical Arc
-            if let Some(elliptical_arc) = parse_elliptical_arc(&props) {
+            if let Some(mut elliptical_arc) = parse_elliptical_arc(&props) {
+                elliptical_arc.raw_params = record_segments(text);
                 symbol.add_elliptical_arc(elliptical_arc);
             }
         }
@@ -333,10 +379,36 @@ fn read_display_flags(props: &HashMap<String, String>) -> ShapeDisplayFlags {
 /// matching [`parse_properties`]'s lower-casing. Returns `None` when neither key
 /// is present so callers can distinguish an absent field from an empty one.
 fn read_utf8_text_field(props: &HashMap<String, String>, key: &str) -> Option<String> {
+    // The plain key comes first. Altium writes a value outside Windows-1252 as
+    // its raw UTF-8 bytes under the plain key, which the record decode surfaces
+    // as one char per byte, and that form is locale-independent. Its own
+    // `%UTF8%` companion is not: Altium builds it by widening those bytes
+    // through the authoring machine's ANSI code page, so decoding it elsewhere
+    // yields mojibake.
+    if let Some(plain) = props.get(key) {
+        if let Some(recovered) = recover_utf8_bytes(plain) {
+            return Some(recovered);
+        }
+    }
     if let Some(raw) = props.get(&format!("%utf8%{key}")) {
         return Some(crate::altium::decode_utf8_param_value(raw));
     }
     props.get(key).cloned()
+}
+
+/// Recovers a value stored as raw UTF-8 bytes inside a Windows-1252 record.
+///
+/// Returns `None` when `raw` is plain ASCII (nothing to recover) or when its
+/// bytes are not valid UTF-8, in which case it is a genuine Windows-1252 value
+/// and must be taken verbatim.
+fn recover_utf8_bytes(raw: &str) -> Option<String> {
+    if raw.is_ascii() {
+        return None;
+    }
+    // Every char came from a Windows-1252 decode, so re-encoding is exact and
+    // gives back the bytes as they sit in the record.
+    let bytes = crate::altium::encode_windows1252(raw);
+    std::str::from_utf8(&bytes).ok().map(str::to_string)
 }
 
 /// Converts Altium justification ID to our enum.
@@ -362,6 +434,60 @@ mod tests {
     use super::*;
 
     #[test]
+    fn every_justification_id_maps_to_its_own_anchor() {
+        // The ids are Altium's, and a wrong arm silently re-anchors text on
+        // read. Anything outside the table is Altium's own 0 = BottomLeft.
+        for (id, expected) in [
+            (0, TextJustification::BottomLeft),
+            (1, TextJustification::BottomCenter),
+            (2, TextJustification::BottomRight),
+            (3, TextJustification::MiddleLeft),
+            (4, TextJustification::MiddleCenter),
+            (5, TextJustification::MiddleRight),
+            (6, TextJustification::TopLeft),
+            (7, TextJustification::TopCenter),
+            (8, TextJustification::TopRight),
+            (9, TextJustification::BottomLeft),
+            (255, TextJustification::BottomLeft),
+        ] {
+            assert_eq!(justification_from_id(id), expected, "id {id}");
+        }
+    }
+
+    #[test]
+    fn a_malformed_data_stream_stops_at_the_damage_and_keeps_what_parsed() {
+        // Every framing fault a truncated or foreign file can present has to
+        // end the walk rather than panic on the slice: too short to hold a
+        // header at all, a zero-length end marker, a record claiming more
+        // bytes than remain, and a record type this reader does not know.
+        let mut symbol = Symbol::new("SHORT");
+        parse_data_stream(&mut symbol, &[1, 2, 3]);
+        assert!(symbol.pins.is_empty());
+
+        // A zero length word is Altium's end marker; anything after it is not
+        // read, so the trailing bytes must not become a second record.
+        let mut symbol = Symbol::new("END_MARKER");
+        parse_data_stream(&mut symbol, &[0, 0, 0, 0, 0xFF, 0xFF, 0xFF, 0xFF]);
+        assert!(symbol.pins.is_empty());
+
+        // Claims a 255-byte record with only a handful of bytes behind it.
+        let mut symbol = Symbol::new("OVERRUN");
+        parse_data_stream(&mut symbol, &[255, 0, 0, 0, b'x', b'y']);
+        assert!(symbol.pins.is_empty());
+
+        // A record type neither text (0) nor binary pin (1) is skipped, and
+        // the walk carries on to the record behind it.
+        let mut symbol = Symbol::new("UNKNOWN_KIND");
+        let mut data = vec![1, 0, 0, 0x7F, b'?'];
+        let text = b"|RECORD=1|ComponentDescription=survived";
+        data.extend_from_slice(&u32::try_from(text.len()).unwrap().to_le_bytes()[..3]);
+        data.push(0);
+        data.extend_from_slice(text);
+        parse_data_stream(&mut symbol, &data);
+        assert_eq!(symbol.description, "survived");
+    }
+
+    #[test]
     fn partcount_one_decodes_to_zero_no_floor() {
         // Altium stores count+1, so a single-part symbol stores PartCount=1 => internal
         // 0. The old `.max(1)` floor mutated that to 1, which the writer re-emitted as
@@ -379,6 +505,7 @@ mod tests {
         // encode -> decode via the writer/reader keeps the four flags on a shape.
         use crate::altium::schlib::writer;
         let mut label = Label {
+            raw_params: Vec::new(),
             x: 0.0,
             y: 0.0,
             text: "L".to_string(),
@@ -457,5 +584,20 @@ mod tests {
         let mut symbol = Symbol::new("P");
         parse_text_record(&mut symbol, &bytes);
         assert_eq!(symbol.parameters[0].value, "10\u{00B5}F");
+    }
+
+    #[test]
+    fn empty_or_unparsable_record_fields_leave_the_symbol_as_it_was() {
+        // An empty LibReference is not a name — taking it would blank out the
+        // symbol's OLE storage name and make it unaddressable.
+        let mut symbol = Symbol::new("KEEP_ME");
+        parse_text_record_from_string(&mut symbol, "|RECORD=1|LibReference=");
+        assert_eq!(symbol.name, "KEEP_ME");
+
+        // A polyline record carrying no usable geometry is dropped rather than
+        // added as a degenerate shape.
+        let mut symbol = Symbol::new("NO_POLYLINE");
+        parse_text_record_from_string(&mut symbol, "|RECORD=6|LocationCount=0");
+        assert!(symbol.polylines.is_empty());
     }
 }

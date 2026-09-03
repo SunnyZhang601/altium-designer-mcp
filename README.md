@@ -1,11 +1,11 @@
 # altium-designer-mcp
 
 [![CI](https://github.com/embedded-society/altium-designer-mcp/actions/workflows/ci_main.yml/badge.svg)](https://github.com/embedded-society/altium-designer-mcp/actions/workflows/ci_main.yml)
-[![codecov](https://codecov.io/gh/embedded-society/altium-designer-mcp/branch/main/graph/badge.svg)](https://codecov.io/gh/embedded-society/altium-designer-mcp)
+[![codecov](https://codecov.io/gh/embedded-society/altium-designer-mcp/branch/main/graph/badge.svg)](https://app.codecov.io/gh/embedded-society/altium-designer-mcp)
 
 **Let an AI build your Altium libraries — it does the engineering, this tool writes the files.**
 
-An MCP server that gives AI assistants (Claude Code, Claude Desktop, Google Antigravity, VSCode Copilot) file I/O
+An MCP server that gives AI assistants (Claude Code, Claude Desktop, Cursor, Antigravity, VS Code Copilot — any MCP client) file I/O
 and primitive-placement tools for Altium Designer `.PcbLib` (footprint) and `.SchLib` (symbol)
 libraries — so the AI can create and maintain *any* component, not just pre-programmed packages.
 
@@ -54,23 +54,21 @@ read and write the actual `.PcbLib` / `.SchLib` files.
 
 | If you… | Then… |
 |---------|-------|
-| Use Claude Code, Claude Desktop, or VSCode + Copilot and design in Altium | ✅ This is for you |
+| Use Claude Code, Claude Desktop, Cursor, Antigravity, VS Code + Copilot — [any MCP client](docs/CLIENT_SETUP.md) — and design in Altium | ✅ This is for you |
 | Want pre-baked generators for a fixed set of packages | ❌ Not this — the point is *any* component |
 | Don't use Altium | ❌ Not applicable |
 
 ---
 
-## Quick Start with Claude Code
+## Quick Start
 
-> **[Claude Code Setup Guide](docs/CLAUDE_CODE_GUIDE.md)** — Complete step-by-step instructions
-> for using this MCP server with Claude Code CLI on **Windows**, **Linux**, and **macOS**.
-
----
-
-## Quick Start with Google Antigravity
-
-> **[Google Antigravity Setup Guide](docs/ANTIGRAVITY_GUIDE.md)** — Step-by-step instructions
-> for using this MCP server with Google Antigravity (IDE and CLI) on **Windows**, **Linux**, and **macOS**.
+> **[Client Setup](docs/CLIENT_SETUP.md)** — verified configuration for Claude Code, Claude
+> Desktop, Google Antigravity, Cursor, VS Code, GitHub Copilot CLI, Windsurf, Cline, Roo Code,
+> Kiro, JetBrains, Zed, Gemini CLI, Codex CLI, Continue, Goose, OpenCode and any other stdio
+> MCP client, plus troubleshooting — on **Windows**, **Linux**, and **macOS**.
+>
+> **[Using the server](docs/USAGE.md)** — what to ask for once it is connected: example
+> workflows, prompts and tips, identical for every client.
 
 ---
 
@@ -97,7 +95,7 @@ read and write the actual `.PcbLib` / `.SchLib` files.
 │    │                         │  write_schlib(symbol)        │ .SchLib files │
 │    │                         ├─────────────────────────────►│               │
 │    │                         │◄─────────────────────────────┤               │
-│    │                         │  { success: true }           │               │
+│    │                         │  { status: "success" }       │               │
 │    │                         │                              │               │
 │    │  "Done! Footprint       │                              │               │
 │    │   and symbol created"   │                              │               │
@@ -239,8 +237,8 @@ This follows the IPC-7351 convention where pin 1 has a distinct shape (typically
 | **Ellipse** | Ellipse or circle (filled or unfilled) |
 | **EllipticalArc** | Elliptical arc segment with fractional radii |
 | **Bezier** | Cubic Bezier curve (4 control points) |
-| **Label** | Text label (RECORD=4) |
-| **Text** | Text annotation (RECORD=3) |
+| **Label** | Text string (RECORD=4) — the only free text on a symbol |
+| **IeeeSymbol** | IEEE symbol glyph (RECORD=3): a dot, a clock, an active-low input, … |
 | **TextFrame** | Bordered multi-line text box (word-wrap, alignment) |
 | **Parameter** | Component parameter (Value, Part Number, etc.) |
 | **FootprintModel** | Reference to a footprint in a PcbLib |
@@ -267,18 +265,46 @@ Additional layers supported:
 |-------|-------|
 | Mid-Layer 1–30 | Internal copper layers |
 | Internal Plane 1–16 | Power/ground planes |
-| Mechanical 1–16 | User-defined mechanical layers |
+| Mechanical 1–32 | User-defined mechanical layers |
 | Drill Guide | Drill hole markers |
 | Drill Drawing | Drill chart/table |
 | Keep-Out Layer | Routing exclusion zones |
+
+A layer may be named as Altium spells it (`Top Overlay`, `Mechanical 13`) or in camel
+case (`TopOverlay`, `Mechanical13`), in any case; every tool accepts the same spellings.
 
 ---
 
 ## Installation
 
-See [CONTRIBUTING.md § Development Setup](CONTRIBUTING.md#development-setup) for build instructions.
+**Prebuilt binaries** for Linux (x86_64), macOS (aarch64) and Windows (x86_64) are on the
+[Releases page](https://github.com/embedded-society/altium-designer-mcp/releases) — each
+archive bundles a setup README plus [`docs/CLIENT_SETUP.md`](docs/CLIENT_SETUP.md), which
+wires the server into every MCP client we know of.
 
-The release binary will be at `target/release/altium-designer-mcp`.
+**Claude Desktop users** need no archive at all: install the one-click extension
+`altium-designer-mcp.mcpb` from the same page (older builds: the identical
+`altium-designer-mcp.dxt`) via Settings → Extensions → Advanced settings →
+Install Extension… — see [CLIENT_SETUP.md § Claude Desktop](docs/CLIENT_SETUP.md#claude-desktop).
+
+To build from source instead, see
+[CONTRIBUTING.md § Development Setup](CONTRIBUTING.md#development-setup); an optimised
+binary comes from `cargo build --release` and lands at `target/release/altium-designer-mcp`.
+
+### Verifying a downloaded release
+
+Released archives are built by GitHub Actions and carry a signed
+[SLSA build provenance](https://slsa.dev/) attestation, so a download can be traced
+back to the workflow run and commit that produced it:
+
+```bash
+gh attestation verify <archive> --repo embedded-society/altium-designer-mcp
+sha256sum --check --ignore-missing SHA256SUMS.txt
+```
+
+The binaries are not code-signed, so Windows SmartScreen and macOS Gatekeeper warn on
+first run (on macOS, right-click → Open). The attestation is the stronger check.
+See [docs/RELEASING.md](docs/RELEASING.md) for how releases are produced.
 
 ### Command-Line Usage
 
@@ -289,31 +315,40 @@ altium-designer-mcp [OPTIONS] [CONFIG_FILE]
 | Option | Description |
 |--------|-------------|
 | `CONFIG_FILE` | Path to configuration file (optional, uses default location if omitted) |
+| `--allow <DIR>...` | Grant access to library folders directly (repeatable). Adds to the config file's `allowed_paths`, and works with no config file at all — the other settings then take their defaults |
 | `-v`, `--verbose` | Increase logging verbosity (`-v` info, `-vv` debug, `-vvv` trace) |
 | `-q`, `--quiet` | Decrease logging verbosity (only show errors) |
 | `-h`, `--help` | Print help information |
 | `-V`, `--version` | Print version information |
 
-### Usage with Claude Desktop
+### Connecting an AI client
 
-Add to your Claude Desktop MCP configuration:
+Every MCP client needs the same two absolute paths — the binary and your config file — and
+differs only in where they are written. The standard block most clients read:
 
 ```json
 {
     "mcpServers": {
         "altium": {
-            "command": "altium-designer-mcp",
-            "args": ["/path/to/config.json"]
+            "command": "/usr/local/bin/altium-designer-mcp",
+            "args": ["/home/you/.altium-designer-mcp/config.json"]
         }
     }
 }
 ```
 
+Where that goes for Claude Desktop, Cursor, VS Code, Windsurf, Cline, Zed, JetBrains,
+Gemini CLI, Codex CLI and the rest — and what to do when a client cannot see the server —
+is in [docs/CLIENT_SETUP.md](docs/CLIENT_SETUP.md). Use absolute paths: clients do not
+search `PATH` or expand `~` for you.
+
 ---
 
 ## Configuration
 
-Configuration file location:
+The server reads one JSON file — or none: `altium-designer-mcp --allow <DIR>` grants
+folders on the command line and runs on defaults for everything else, which is how the
+Claude Desktop extension starts it. Configuration file location:
 
 - **Linux/macOS:** `~/.altium-designer-mcp/config.json`
 - **Windows:** `%USERPROFILE%\.altium-designer-mcp\config.json`
@@ -334,7 +369,7 @@ Configuration file location:
 
 | Option | Description |
 |--------|-------------|
-| `allowed_paths` | Array of directory paths where library files can be accessed (default: current directory) |
+| `allowed_paths` | Array of directory paths where library files can be accessed; `--allow` adds to it (default when neither grants anything: the current working directory) |
 | `logging.level` | Log level: trace, debug, info, warn, error (default: warn) |
 | `logging.audit_log_path` | Path to an append-only JSON-lines audit log of destructive operations (default: null — no audit log is written) |
 | `rate_limit.max_burst` | Maximum burst of mutating operations before throttling; read-only tools are never rate limited (default: 120) |
@@ -367,12 +402,16 @@ Altium supports two ways to reference 3D models:
 | **Embedded** | STEP data stored inside the .PcbLib file | Fully portable — the model travels with the library |
 | **External** | File path reference to a .step file on disk | Not portable — requires the file to exist at the referenced path |
 
-When using `copy_component_cross_library` or `merge_libraries`:
+When copying or merging components between libraries:
 
-- **Embedded models** are copied along with the component
-- **External model references** are removed with a warning, as the file paths are not portable across different machines or directory structures
+- **Embedded models** travel with the component — `copy_component_cross_library` and
+  `merge_libraries` both copy the referenced model streams into the target (a model shared by
+  several footprints is copied once), so the bodies still resolve after the move.
+- **External model references**: `copy_component_cross_library` removes them with a warning by
+  default, since a path relative to the source library rarely resolves elsewhere — pass
+  `preserve_external_paths=true` to keep them. `merge_libraries` carries them unchanged.
 
-To preserve 3D models when copying components, ensure they are embedded in the source library (not external references).
+Embedding a model in the source library is the reliable way to keep 3D data through any copy.
 
 ### Extracting Embedded Models
 
@@ -422,6 +461,7 @@ automatically removed to prevent unbounded disk usage.
 - `manage_schlib_footprints`
 - `write_pcblib` / `write_schlib` (when overwriting)
 - `import_library` (when overwriting)
+- `restore_backup` (the current file, before the chosen backup replaces it)
 
 **Managing backups:** Use `list_backups` to view available backups and `restore_backup` to
 recover from a previous version.
@@ -450,6 +490,40 @@ use any length component name and it will be preserved on read/write roundtrips.
 
 ---
 
+## Privacy Policy
+
+`altium-designer-mcp` is a local tool and collects nothing.
+
+- **Data collection**: none. The server has no network access, no telemetry and no
+  analytics; it never contacts any service, including this project's.
+- **Usage and storage**: it reads and writes only the library files inside the folders
+  you grant (`allowed_paths` or `--allow`), plus the timestamped `.bak` copies it makes
+  beside them before a change. The optional audit log (`logging.audit_log_path`) is a
+  local file you choose, holding tool names, file names and outcomes — never library
+  contents.
+- **Third-party sharing**: none. Nothing leaves your machine.
+- **Data retention**: the files and backups stay until you delete them; backups are
+  capped at the five most recent per library.
+- **Contact**: <matejg03@gmail.com>, or a [GitHub issue](https://github.com/embedded-society/altium-designer-mcp/issues)
+  for anything that need not be private.
+
+---
+
+## Documentation
+
+| For… | Read |
+|------|------|
+| Wiring the server into your AI client | [docs/CLIENT_SETUP.md](docs/CLIENT_SETUP.md) — one section per client |
+| What to ask for once it is connected | [docs/USAGE.md](docs/USAGE.md) — workflows, prompts, tips |
+| Telling the AI how to use it well | [docs/AGENT_GUIDE.md](docs/AGENT_GUIDE.md) (paste into a project brief), [docs/AI_WORKFLOW.md](docs/AI_WORKFLOW.md) |
+| Every tool, parameter and example | [docs/TOOLS.md](docs/TOOLS.md); error messages in [docs/errors.md](docs/errors.md) |
+| Why it is built this way | [docs/VISION.md](docs/VISION.md), [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) |
+| The file formats, byte by byte | [docs/PCBLIB_FORMAT.md](docs/PCBLIB_FORMAT.md), [docs/SCHLIB_FORMAT.md](docs/SCHLIB_FORMAT.md) |
+| Security model and threat analysis | [docs/SECURITY.md](docs/SECURITY.md) (reporting: [SECURITY.md](SECURITY.md)) |
+| How releases are built and verified | [docs/RELEASING.md](docs/RELEASING.md) |
+
+---
+
 ## Contributing
 
 Contributions welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
@@ -465,7 +539,9 @@ Contributions welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 cargo test
 ```
 
-Tests are self-contained and generate their own data programmatically. Temporary files are created in `.tmp/` (git-ignored) and automatically cleaned up.
+Write-path tests generate their own data programmatically; reader tests parse the committed
+Altium-authored golden fixtures (see [Sample Files](#sample-files)). Temporary files are
+created in `.tmp/` (git-ignored) and automatically cleaned up.
 
 The full build, formatting, and lint commands are canonical in
 [CONTRIBUTING.md § Development Setup](CONTRIBUTING.md#development-setup).

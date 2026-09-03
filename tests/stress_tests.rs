@@ -541,6 +541,15 @@ fn test_text_special_strings() {
 
     // Standard designator reference
     let text1 = Text {
+        raw_layer_id: None,
+        barcode_full_width: None,
+        barcode_full_height: None,
+        barcode_x_margin: None,
+        barcode_y_margin: None,
+        barcode_kind: 0,
+        barcode_font_name: String::new(),
+        barcode_inverted: false,
+        barcode_show_text: false,
         x: 0.0,
         y: 0.0,
         text: ".Designator".to_string(),
@@ -568,11 +577,22 @@ fn test_text_special_strings() {
         polygon_index: 0xFFFF,
         component_index: -1,
         unique_id: None,
+        guid: None,
+        raw_geometry: None,
     };
     fp.add_text(text1);
 
     // Comment reference
     let text2 = Text {
+        raw_layer_id: None,
+        barcode_full_width: None,
+        barcode_full_height: None,
+        barcode_x_margin: None,
+        barcode_y_margin: None,
+        barcode_kind: 0,
+        barcode_font_name: String::new(),
+        barcode_inverted: false,
+        barcode_show_text: false,
         x: 0.0,
         y: -2.0,
         text: ".Comment".to_string(),
@@ -600,6 +620,8 @@ fn test_text_special_strings() {
         polygon_index: 0xFFFF,
         component_index: -1,
         unique_id: None,
+        guid: None,
+        raw_geometry: None,
     };
     fp.add_text(text2);
 
@@ -843,7 +865,15 @@ fn test_component_body_roundtrip() {
 
     // Add a ComponentBody with typical 3D model properties
     let body = ComponentBody {
+        raw_layer_id: None,
+        v7_layer: None,
         model_id: "TEST-MODEL-GUID".to_string(),
+        identifier: String::new(),
+        texture_center_x: None,
+        texture_center_y: None,
+        texture_size_x: None,
+        texture_size_y: None,
+        texture_rotation: None,
         model_name: "RESC0603.step".to_string(),
         embedded: false, // External reference (not embedded in library)
         rotation_x: 0.0,
@@ -852,9 +882,11 @@ fn test_component_body_roundtrip() {
         z_offset: 0.0,
         overall_height: 0.35,
         standoff_height: 0.0,
+        cavity_height: 0.0,
         layer: Layer::TopLayer,
         outline: Vec::new(),
         unique_id: None,
+        guid: None,
         model_checksum: 0,
         name: " ".to_string(),
         kind: 0,
@@ -865,10 +897,13 @@ fn test_component_body_roundtrip() {
         body_color_3d: 8_421_504,
         body_opacity_3d: 1.0,
         model_2d_rotation: 0.0,
+        model_2d_x: 0.0,
+        model_2d_y: 0.0,
         net_index: 0xFFFF,
         polygon_index: 0xFFFF,
         component_index: -1,
         additional_parameters: Vec::new(),
+        param_key_order: Vec::new(),
     };
     fp.component_bodies.push(body);
 
@@ -902,7 +937,15 @@ fn test_component_body_with_rotation() {
 
     // 3D model with rotation
     let body = ComponentBody {
+        raw_layer_id: None,
+        v7_layer: None,
         model_id: "ROTATED-GUID".to_string(),
+        identifier: String::new(),
+        texture_center_x: None,
+        texture_center_y: None,
+        texture_size_x: None,
+        texture_size_y: None,
+        texture_rotation: None,
         model_name: "SOIC8.step".to_string(),
         embedded: false,
         rotation_x: 0.0,
@@ -911,9 +954,11 @@ fn test_component_body_with_rotation() {
         z_offset: 0.1,    // 0.1mm standoff
         overall_height: 1.75,
         standoff_height: 0.0,
+        cavity_height: 0.0,
         layer: Layer::TopLayer,
         outline: Vec::new(),
         unique_id: None,
+        guid: None,
         model_checksum: 0,
         name: " ".to_string(),
         kind: 0,
@@ -924,10 +969,13 @@ fn test_component_body_with_rotation() {
         body_color_3d: 8_421_504,
         body_opacity_3d: 1.0,
         model_2d_rotation: 0.0,
+        model_2d_x: 0.0,
+        model_2d_y: 0.0,
         net_index: 0xFFFF,
         polygon_index: 0xFFFF,
         component_index: -1,
         additional_parameters: Vec::new(),
+        param_key_order: Vec::new(),
     };
     fp.component_bodies.push(body);
 
@@ -1377,6 +1425,7 @@ fn test_schlib_rename_component() {
     sym.description = "Test symbol".to_string();
     sym.designator = "U".to_string();
     sym.rectangles.push(Rectangle {
+        raw_params: Vec::new(),
         x1: -40.0,
         y1: -40.0,
         x2: 40.0,
@@ -1607,6 +1656,7 @@ fn test_schlib_copy_cross_library() {
     sym.description = "Source symbol".to_string();
     sym.designator = "U".to_string();
     sym.rectangles.push(Rectangle {
+        raw_params: Vec::new(),
         x1: -40.0,
         y1: -40.0,
         x2: 40.0,
@@ -1759,6 +1809,7 @@ fn test_schlib_json_roundtrip() {
     sym.description = "Test symbol for round-trip".to_string();
     sym.designator = "U".to_string();
     sym.rectangles.push(Rectangle {
+        raw_params: Vec::new(),
         x1: -40.0,
         y1: -40.0,
         x2: 40.0,
@@ -2028,6 +2079,7 @@ fn test_schlib_merge_libraries() {
     sym1.description = "Symbol A".to_string();
     sym1.designator = "U".to_string();
     sym1.rectangles.push(Rectangle {
+        raw_params: Vec::new(),
         x1: -40.0,
         y1: -40.0,
         x2: 40.0,
@@ -2217,6 +2269,7 @@ fn test_schlib_search() {
     let mut lib = SchLib::new();
     let mut sym1 = Symbol::new("LM7805");
     sym1.rectangles.push(Rectangle {
+        raw_params: Vec::new(),
         x1: -40.0,
         y1: -20.0,
         x2: 40.0,
@@ -2235,6 +2288,7 @@ fn test_schlib_search() {
 
     let mut sym2 = Symbol::new("LM7812");
     sym2.rectangles.push(Rectangle {
+        raw_params: Vec::new(),
         x1: -40.0,
         y1: -20.0,
         x2: 40.0,
@@ -2253,6 +2307,7 @@ fn test_schlib_search() {
 
     let mut sym3 = Symbol::new("NE555");
     sym3.rectangles.push(Rectangle {
+        raw_params: Vec::new(),
         x1: -40.0,
         y1: -40.0,
         x2: 40.0,
@@ -2352,6 +2407,7 @@ fn test_schlib_get_component() {
     let mut sym1 = Symbol::new("LM7805");
     sym1.description = "5V Regulator".to_string();
     sym1.rectangles.push(Rectangle {
+        raw_params: Vec::new(),
         x1: -40.0,
         y1: -30.0,
         x2: 40.0,
@@ -2731,7 +2787,15 @@ fn test_component_body_external_model_reference() {
 
     // Add ComponentBody with external reference
     let body = ComponentBody {
+        raw_layer_id: None,
+        v7_layer: None,
         model_id: "{EXTERNAL-GUID-1234}".to_string(),
+        identifier: String::new(),
+        texture_center_x: None,
+        texture_center_y: None,
+        texture_size_x: None,
+        texture_size_y: None,
+        texture_rotation: None,
         model_name: "external_model.step".to_string(),
         embedded: false, // External reference
         rotation_x: 0.0,
@@ -2740,9 +2804,11 @@ fn test_component_body_external_model_reference() {
         z_offset: 0.0,
         overall_height: 1.0,
         standoff_height: 0.0,
+        cavity_height: 0.0,
         layer: Layer::Top3DBody,
         outline: Vec::new(),
         unique_id: None,
+        guid: None,
         model_checksum: 0,
         name: " ".to_string(),
         kind: 0,
@@ -2753,10 +2819,13 @@ fn test_component_body_external_model_reference() {
         body_color_3d: 8_421_504,
         body_opacity_3d: 1.0,
         model_2d_rotation: 0.0,
+        model_2d_x: 0.0,
+        model_2d_y: 0.0,
         net_index: 0xFFFF,
         polygon_index: 0xFFFF,
         component_index: -1,
         additional_parameters: Vec::new(),
+        param_key_order: Vec::new(),
     };
     fp.component_bodies.push(body);
 

@@ -16,15 +16,70 @@ impl SchLib {
         let mut cfb = crate::altium::create_ole(writer)?;
 
         let symbols: Vec<&Symbol> = self.symbols.values().collect();
-        // OLE-safe storage names (handles long names + collisions).
-        let ole_names = crate::altium::generate_ole_names(symbols.iter().map(|s| s.name.as_str()));
 
-        // FileHeader stream.
+        // A non-ASCII name becomes the storage name in Altium's own form: its
+        // UTF-8 bytes carried one char per byte. That keeps the storage name
+        // and the FileHeader's `LibRef{i}` consistent, because the header is
+        // a Windows-1252 block and encoding this form back yields exactly those
+        // UTF-8 bytes — which is what Altium's library browser reads. The gate
+        // is ASCII to match `text_field`: the golden stores `Résistance` this
+        // way despite `é` having a single-byte form, so the storage name and
+        // the record's `LibReference` stay the same bytes.
+        for symbol in &symbols {
+            symbol
+                .check_record_text()
+                .map_err(|message| AltiumError::InvalidParameter {
+                    name: "text".to_string(),
+                    message,
+                })?;
+        }
+        if let Some(i) = symbols.iter().position(|s| s.name.is_empty()) {
+            return Err(AltiumError::InvalidParameter {
+                name: "name".to_string(),
+                message: format!("symbol {i} has an empty name"),
+            });
+        }
+        // Storage names use the on-wire form — a name Windows-1252 cannot
+        // hold becomes its UTF-8 bytes one char per byte — which is the form
+        // the reader looks a header entry up by, so every symbol keeps its
+        // place in the library on a read-modify-write (an ASCII-keyed rule
+        // sent every Latin-1 name to the end of the list on the next read).
+        let storage_names: Vec<String> = symbols
+            .iter()
+            .map(|s| crate::altium::to_wire_text(&s.name))
+            .collect();
+        // OLE-safe storage names (handles long names + collisions).
+        let ole_names = crate::altium::generate_ole_names(storage_names.iter().map(String::as_str));
+
+        // FileHeader stream. The library keeps the UniqueID it was read
+        // with; one built from scratch is given its first here.
+        let unique_id = self
+            .unique_id
+            .clone()
+            .unwrap_or_else(crate::util::generate_unique_id);
         crate::altium::write_stream(
             &mut cfb,
             "/FileHeader",
-            &writer::encode_file_header(&symbols, &ole_names),
+            &writer::encode_file_header(&symbols, &ole_names, &unique_id),
         )?;
+
+        // Root SectionKeys stream: the LibRef -> storage-name map for every
+        // symbol whose name reaches the storage cap — truncated or, as a
+        // UI-authored `Generic Non-polarised Capacitor` (31 units exactly)
+        // shows, merely filling it — so the real name stays recoverable by
+        // Altium and by our own reader's ordering pass. With no such name the
+        // stream is not written, as in Altium.
+        let truncated: Vec<(String, String)> = storage_names
+            .iter()
+            .zip(ole_names.iter())
+            .filter(|(wire, ole)| {
+                wire != ole || wire.encode_utf16().count() >= crate::altium::MAX_OLE_NAME_LEN
+            })
+            .map(|(wire, ole)| (wire.clone(), ole.clone()))
+            .collect();
+        if let Some(section_keys) = crate::altium::encode_section_keys(&truncated) {
+            crate::altium::write_stream(&mut cfb, "/SectionKeys", &section_keys)?;
+        }
 
         // One Data stream per symbol, under its own storage.
         for (symbol, ole_name) in symbols.iter().zip(ole_names.iter()) {
@@ -45,6 +100,13 @@ impl SchLib {
                     &format!("/{ole_name}/PinSymbolLineWidth"),
                     &widths,
                 )?;
+            }
+            if let Some(wide) = pin_aux::encode_pin_wide_text(&symbol.pins)? {
+                crate::altium::write_stream(&mut cfb, &format!("/{ole_name}/PinWideText"), &wide)?;
+            }
+            // Streams read but not understood go back as they were.
+            for (name, bytes) in &symbol.extra_streams {
+                crate::altium::write_stream(&mut cfb, &format!("/{ole_name}/{name}"), bytes)?;
             }
         }
 

@@ -66,6 +66,30 @@ jobs:
             - name: Lint markdown
               run: markdownlint-cli2 "**/*.md"
 
+            # Offline: every relative link and #anchor across the Markdown must
+            # resolve. No network, so it is deterministic and safe to gate on;
+            # external URLs are checked by the scheduled links.yml instead,
+            # because third-party sites go down independently of this repo.
+            # lychee is installed from its pinned release archive with a checksum
+            # check rather than via lycheeverse/lychee-action: the repository
+            # allow-lists the actions it runs, and a verified download keeps
+            # that list — and the trust it represents — unchanged.
+            - name: Install lychee
+              shell: bash
+              env:
+                LYCHEE_VERSION: v0.24.2
+                LYCHEE_SHA256: 1f4e0ef7f6554a6ed33dd7ac144fb2e1bbed98598e7af973042fc5cd43951c9a
+              run: |
+                curl -sSfL -o lychee.tar.gz                     "https://github.com/lycheeverse/lychee/releases/download/lychee-${LYCHEE_VERSION}/lychee-x86_64-unknown-linux-gnu.tar.gz"
+                echo "${LYCHEE_SHA256}  lychee.tar.gz" | sha256sum --check --strict
+                tar -xzf lychee.tar.gz
+                sudo install -m 755 lychee-x86_64-unknown-linux-gnu/lychee /usr/local/bin/lychee
+                rm -rf lychee.tar.gz lychee-x86_64-unknown-linux-gnu
+                lychee --version
+
+            - name: Check internal links and anchors
+              run: lychee --offline --include-fragments --no-progress --root-dir "$(pwd)" --exclude-path node_modules --exclude-path target --exclude-path .venv --exclude-path tests/integration/.venv "./**/*.md"
+
             - name: Check documentation
               run: cargo doc --no-deps --document-private-items
               env:
@@ -128,19 +152,25 @@ jobs:
                     rust-${{ runner.os }}-${{ steps.rust-version.outputs.version }}-
 
             - name: Run Clippy
-              run: cargo clippy --all-targets --all-features -- -D warnings
+              run: cargo clippy --locked --all-targets --all-features -- -D warnings
 
             - name: Build (debug)
-              run: cargo build --verbose
+              run: cargo build --locked --verbose
 
             - name: Build (release)
-              run: cargo build --release --verbose
+              run: cargo build --locked --release --verbose
 
             # Includes tests/mcp_e2e.rs, which spawns the built binary over
             # stdio and drives tool dispatch + the request/response envelope
             # (formerly the Python tests/integration/test_mcp_tools.py harness).
             - name: Run tests
-              run: cargo test --verbose
+              run: cargo test --locked --verbose
+
+            # The absolute timing bounds in tests/perf_tests.rs are asserted
+            # only in an optimised build (a debug build measures the build,
+            # not the code); the release artefacts above make this cheap.
+            - name: Run performance bounds (release)
+              run: cargo test --locked --release --test perf_tests -- --nocapture
 
             # Independent-reader gate: confirm generated files are Altium-readable
             # (issue #68) by parsing them with pyaltiumlib. Dependencies are pinned
@@ -172,7 +202,7 @@ jobs:
                 components: llvm-tools-preview
 
             - name: Install cargo-llvm-cov
-              uses: taiki-e/install-action@065d6a08a14e61e89fb0a4c10eecdbdef39c7d8e # v2.85.4
+              uses: taiki-e/install-action@b6ff580856c41316412a0b9b60540fbc6f8c82cc # v2.86.7
               with:
                 tool: cargo-llvm-cov
 
@@ -195,10 +225,18 @@ jobs:
                     rust-coverage-${{ runner.os }}-${{ steps.rust-version.outputs.version }}-
 
             - name: Generate coverage report (lcov)
-              run: cargo llvm-cov --all-features --workspace --lcov --output-path lcov.info
+              # main.rs is excluded from the metric, not from testing: the whole
+              # mcp_e2e suite drives the shipped binary through it, but
+              # instrumentation cannot see across the process boundary, so its
+              # lines read as uncovered no matter how tested they are. Everything
+              # else counts, including in-file #[cfg(test)] modules (their only
+              # uncovered lines are assertion-failure branches — noise that biases
+              # the number DOWN, which is the safe direction). Integration files
+              # under tests/ were never part of the report.
+              run: cargo llvm-cov --all-features --workspace --lcov --output-path lcov.info --ignore-filename-regex '(^|[/\\])main\.rs$'
 
             - name: Generate coverage summary
-              run: cargo llvm-cov report --summary-only
+              run: cargo llvm-cov report --summary-only --ignore-filename-regex '(^|[/\\])main\.rs$'
 
             # The token is mandatory (see ci_main.yml). Dependabot cannot read
             # secrets, so its PRs would fail the upload — skip them instead.

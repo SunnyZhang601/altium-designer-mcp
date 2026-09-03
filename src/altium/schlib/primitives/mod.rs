@@ -11,10 +11,11 @@ mod pins;
 pub use pins::{Pin, PinElectricalType, PinFrac, PinOrientation, PinSymbol};
 mod shapes;
 pub use shapes::{
-    Arc, Bezier, Ellipse, EllipticalArc, Image, Line, Pie, Polygon, Polyline, Rectangle, RoundRect,
+    Arc, Bezier, Ellipse, EllipticalArc, IeeeSymbol, Image, Line, Pie, Polygon, Polyline,
+    Rectangle, RoundRect,
 };
 mod text;
-pub use text::{Label, Parameter, Text, TextFrame, TextJustification};
+pub use text::{Label, Parameter, TextFrame, TextJustification};
 
 // Float rounding on serialization is shared (crate::altium::serde_round).
 

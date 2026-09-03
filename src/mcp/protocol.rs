@@ -428,6 +428,45 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_request_failing_validation_is_rejected_as_invalid() {
+        // `validate` is the wire-level contract check: the wrong protocol
+        // version or an empty method would otherwise reach dispatch and be
+        // answered as though it were a real call.
+        let wrong_version = JsonRpcRequest {
+            jsonrpc: "1.0".to_string(),
+            id: RequestId::Number(1),
+            method: "initialize".to_string(),
+            params: None,
+        };
+        assert_eq!(
+            wrong_version.validate(),
+            Some("jsonrpc field must be \"2.0\"")
+        );
+
+        let no_method = JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            id: RequestId::Number(1),
+            method: String::new(),
+            params: None,
+        };
+        assert_eq!(no_method.validate(), Some("method field cannot be empty"));
+
+        let valid = JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            id: RequestId::Number(1),
+            method: "initialize".to_string(),
+            params: None,
+        };
+        assert_eq!(valid.validate(), None);
+
+        // And the same check rejects the message at the parse boundary, with
+        // the id echoed back so the caller can match the error to its call.
+        let err = parse_message(r#"{"jsonrpc": "1.0", "id": 7, "method": "initialize"}"#)
+            .expect_err("a wrong protocol version must be refused");
+        assert_eq!(err.id, Some(RequestId::Number(7)));
+    }
+
+    #[test]
     fn parse_valid_request() {
         let json = r#"{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}"#;
         let msg = parse_message(json).unwrap();
